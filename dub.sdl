@@ -1,0 +1,7 @@
+name "djunctor"
+description "Close assembly gaps using long-reads with focus on correctness."
+authors "Arne Ludwig <arne.ludwig@posteo.de>"
+copyright "Copyright © 2018, Arne Ludwig <arne.ludwig@posteo.de>"
+license "MIT"
+
+dependency "darg" version="~>0.0.4"

@@ -1,0 +1,16 @@
+.dub
+docs.json
+__dummy.html
+docs/
+djunctor.so
+djunctor.dylib
+djunctor.dll
+djunctor.a
+djunctor.lib
+djunctor-test-*
+*.exe
+*.o
+*.obj
+*.lst
+*.log
+*~
