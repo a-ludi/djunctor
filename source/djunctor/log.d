@@ -1,5 +1,5 @@
 /**
-	Central logging facility for djunctor.
+    Central logging facility for djunctor.
 
     Copyright: © 2018 Arne Ludwig <arne.ludwig@posteo.de>
     License: Subject to the terms of the MIT license, as written in the
@@ -15,25 +15,30 @@ import std.stdio;
 import core.thread;
 
 private {
-	LogLevel minLevel = LogLevel.info;
+    LogLevel minLevel = LogLevel.info;
 }
 
 /// Sets the minimum log level to be printed.
 void setLogLevel(LogLevel level) nothrow
 {
-	minLevel = level;
+    minLevel = level;
 }
 
 LogLevel getLogLevel()
 {
-	return minLevel;
+    return minLevel;
+}
+
+bool shouldLog(LogLevel level)
+{
+    return level >= minLevel;
 }
 
 /**
-	Logs a message.
-	Params:
-		level = The log level for the logged message
-		fmt = See http://dlang.org/phobos/std_format.html#format-string
+    Logs a message.
+    Params:
+        level = The log level for the logged message
+        fmt = See http://dlang.org/phobos/std_format.html#format-string
 */
 void logDebug(T...)(string fmt, lazy T args) nothrow { log(LogLevel.debug_, fmt, args); }
 /// ditto
@@ -48,49 +53,49 @@ void logError(T...)(string fmt, lazy T args) nothrow { log(LogLevel.error, fmt, 
 /// ditto
 void log(T...)(LogLevel level, string fmt, lazy T args)
 nothrow {
-	import std.range: chain;
+    import std.range: chain;
 
-	if( level < minLevel ) return;
-	string pref;
-	final switch( level ){
-		case LogLevel.debug_: pref = "TRACE"; break;
-		case LogLevel.diagnostic: pref = "DEBUG"; break;
-		case LogLevel.info: pref = "INFO"; break;
-		case LogLevel.warn: pref = "WARN"; break;
-		case LogLevel.error: pref = "ERROR"; break;
-		case LogLevel.fatal: pref = "FATAL"; break;
-		case LogLevel.none: assert(false);
-	}
-	auto threadid = () @trusted { return cast(ulong)cast(void*)Thread.getThis(); } ();
-	threadid ^= threadid >> 32;
+    if( level < minLevel ) return;
+    string pref;
+    final switch( level ){
+        case LogLevel.debug_: pref = "TRACE"; break;
+        case LogLevel.diagnostic: pref = "DEBUG"; break;
+        case LogLevel.info: pref = "INFO"; break;
+        case LogLevel.warn: pref = "WARN"; break;
+        case LogLevel.error: pref = "ERROR"; break;
+        case LogLevel.fatal: pref = "FATAL"; break;
+        case LogLevel.none: assert(false);
+    }
+    auto threadid = () @trusted { return cast(ulong)cast(void*)Thread.getThis(); } ();
+    threadid ^= threadid >> 32;
 
-	try {
-		auto txt = appender!string();
-		txt.reserve(256);
-		formattedWrite(txt, fmt, args);
+    try {
+        auto txt = appender!string();
+        txt.reserve(256);
+        formattedWrite(txt, fmt, args);
 
-		if (level >= minLevel) {
-			File output;
-			if (level == LogLevel.info) () @trusted { output = stdout; } ();
-			else () @trusted { output = stderr; } ();
-			if (output.isOpen) {
-				output.writeln(txt.data);
-				output.flush();
-			}
-		}
-	} catch( Exception e ){
-		// this is bad but what can we do..
-		debug assert(false, e.msg);
-	}
+        if (level >= minLevel) {
+            File output;
+            if (level == LogLevel.info) () @trusted { output = stdout; } ();
+            else () @trusted { output = stderr; } ();
+            if (output.isOpen) {
+                output.writeln(txt.data);
+                output.flush();
+            }
+        }
+    } catch( Exception e ){
+        // this is bad but what can we do..
+        debug assert(false, e.msg);
+    }
 }
 
 /// Specifies the log level for a particular log message.
 enum LogLevel {
-	debug_,
-	diagnostic,
-	info,
-	warn,
-	error,
-	fatal,
-	none
+    debug_,
+    diagnostic,
+    info,
+    warn,
+    error,
+    fatal,
+    none
 }

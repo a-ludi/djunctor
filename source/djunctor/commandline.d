@@ -8,7 +8,16 @@
 */
 module djunctor.commandline;
 
-import darg;
+import darg :
+    ArgParseError,
+    ArgParseHelp,
+    Argument,
+    Help,
+    helpString,
+    Option,
+    OptionFlag,
+    parseArgs,
+    usageString;
 import std.conv;
 import std.stdio;
 import djunctor.log;
@@ -58,7 +67,9 @@ ReturnCode runDjunctorCommandline(string[] args)
     logInfo(to!string(options));
 
     try {
-        runJunctor();
+        import djunctor.djunctor : runWithOptions;
+
+        runWithOptions(options);
 
         return ReturnCode.ok;
     } catch(Exception e) {
@@ -97,6 +108,10 @@ struct Options
     @Option("dmapper-options", "dmo")
     @Help("list of options to pass to `damapper`")
     string[] damapperOptions = [];
+
+    @Option("dbsplit-options", "dmo")
+    @Help("list of options to pass to `DBsplit`")
+    string[] dbsplitOptions = [];
 
     /// List of options to pass to `LAdump`
     @Option()
@@ -176,135 +191,123 @@ struct Options
 private {
     immutable usage = usageString!Options("djunctor");
     immutable help = helpString!Options;
-}
 
-void initLogger(ref Options options) nothrow {
-    switch (options.verbose)
-    {
-        case 3:
-            setLogLevel(LogLevel.debug_);
-            break;
-        case 2:
-            setLogLevel(LogLevel.diagnostic);
-            break;
-        case 1:
-            setLogLevel(LogLevel.info);
-            break;
-        case 0:
-        default:
-            setLogLevel(LogLevel.error);
-            break;
-    }
-}
-
-void addDefaultOptions(ref Options options) nothrow {
-    import std.format : format;
-
-    if (!options.dalignerOptions || options.dalignerOptions.length == 0)
-    {
-        options.dalignerOptions = [
-            "-s126",  // prevent integer overflow in trace point procedure
-            "-t20",   // ignore k-mers occuring more than this number
-        ];
-    }
-
-    if (!options.damapperOptions || options.damapperOptions.length == 0)
-    {
-        options.damapperOptions = options.dalignerOptions;
-    }
-}
-
-bool verifyOptions(ref Options options) {
-    if (!verifyInputFiles(options)) return false;
-
-    return true;
-}
-
-bool verifyInputFiles(ref Options options) {
-    import std.algorithm : endsWith;
-    import std.file : exists;
-    import djunctor.dazzler : getHiddenDbFiles;
-
-    foreach (inputFile; [options.refFile, options.readsFile])
-    {
-        if (!inputFile.endsWith(".dam"))
+    void initLogger(ref Options options) nothrow {
+        switch (options.verbose)
         {
-            logError("expected .dam file, got `%s`", inputFile);
+            case 3:
+                setLogLevel(LogLevel.debug_);
+                break;
+            case 2:
+                setLogLevel(LogLevel.diagnostic);
+                break;
+            case 1:
+                setLogLevel(LogLevel.info);
+                break;
+            case 0:
+            default:
+                setLogLevel(LogLevel.error);
+                break;
+        }
+    }
 
-            return false;
+    void addDefaultOptions(ref Options options) nothrow {
+        import std.format : format;
+
+        if (!options.dalignerOptions || options.dalignerOptions.length == 0)
+        {
+            options.dalignerOptions = [
+                "-s126",  // prevent integer overflow in trace point procedure
+                "-t20",   // ignore k-mers occuring more than this number
+            ];
         }
 
-        if (!inputFile.exists)
+        if (!options.damapperOptions || options.damapperOptions.length == 0)
         {
-            logError("cannot open file `%s`", inputFile);
-
-            return false;
+            options.damapperOptions = options.dalignerOptions;
         }
+    }
 
-        foreach (hiddenDbFile; getHiddenDbFiles(inputFile))
+    bool verifyOptions(ref Options options) {
+        if (!verifyInputFiles(options)) return false;
+
+        return true;
+    }
+
+    bool verifyInputFiles(ref Options options) {
+        import std.algorithm : endsWith;
+        import std.file : exists;
+        import djunctor.dazzler : getHiddenDbFiles;
+
+        foreach (inputFile; [options.refFile, options.readsFile])
         {
-            if (!hiddenDbFile.exists)
+            if (!inputFile.endsWith(".dam"))
             {
-                logError("cannot open hidden database file `%s`", hiddenDbFile);
+                logError("expected .dam file, got `%s`", inputFile);
 
                 return false;
             }
+
+            if (!inputFile.exists)
+            {
+                logError("cannot open file `%s`", inputFile);
+
+                return false;
+            }
+
+            foreach (hiddenDbFile; getHiddenDbFiles(inputFile))
+            {
+                if (!hiddenDbFile.exists)
+                {
+                    logError("cannot open hidden database file `%s`", hiddenDbFile);
+
+                    return false;
+                }
+            }
         }
+
+        return true;
     }
 
-    return true;
-}
+    void createWorkDir(ref Options options) {
+        import std.algorithm : endsWith;
+        import std.exception : ErrnoException;
+        import std.file : tempDir;
+        import std.path : buildPath;
+        import std.string : fromStringz, toStringz;
 
-void createWorkDir(ref Options options) {
-    import std.algorithm : endsWith;
-    import std.exception : ErrnoException;
-    import std.file : tempDir;
-    import std.path : buildPath;
-    import std.string : fromStringz, toStringz;
-
-    version(Posix)
-    {
-        import core.sys.posix.stdlib : mkdtemp;
-
-        char[255] workdirNameBuffer;
-        auto workdirTemplate = buildPath(tempDir(), options.workdirTemplate);
-        auto len = workdirTemplate.length;
-        assert(len < workdirNameBuffer.length);
-        assert(workdirTemplate.endsWith("XXXXXX"));
-
-        workdirNameBuffer[0 .. len] = workdirTemplate[];
-        workdirNameBuffer[len] = 0;
-
-        if (null == mkdtemp(workdirNameBuffer.ptr))
+        version(Posix)
         {
-            throw new ErrnoException("cannot create workdir", __FILE__, __LINE__);
+            import core.sys.posix.stdlib : mkdtemp;
+
+            char[255] workdirNameBuffer;
+            auto workdirTemplate = buildPath(tempDir(), options.workdirTemplate);
+            auto len = workdirTemplate.length;
+            assert(len < workdirNameBuffer.length);
+            assert(workdirTemplate.endsWith("XXXXXX"));
+
+            workdirNameBuffer[0 .. len] = workdirTemplate[];
+            workdirNameBuffer[len] = 0;
+
+            if (null == mkdtemp(workdirNameBuffer.ptr))
+            {
+                throw new ErrnoException("cannot create workdir", __FILE__, __LINE__);
+            }
+
+            options.workdir = to!string(fromStringz(workdirNameBuffer.ptr));
         }
-
-        options.workdir = to!string(fromStringz(workdirNameBuffer.ptr));
     }
-}
 
-void cleanWorkDir(ref Options options) {
-    import std.file : rmdirRecurse;
+    void cleanWorkDir(ref Options options) {
+        import std.file : rmdirRecurse;
 
-    try
-    {
-        rmdirRecurse(options.workdir);
+        try
+        {
+            rmdirRecurse(options.workdir);
+        }
+        catch(Exception e)
+        {
+            logWarn(to!string(e));
+        }
     }
-    catch(Exception e)
-    {
-        logWarn(to!string(e));
-    }
-}
-
-void runJunctor() {
-    //do {
-    //    mapCandidatesToReference();
-    //    excludeRedundantReads(candidates);
-    //    findHits(candidates);
-
-    //    if (hits.length() > 0) {
-    //        fillGaps();
-    //    }
-    //} while (candidates.length());
 }
