@@ -20,18 +20,17 @@ import std.traits : Unqual, isSomeString;
 private immutable hiddenDbFileSuffixes = [".bps", ".hdr", ".idx"];
 
 /**
-    Return a list o hidden files associated to every `.dam`/`.db` file. These
+    Return a list of hidden files associated to every `.dam`/`.db` file. These
     files contain the actual data used in all the computation. Thus, we
     carefully check for their existence.
 */
 auto getHiddenDbFiles(string dbFile)
 {
     import std.algorithm : map;
-    import std.path : baseName, chainPath, dirName, withExtension;
+    import std.path : baseName, buildPath, dirName, withExtension;
 
-    return hiddenDbFileSuffixes.map!(delegate(suffix) {
-        return chainPath(dbFile.dirName, "." ~ dbFile.baseName.withExtension(suffix).to!string,);
-    });
+    return hiddenDbFileSuffixes.map!(suffix => buildPath(dbFile.dirName,
+            "." ~ dbFile.baseName.withExtension(suffix).to!string));
 }
 
 private string workdir;
