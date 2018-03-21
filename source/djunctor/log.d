@@ -14,7 +14,8 @@ import std.format;
 import std.stdio;
 import core.thread;
 
-private {
+private
+{
     LogLevel minLevel = LogLevel.info;
 }
 
@@ -40,57 +41,95 @@ bool shouldLog(LogLevel level)
         level = The log level for the logged message
         fmt = See http://dlang.org/phobos/std_format.html#format-string
 */
-void logDebug(T...)(string fmt, lazy T args) nothrow { log(LogLevel.debug_, fmt, args); }
+void logDebug(T...)(string fmt, lazy T args) nothrow
+{
+    log(LogLevel.debug_, fmt, args);
+}
 /// ditto
-void logDiagnostic(T...)(string fmt, lazy T args) nothrow { log(LogLevel.diagnostic, fmt, args); }
+void logDiagnostic(T...)(string fmt, lazy T args) nothrow
+{
+    log(LogLevel.diagnostic, fmt, args);
+}
 /// ditto
-void logInfo(T...)(string fmt, lazy T args) nothrow { log(LogLevel.info, fmt, args); }
+void logInfo(T...)(string fmt, lazy T args) nothrow
+{
+    log(LogLevel.info, fmt, args);
+}
 /// ditto
-void logWarn(T...)(string fmt, lazy T args) nothrow { log(LogLevel.warn, fmt, args); }
+void logWarn(T...)(string fmt, lazy T args) nothrow
+{
+    log(LogLevel.warn, fmt, args);
+}
 /// ditto
-void logError(T...)(string fmt, lazy T args) nothrow { log(LogLevel.error, fmt, args); }
+void logError(T...)(string fmt, lazy T args) nothrow
+{
+    log(LogLevel.error, fmt, args);
+}
 
 /// ditto
-void log(T...)(LogLevel level, string fmt, lazy T args)
-nothrow {
-    import std.range: chain;
+void log(T...)(LogLevel level, string fmt, lazy T args) nothrow
+{
+    import std.range : chain;
 
-    if( level < minLevel ) return;
+    if (level < minLevel)
+        return;
     string pref;
-    final switch( level ){
-        case LogLevel.debug_: pref = "TRACE"; break;
-        case LogLevel.diagnostic: pref = "DEBUG"; break;
-        case LogLevel.info: pref = "INFO"; break;
-        case LogLevel.warn: pref = "WARN"; break;
-        case LogLevel.error: pref = "ERROR"; break;
-        case LogLevel.fatal: pref = "FATAL"; break;
-        case LogLevel.none: assert(false);
+    final switch (level)
+    {
+    case LogLevel.debug_:
+        pref = "TRACE";
+        break;
+    case LogLevel.diagnostic:
+        pref = "DEBUG";
+        break;
+    case LogLevel.info:
+        pref = "INFO";
+        break;
+    case LogLevel.warn:
+        pref = "WARN";
+        break;
+    case LogLevel.error:
+        pref = "ERROR";
+        break;
+    case LogLevel.fatal:
+        pref = "FATAL";
+        break;
+    case LogLevel.none:
+        assert(false);
     }
-    auto threadid = () @trusted { return cast(ulong)cast(void*)Thread.getThis(); } ();
+    auto threadid = () @trusted{ return cast(ulong) cast(void*) Thread.getThis(); }();
     threadid ^= threadid >> 32;
 
-    try {
+    try
+    {
         auto txt = appender!string();
         txt.reserve(256);
         formattedWrite(txt, fmt, args);
 
-        if (level >= minLevel) {
+        if (level >= minLevel)
+        {
             File output;
-            if (level == LogLevel.info) () @trusted { output = stdout; } ();
-            else () @trusted { output = stderr; } ();
-            if (output.isOpen) {
+            if (level == LogLevel.info)
+                () @trusted{ output = stdout; }();
+            else
+                () @trusted{ output = stderr; }();
+            if (output.isOpen)
+            {
                 output.writeln(txt.data);
                 output.flush();
             }
         }
-    } catch( Exception e ){
+    }
+    catch (Exception e)
+    {
         // this is bad but what can we do..
         debug assert(false, e.msg);
     }
 }
 
 /// Specifies the log level for a particular log message.
-enum LogLevel {
+enum LogLevel
+{
     debug_,
     diagnostic,
     info,

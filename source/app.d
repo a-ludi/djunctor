@@ -12,11 +12,11 @@ import djunctor.commandline;
 import std.conv;
 import std.stdio;
 
-
 /// Start `djunctor` with the given set of arguments.
 int main(string[] args)
 {
-    version (Posix) {
+    version (Posix)
+    {
         return runDjunctorCommandline(args);
     }
     else

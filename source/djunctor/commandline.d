@@ -8,20 +8,11 @@
 */
 module djunctor.commandline;
 
-import darg :
-    ArgParseError,
-    ArgParseHelp,
-    Argument,
-    Help,
-    helpString,
-    Option,
-    OptionFlag,
-    parseArgs,
-    usageString;
+import darg : ArgParseError, ArgParseHelp, Argument, Help, helpString, Option,
+    OptionFlag, parseArgs, usageString;
 import std.conv;
 import std.stdio;
 import djunctor.log;
-
 
 /// Possible returns codes of the commandline execution.
 enum ReturnCode
@@ -58,7 +49,8 @@ ReturnCode runDjunctorCommandline(string[] args)
 
     initLogger(options);
     addDefaultOptions(options);
-    if (!verifyOptions(options)) {
+    if (!verifyOptions(options))
+    {
         // some options are invalid
         return ReturnCode.commandlineError;
     }
@@ -66,18 +58,24 @@ ReturnCode runDjunctorCommandline(string[] args)
 
     logInfo(to!string(options));
 
-    try {
+    try
+    {
         import djunctor.djunctor : runWithOptions;
 
         runWithOptions(options);
 
         return ReturnCode.ok;
-    } catch(Exception e) {
+    }
+    catch (Exception e)
+    {
         writeln(e);
 
         return ReturnCode.djunctorError;
-    } finally {
-        if (! options.keepTemp) {
+    }
+    finally
+    {
+        if (!options.keepTemp)
+        {
             cleanWorkDir(options);
         }
     }
@@ -115,11 +113,10 @@ struct Options
 
     /// List of options to pass to `LAdump`
     @Option()
-    string[] ladumpOptions = [
-        "-c",  // output alignment coordinates
-        "-d",  // output number of differences for each local alignment
-        "-l",  // output lengths of the contigs
-    ];
+    string[] ladumpOptions = ["-c", // output alignment coordinates
+        "-d", // output number of differences for each local alignment
+        "-l", // output lengths of the contigs
+        ];
 
     @Option("confidence", "c")
     @Help("discard pile ups with <ulong>% confidence if too large/small")
@@ -160,7 +157,8 @@ struct Options
         string[] options = [];
         string[] values = [];
 
-        foreach (member; __traits(allMembers, Options)) {
+        foreach (member; __traits(allMembers, Options))
+        {
             static if (!is(typeof(__traits(getMember, this, member)) == function))
             {
                 alias optUDAs = getUDAs!(__traits(getMember, this, member), Option);
@@ -174,9 +172,7 @@ struct Options
             }
         }
 
-        auto width = options
-            .map!"a.length"
-            .maxElement;
+        auto width = options.map!"a.length".maxElement;
         string table = "";
 
         foreach (entry; zip(options, values))
@@ -188,38 +184,40 @@ struct Options
     }
 }
 
-private {
+private
+{
     immutable usage = usageString!Options("djunctor");
     immutable help = helpString!Options;
 
-    void initLogger(ref Options options) nothrow {
+    void initLogger(ref Options options) nothrow
+    {
         switch (options.verbose)
         {
-            case 3:
-                setLogLevel(LogLevel.debug_);
-                break;
-            case 2:
-                setLogLevel(LogLevel.diagnostic);
-                break;
-            case 1:
-                setLogLevel(LogLevel.info);
-                break;
-            case 0:
-            default:
-                setLogLevel(LogLevel.error);
-                break;
+        case 3:
+            setLogLevel(LogLevel.debug_);
+            break;
+        case 2:
+            setLogLevel(LogLevel.diagnostic);
+            break;
+        case 1:
+            setLogLevel(LogLevel.info);
+            break;
+        case 0:
+        default:
+            setLogLevel(LogLevel.error);
+            break;
         }
     }
 
-    void addDefaultOptions(ref Options options) nothrow {
+    void addDefaultOptions(ref Options options) nothrow
+    {
         import std.format : format;
 
         if (!options.dalignerOptions || options.dalignerOptions.length == 0)
         {
-            options.dalignerOptions = [
-                "-s126",  // prevent integer overflow in trace point procedure
-                "-t20",   // ignore k-mers occuring more than this number
-            ];
+            options.dalignerOptions = ["-s126", // prevent integer overflow in trace point procedure
+                "-t20", // ignore k-mers occuring more than this number
+                ];
         }
 
         if (!options.damapperOptions || options.damapperOptions.length == 0)
@@ -228,13 +226,16 @@ private {
         }
     }
 
-    bool verifyOptions(ref Options options) {
-        if (!verifyInputFiles(options)) return false;
+    bool verifyOptions(ref Options options)
+    {
+        if (!verifyInputFiles(options))
+            return false;
 
         return true;
     }
 
-    bool verifyInputFiles(ref Options options) {
+    bool verifyInputFiles(ref Options options)
+    {
         import std.algorithm : endsWith;
         import std.file : exists;
         import djunctor.dazzler : getHiddenDbFiles;
@@ -269,14 +270,15 @@ private {
         return true;
     }
 
-    void createWorkDir(ref Options options) {
+    void createWorkDir(ref Options options)
+    {
         import std.algorithm : endsWith;
         import std.exception : ErrnoException;
         import std.file : tempDir;
         import std.path : buildPath;
         import std.string : fromStringz, toStringz;
 
-        version(Posix)
+        version (Posix)
         {
             import core.sys.posix.stdlib : mkdtemp;
 
@@ -298,14 +300,15 @@ private {
         }
     }
 
-    void cleanWorkDir(ref Options options) {
+    void cleanWorkDir(ref Options options)
+    {
         import std.file : rmdirRecurse;
 
         try
         {
             rmdirRecurse(options.workdir);
         }
-        catch(Exception e)
+        catch (Exception e)
         {
             logWarn(to!string(e));
         }

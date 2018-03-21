@@ -4,4 +4,6 @@ authors "Arne Ludwig <arne.ludwig@posteo.de>"
 copyright "Copyright © 2018, Arne Ludwig <arne.ludwig@posteo.de>"
 license "MIT"
 
+preGenerateCommands "find source/ -name '*.d' -type f -exec dfmt -i {} \\;"
+
 dependency "darg" version="~>0.0.4"
