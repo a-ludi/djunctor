@@ -56,13 +56,15 @@ ReturnCode runDjunctorCommandline(string[] args)
     }
     createWorkDir(options);
 
-    logInfo(to!string(options));
+    const Options finalOptions = options;
+
+    logInfo(finalOptions.to!string);
 
     try
     {
         import djunctor.djunctor : runWithOptions;
 
-        runWithOptions(options);
+        runWithOptions(finalOptions);
 
         return ReturnCode.ok;
     }
@@ -74,9 +76,9 @@ ReturnCode runDjunctorCommandline(string[] args)
     }
     finally
     {
-        if (!options.keepTemp)
+        if (!finalOptions.keepTemp)
         {
-            cleanWorkDir(options);
+            cleanWorkDir(finalOptions);
         }
     }
 }
@@ -147,24 +149,23 @@ struct Options
     }
 
     /// Return a table that lists all `@Option`s in this struct.
-    string toString() pure
+    string toString() pure const
     {
-        import std.algorithm : map, maxElement, sort;
+        import std.algorithm : joiner, map, maxElement, sort;
+        import std.array : array;
         import std.format : format;
         import std.range : zip;
         import std.traits : getUDAs;
 
-        string[] options = [];
-        string[] values = [];
+        const(string)[] options = [];
+        const(string)[] values = [];
 
-        foreach (member; __traits(allMembers, Options))
+        static foreach (member; __traits(allMembers, Options))
         {
             static if (!is(typeof(__traits(getMember, this, member)) == function))
             {
-                alias optUDAs = getUDAs!(__traits(getMember, this, member), Option);
-                alias argUDAs = getUDAs!(__traits(getMember, this, member), Argument);
-
-                static if (optUDAs.length || argUDAs.length)
+                static if (getUDAs!(__traits(getMember, this, member), Option)
+                        .length || getUDAs!(__traits(getMember, this, member), Argument).length)
                 {
                     options ~= member;
                     values ~= to!string(__traits(getMember, this, member));
@@ -172,15 +173,15 @@ struct Options
             }
         }
 
-        auto width = options.map!"a.length".maxElement;
-        string table = "";
+        const size_t width = options.map!"a.length".maxElement;
 
-        foreach (entry; zip(options, values))
-        {
-            table ~= format!"%*s: %s\n"(width, entry[0], entry[1]);
-        }
-
-        return table;
+        // dfmt off
+        return zip(options, values)
+            .map!(entry => format!"%*s: %s\n"(width, entry[0], entry[1]))
+            .joiner(" ")
+            .array
+            .to!string;
+        // dfmt on
     }
 }
 
@@ -300,7 +301,7 @@ private
         }
     }
 
-    void cleanWorkDir(ref Options options)
+    void cleanWorkDir(in ref Options options)
     {
         import std.file : rmdirRecurse;
 
