@@ -37,11 +37,16 @@ private string workdir;
 
 void setWorkdir(string workdir_)
 {
+    import std.format : format;
+
     workdir = workdir_;
+    logDebug(format!"using workdir `%s`"(workdir));
 }
 
 string getWorkdir()
 {
+    assert(workdir != null);
+
     return workdir;
 }
 
