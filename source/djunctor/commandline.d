@@ -12,6 +12,7 @@ import darg : ArgParseError, ArgParseHelp, Argument, Help, helpString, Option,
     OptionFlag, parseArgs, usageString;
 import std.conv;
 import std.stdio;
+import djunctor.dazzler : ProvideMethod;
 import djunctor.log;
 
 /// Possible returns codes of the commandline execution.
@@ -123,6 +124,10 @@ struct Options
     @Option("confidence", "c")
     @Help("discard pile ups with <ulong>% confidence if too large/small")
     size_t confidence = 95;
+
+    @Option("input-provide-method")
+    @Help("use this method to provide the input files in the working directory")
+    ProvideMethod provideMethod = ProvideMethod.symlink;
 
     @Option("keep-temp")
     @Help("keep the temporary files; outputs the exact location")
