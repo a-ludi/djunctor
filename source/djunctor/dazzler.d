@@ -117,8 +117,14 @@ AlignmentContainer!(AlignmentChain[]) getMappings(Options)(in string dbA,
         if (hasOption!(Options, "damapperOptions", isOptionsList)
             && hasOption!(Options, "ladumpOptions", isOptionsList))
 {
-
     damapper(dbA, dbB, options.damapperOptions);
+
+    return processGeneratedLasFiles(dbA, dbB, options);
+}
+
+private auto processGeneratedLasFiles(Options)(in string dbA, in string dbB, in Options options)
+        if (hasOption!(Options, "ladumpOptions", isOptionsList))
+{
     auto lasFileLists = getLasFiles(dbA, dbB);
     AlignmentContainer!(AlignmentChain[]) results;
 
