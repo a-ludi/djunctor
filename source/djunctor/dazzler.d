@@ -8,18 +8,20 @@
 */
 module djunctor.dazzler;
 
+import djunctor.commandline : hasOption, isOptionsList;
 import djunctor.djunctor : AlignmentContainer;
 import djunctor.log;
-import std.algorithm : equal, splitter;
+import std.algorithm : equal, map, joiner, sort, splitter, SwapStrategy;
 import std.array : array;
 import std.conv : to;
 import std.format : format, formattedRead;
+import std.meta : Instantiate;
 import std.range : chain, only;
 import std.range.primitives : ElementType, isInputRange;
 import std.stdio : File, writeln;
 import std.string : outdent;
-import std.traits : Unqual, isSomeString;
-import std.typecons : Flag, No, Yes;
+import std.traits : hasMember, isSomeString, Unqual;
+import std.typecons : Flag, No, tuple, Tuple, Yes;
 
 /// File suffixes of hidden DB files.
 private immutable hiddenDbFileSuffixes = [".bps", ".hdr", ".idx"];
@@ -68,12 +70,18 @@ enum ProvideMethod
     symlink,
 }
 
-void provideDamFileInWorkdir(in string dbFile, ProvideMethod provideMethod)
+/**
+    Provide dbFile in workdir.
+
+    Returns: Workdir location of the dbFile.
+*/
+string provideDamFileInWorkdir(in string dbFile, ProvideMethod provideMethod)
 {
     import std.file : copy, symlink;
     import std.path : baseName, buildPath;
     import std.range : chain, only;
 
+    alias inWorkdir = anyDbFile => buildPath(getWorkdir(), anyDbFile.baseName);
     auto allDbFiles = chain(only(dbFile), getHiddenDbFiles(dbFile));
 
     foreach (anyDbFile; allDbFiles)
@@ -81,22 +89,60 @@ void provideDamFileInWorkdir(in string dbFile, ProvideMethod provideMethod)
         switch (provideMethod)
         {
         case ProvideMethod.copy:
-            copy(anyDbFile, buildPath(getWorkdir(), anyDbFile.baseName));
+            copy(anyDbFile, inWorkdir(anyDbFile));
             break;
         case ProvideMethod.symlink:
-            symlink(anyDbFile, buildPath(getWorkdir(), anyDbFile.baseName));
+            symlink(anyDbFile, inWorkdir(anyDbFile));
             break;
         default:
             assert(0);
         }
     }
+
+    return inWorkdir(dbFile);
 }
 
-/*
-def generateDamFile(fasta_file, workdir, *, dbsplit_opts, logger):
-def getLocalAlignments(ref_file, reads_file=None, *, daligner_opts, ladump_opts,
-def getMappings(ref_file, reads_file, *, damapper_opts, ladump_opts, logger):
-*/
+AlignmentChain[] getLocalAlignments(in string dbA)
+{
+    return getLocalAlignments(dbA, null);
+}
+
+AlignmentChain[] getLocalAlignments(in string dbA, in string dbB)
+{
+    assert(0);
+}
+
+AlignmentContainer!(AlignmentChain[]) getMappings(Options)(in string dbA,
+        in string dbB, in Options options)
+        if (hasOption!(Options, "damapperOptions", isOptionsList)
+            && hasOption!(Options, "ladumpOptions", isOptionsList))
+{
+
+    damapper(dbA, dbB, options.damapperOptions);
+    auto lasFileLists = getLasFiles(dbA, dbB);
+    AlignmentContainer!(AlignmentChain[]) results;
+
+    static foreach (order; typeof(lasFileLists).orders)
+    {
+        {
+            auto lasFileList = __traits(getMember, lasFileLists, order);
+            auto dbFiles = typeof(lasFileLists).getOrdered!order(dbA, dbB);
+
+            //lasort(lasFileList);
+            // dfmt off
+            auto alignmentChains = lasFileList
+                .map!(lasFile => ladump(lasFile, dbFiles.expand, options.ladumpOptions))
+                .map!(lasDump => readAlignmentList(lasDump))
+                .joiner
+                .array;
+            alignmentChains.sort!("a < b", SwapStrategy.stable);
+            __traits(getMember, results, order) = alignmentChains;
+            // dfmt on
+        }
+    }
+
+    return results;
+}
 
 /**
     Holds a chain of local alignments that form a compound alignment. An AlignmentChain should
@@ -104,7 +150,7 @@ def getMappings(ref_file, reads_file, *, damapper_opts, ladump_opts, logger):
 */
 struct AlignmentChain
 {
-    struct LocalAlignment
+    static struct LocalAlignment
     {
         struct Locus
         {
@@ -117,13 +163,13 @@ struct AlignmentChain
         size_t numDiffs;
     }
 
-    struct Contig
+    static struct Contig
     {
         size_t id;
         size_t length;
     }
 
-    enum Complement
+    static enum Complement
     {
         yes,
         no,
@@ -138,17 +184,51 @@ struct AlignmentChain
     {
         assert(localAlignments.length >= 1);
     }
+
+    int opCmp(ref const AlignmentChain other) const pure nothrow
+    {
+        import std.math : sgn;
+
+        size_t idCompare = other.contigA.id - this.contigA.id;
+        if (idCompare != 0)
+            return cast(int) sgn(idCompare);
+
+        idCompare = other.contigB.id - this.contigB.id;
+        if (idCompare != 0)
+            return cast(int) sgn(idCompare);
+
+        auto thisFirstLA = this.localAlignments[0];
+        auto otherFirstLA = other.localAlignments[0];
+        size_t locusCompare = otherFirstLA.contigA.begin - thisFirstLA.contigA.begin;
+        if (locusCompare != 0)
+            return cast(int) sgn(locusCompare);
+
+        locusCompare = otherFirstLA.contigB.begin - thisFirstLA.contigB.begin;
+        if (locusCompare != 0)
+            return cast(int) sgn(locusCompare);
+
+        auto thisLastLA = this.localAlignments[$ - 1];
+        auto otherLastLA = other.localAlignments[$ - 1];
+        locusCompare = otherLastLA.contigA.end - thisLastLA.contigA.end;
+        if (locusCompare != 0)
+            return cast(int) sgn(locusCompare);
+
+        locusCompare = otherLastLA.contigB.end - thisLastLA.contigB.end;
+        if (locusCompare != 0)
+            return cast(int) sgn(locusCompare);
+
+        return 0;
+    }
 }
 
 private auto readAlignmentList(S)(in S lasDump) if (isSomeString!S)
 {
-    import std.algorithm : chunkBy, count, filter, joiner, map;
-    import std.range : chunks;
+    import std.algorithm : chunkBy, count, filter;
+    import std.range : chunks, drop;
     import std.string : lineSplitter;
-    import std.typecons : Tuple;
 
     immutable recordSeparator = ';';
-    immutable chainPartFormat = "P %d %d %c %c;C %d %d %d %d;D %d;L %d %d";
+    immutable chainPartFormat = "P %d %d %c %c;L %d %d;C %d %d %d %d;D %d";
     immutable numChainPartLines = chainPartFormat.count(recordSeparator) + 1;
     enum ChainPartType
     {
@@ -168,7 +248,7 @@ private auto readAlignmentList(S)(in S lasDump) if (isSomeString!S)
     // dfmt on
 
     /// Build chunks of numChainPartLines lines.
-    alias byChainPartSplitter = lasDump => lasDump.lineSplitter.chunks(numChainPartLines);
+    alias byChainPartSplitter = lasDump => lasDump.lineSplitter.drop(2).chunks(numChainPartLines);
     /// Parse chunks of numChainPartLines lines into RawChainPart s.
     alias parseChainPart = chainPartLines => {
         AlignmentChain.Contig contigA, contigB;
@@ -186,13 +266,13 @@ private auto readAlignmentList(S)(in S lasDump) if (isSomeString!S)
                 contigB.id,
                 complement,
                 chainPartType,
+                contigA.length,
+                contigB.length,
                 localAlignment.contigA.begin,
                 localAlignment.contigA.end,
                 localAlignment.contigB.begin,
                 localAlignment.contigB.end,
                 localAlignment.numDiffs,
-                contigA.length,
-                contigB.length,
             );
         // dfmt on
         assert(numMatches == 11, format!"%d matches in chunk: `%s`"(numMatches, joinedLines.array));
@@ -242,42 +322,44 @@ private auto readAlignmentList(S)(in S lasDump) if (isSomeString!S)
 unittest
 {
     immutable testLasDump = q"EOF
+        + P 9
+        % P 1337
         P 1 2 n >
+        L 8 9
         C 3 4 5 6
         D 7
-        L 8 9
         P 1 2 n -
+        L 17 18
         C 12 13 14 15
         D 16
-        L 17 18
         P 19 20 c +
+        L 26 27
         C 21 22 23 24
         D 25
-        L 26 27
         P 19 20 c -
+        L 35 36
         C 30 31 32 33
         D 34
-        L 35 36
         P 37 38 n .
+        L 35 36
         C 39 40 41 42
         D 43
-        L 35 36
         P 46 47 c .
+        L 53 54
         C 48 49 50 51
         D 52
-        L 53 54
         P 46 47 n .
+        L 53 54
         C 57 58 59 60
         D 61
-        L 53 54
         P 64 65 c >
+        L 71 72
         C 66 67 68 69
         D 70
-        L 71 72
         P 55 56 c -
+        L 80 81
         C 75 76 77 78
         D 79
-        L 80 81
 EOF".outdent;
 
     auto alignmentChains = readAlignmentList(testLasDump).array;
@@ -393,34 +475,7 @@ AlignmentContainer!(string[]) getLasFiles(string dbA)
 
 AlignmentContainer!(string[]) getLasFiles(string dbA, string dbB)
 {
-    immutable fileTemplate = "%s.%s.las";
-    auto aOptions = LasFileListOptions(dbA);
-    auto bOptions = LasFileListOptions(dbB);
-    size_t numLasFilesPerList = aOptions.numBlocks * bOptions.numBlocks;
-    AlignmentContainer!(string[]) fileLists;
-
-    fileLists.a2b.length = numLasFilesPerList;
-    fileLists.b2a.length = numLasFilesPerList;
-    foreach (size_t i; 0 .. aOptions.numBlocks)
-    {
-        foreach (size_t j; 0 .. bOptions.numBlocks)
-        {
-            fileLists.a2b[i * bOptions.numBlocks + j] = format!fileTemplate(
-                    aOptions.fileNamePart(i), bOptions.fileNamePart(j),);
-            fileLists.b2a[i * bOptions.numBlocks + j] = format!fileTemplate(
-                    bOptions.fileNamePart(j), aOptions.fileNamePart(i),);
-        }
-    }
-
-    return fileLists;
-}
-
-//string getDamFileName(fastaFile, workdir);
-//void processLasFiles(refFile, readsFile, ladumpOpts, logger);
-
-private
-{
-    struct LasFileListOptions
+    struct InferredParams
     {
         size_t numBlocks;
         string directory;
@@ -445,42 +500,77 @@ private
         }
     }
 
-    void dalign(string refDam, string readsDam, string[] dalignerOpts)
+    immutable fileTemplate = "%s.%s.las";
+    auto aOptions = InferredParams(dbA);
+    auto bOptions = InferredParams(dbB);
+    size_t numLasFilesPerList = aOptions.numBlocks * bOptions.numBlocks;
+    AlignmentContainer!(string[]) fileLists;
+
+    fileLists.a2b.length = numLasFilesPerList;
+    fileLists.b2a.length = numLasFilesPerList;
+    foreach (size_t i; 0 .. aOptions.numBlocks)
     {
-        executeScript(chain(only("HPC.daligner"), dalignerOpts, only(refDam, readsDam),));
+        foreach (size_t j; 0 .. bOptions.numBlocks)
+        {
+            fileLists.a2b[i * bOptions.numBlocks + j] = format!fileTemplate(
+                    aOptions.fileNamePart(i), bOptions.fileNamePart(j));
+            fileLists.b2a[i * bOptions.numBlocks + j] = format!fileTemplate(
+                    bOptions.fileNamePart(j), aOptions.fileNamePart(i));
+        }
     }
 
-    void damapper(string refDam, string readsDam, string[] damapperOpts)
+    return fileLists;
+}
+
+private
+{
+    void dalign(in string refDam, in string readsDam, in string[] dalignerOpts)
     {
-        executeScript(chain(only("HPC.damapper", "-C"), damapperOpts, only(refDam, readsDam),));
+        executeScript(chain(only("HPC.daligner"), dalignerOpts, only(refDam), only(readsDam)));
     }
 
-    void fasta2dam(string inFile, string outFile)
+    void damapper(in string refDam, in string readsDam, in string[] damapperOpts)
+    {
+        executeScript(chain(only("HPC.damapper", "-C"), damapperOpts,
+                only(refDam), only(readsDam)));
+    }
+
+    void fasta2dam(in string inFile, in string outFile)
     {
         executeCommand(only("fasta2DAM", outFile, inFile));
     }
 
-    void dbsplit(string dbFile, string[] dbsplitOptions)
+    void dbsplit(in string dbFile, in string[] dbsplitOptions)
     {
-        executeCommand(chain(only("DBsplit"), dbsplitOptions, only(dbFile),));
+        executeCommand(chain(only("DBsplit"), dbsplitOptions, only(dbFile)));
     }
 
-    void lasort(string[] lasFiles)
+    void lasort(in string[] lasFiles)
     {
-        executeCommand(chain(only("LAsort"), lasFiles,));
+        import std.file : rename;
+        import std.path : setExtension;
+
+        alias sortedName = (lasFile) => lasFile.setExtension(".S.las");
+
+        executeCommand(chain(only("LAsort"), lasFiles));
+        foreach (lasFile; lasFiles)
+        {
+            rename(sortedName(lasFile), lasFile);
+        }
     }
 
-    string ladump(string lasFile, string dbA, string dbB, string[] ladumpOpts)
+    string ladump(in string lasFile, in string dbA, in string dbB, in string[] ladumpOpts)
     {
-        return executeCommand(chain(only("LAdump"), ladumpOpts, only(dbA, dbB, lasFile),));
+        return executeCommand(chain(only("LAdump"), ladumpOpts, only(dbA),
+                only(dbB), only(lasFile)));
     }
 
-    string dbshow(string dbFile, string contigId)
+    string dbshow(in string dbFile, in string contigId)
     {
         return executeCommand(only("DBshow", dbFile, contigId));
     }
 
-    size_t getNumBlocks(string damFile)
+    size_t getNumBlocks(in string damFile)
     {
         import std.algorithm : filter, startsWith;
 
@@ -507,30 +597,32 @@ private
         return numBlocks;
     }
 
-    string executeCommand(Range)(Range command)
+    string executeCommand(Range)(in Range command)
             if (isInputRange!(Unqual!Range) && isSomeString!(ElementType!(Unqual!Range)))
     {
         import std.process : Config, execute;
 
-        string output = command.executeWrapper!(sCmd => execute(sCmd, null, // env
-                Config.none, size_t.max, getWorkdir()));
+        string output = command.executeWrapper!("command",
+                sCmd => execute(sCmd, null, // env
+                    Config.none, size_t.max, getWorkdir()));
 
         return output;
     }
 
-    void executeScript(Range)(Range command)
+    void executeScript(Range)(in Range command)
             if (isInputRange!(Unqual!Range) && isSomeString!(ElementType!(Unqual!Range)))
     {
         import std.process : Config, executeShell;
 
-        string output = command.executeWrapper!(sCmd => executeShell(sCmd.buildScriptLine,
-                null, // env
-                Config.none, size_t.max, getWorkdir()));
+        string output = command.executeWrapper!("script",
+                sCmd => executeShell(sCmd.buildScriptLine, null, // env
+                    Config.none,
+                    size_t.max, getWorkdir()));
 
         logDiagnostic(output);
     }
 
-    string executeWrapper(alias execCall, Range)(Range command)
+    string executeWrapper(string type, alias execCall, Range)(in Range command)
             if (isInputRange!(Unqual!Range) && isSomeString!(ElementType!(Unqual!Range)))
     {
         import std.array : array;
@@ -538,7 +630,7 @@ private
 
         auto sanitizedCommand = command.filter!"a != null".array;
 
-        logDiagnostic("executing command: %s", sanitizedCommand);
+        logDiagnostic("executing " ~ type ~ ": %s", sanitizedCommand);
         auto result = execCall(sanitizedCommand);
 
         if (result.status > 0)
@@ -551,7 +643,7 @@ private
         return result.output;
     }
 
-    string buildScriptLine(string[] command)
+    string buildScriptLine(in string[] command)
     {
         import std.process : escapeShellCommand;
 

@@ -12,8 +12,11 @@ import darg : ArgParseError, ArgParseHelp, Argument, Help, helpString, Option,
     OptionFlag, parseArgs, usageString;
 import std.conv;
 import std.stdio;
-import djunctor.dazzler : ProvideMethod;
+import djunctor.dazzler : provideDamFileInWorkdir, ProvideMethod, setWorkdir;
 import djunctor.log;
+import std.meta : Instantiate;
+import std.range.primitives : ElementType, isForwardRange;
+import std.traits : hasMember, isSomeString;
 
 /// Possible returns codes of the commandline execution.
 enum ReturnCode
@@ -30,14 +33,7 @@ ReturnCode runDjunctorCommandline(string[] args)
 
     try
     {
-        options = parseArgs!Options(args[1 .. $]);
-    }
-    catch (ArgParseError e)
-    {
-        logError(e.msg);
-        writeln(usage);
-
-        return ReturnCode.commandlineError;
+        options = processOptions(args);
     }
     catch (ArgParseHelp e)
     {
@@ -47,18 +43,15 @@ ReturnCode runDjunctorCommandline(string[] args)
 
         return ReturnCode.ok;
     }
-
-    initLogger(options);
-    addDefaultOptions(options);
-    if (!verifyOptions(options))
+    catch (Exception e)
     {
-        // some options are invalid
+        logError(e.msg);
+        writeln(usage);
+
         return ReturnCode.commandlineError;
     }
-    createWorkDir(options);
 
     const Options finalOptions = options;
-
     logInfo(finalOptions.to!string);
 
     try
@@ -84,6 +77,23 @@ ReturnCode runDjunctorCommandline(string[] args)
     }
 }
 
+Options processOptions(string[] args)
+{
+    Options options = parseArgs!Options(args[1 .. $]);
+
+    initLogger(options);
+    normalizePaths(options);
+    addDefaultOptions(options);
+    verifyOptions(options);
+    createWorkDir(options);
+    // set workdir for dazzler tools
+    setWorkdir(options.workdir);
+    options.refDb = provideDamFileInWorkdir(options.refFile, options.provideMethod);
+    options.readsDb = provideDamFileInWorkdir(options.readsFile, options.provideMethod);
+
+    return options;
+}
+
 /**
     The set of options used by `djunctor`. For details see the source code or
     run `./djunctor -h`.
@@ -97,35 +107,41 @@ struct Options
     @Argument("REFERENCE")
     @Help("reference assembly in .dam format")
     string refFile;
+    string refDb;
 
     @Argument("READS")
     @Help("set of PacBio reads in .dam format")
     string readsFile;
+    string readsDb;
 
-    @Option("daligner-options", "dao")
+    @Option("daligner-options")
     @Help("list of options to pass to `daligner`")
     string[] dalignerOptions = [];
 
-    @Option("dmapper-options", "dmo")
+    @Option("dmapper-options")
     @Help("list of options to pass to `damapper`")
     string[] damapperOptions = [];
 
-    @Option("dbsplit-options", "dmo")
+    @Option("dbsplit-options")
     @Help("list of options to pass to `DBsplit`")
     string[] dbsplitOptions = [];
 
     /// List of options to pass to `LAdump`
     @Option()
-    string[] ladumpOptions = ["-c", // output alignment coordinates
+    // dfmt off
+    string[] ladumpOptions = [
+        "-c", // output alignment coordinates
         "-d", // output number of differences for each local alignment
         "-l", // output lengths of the contigs
-        ];
+        "-o", // output proper overlaps only
+    ];
+    // dfmt on
 
     @Option("confidence", "c")
     @Help("discard pile ups with <ulong>% confidence if too large/small")
     size_t confidence = 95;
 
-    @Option("input-provide-method")
+    @Option("input-provide-method", "p")
     @Help("use this method to provide the input files in the working directory")
     ProvideMethod provideMethod = ProvideMethod.symlink;
 
@@ -215,15 +231,26 @@ private
         }
     }
 
+    void normalizePaths(ref Options options)
+    {
+        import std.path : absolutePath;
+
+        options.refFile = absolutePath(options.refFile);
+        options.readsFile = absolutePath(options.readsFile);
+    }
+
     void addDefaultOptions(ref Options options) nothrow
     {
         import std.format : format;
 
         if (!options.dalignerOptions || options.dalignerOptions.length == 0)
         {
-            options.dalignerOptions = ["-s126", // prevent integer overflow in trace point procedure
+            // dfmt off
+            options.dalignerOptions = [
+                "-s126", // prevent integer overflow in trace point procedure
                 "-t20", // ignore k-mers occuring more than this number
-                ];
+            ];
+            // dfmt on
         }
 
         if (!options.damapperOptions || options.damapperOptions.length == 0)
@@ -232,48 +259,39 @@ private
         }
     }
 
-    bool verifyOptions(ref Options options)
+    void verifyOptions(ref Options options)
     {
-        if (!verifyInputFiles(options))
-            return false;
-
-        return true;
+        verifyInputFiles(options);
     }
 
-    bool verifyInputFiles(ref Options options)
+    void verifyInputFiles(ref Options options)
     {
         import std.algorithm : endsWith;
         import std.file : exists;
+        import std.format : format;
         import djunctor.dazzler : getHiddenDbFiles;
 
         foreach (inputFile; [options.refFile, options.readsFile])
         {
             if (!inputFile.endsWith(".dam"))
             {
-                logError("expected .dam file, got `%s`", inputFile);
-
-                return false;
+                throw new Exception(format!"expected .dam file, got `%s`"(inputFile));
             }
 
             if (!inputFile.exists)
             {
-                logError("cannot open file `%s`", inputFile);
-
-                return false;
+                throw new Exception(format!"cannot open file `%s`"(inputFile));
             }
 
             foreach (hiddenDbFile; getHiddenDbFiles(inputFile))
             {
                 if (!hiddenDbFile.exists)
                 {
-                    logError("cannot open hidden database file `%s`", hiddenDbFile);
-
-                    return false;
+                    throw new Exception(
+                            format!"cannot open hidden database file `%s`"(hiddenDbFile));
                 }
             }
         }
-
-        return true;
     }
 
     void createWorkDir(ref Options options)
@@ -319,4 +337,58 @@ private
             logWarn(to!string(e));
         }
     }
+}
+
+template hasOption(T, string name, alias S)
+{
+    static if (hasMember!(T, name))
+    {
+        enum hasOption = Instantiate!(S, typeof(__traits(getMember, T, name)));
+    }
+    else
+    {
+        enum hasOption = false;
+    }
+}
+
+template hasOption(T, string name, S)
+{
+    static if (hasMember!(T, name))
+    {
+        enum hasOption = is(typeof(__traits(getMember, T, name)) == S);
+    }
+    else
+    {
+        enum hasOption = false;
+    }
+}
+
+unittest
+{
+    struct Mock
+    {
+        string a;
+        string b;
+        int c;
+    }
+
+    static assert(hasOption!(Mock, "a", string));
+    static assert(hasOption!(Mock, "a", isSomeString));
+    static assert(!hasOption!(Mock, "c", string));
+    static assert(!hasOption!(Mock, "c", isSomeString));
+    static assert(!hasOption!(Mock, "d", string));
+    static assert(!hasOption!(Mock, "d", isSomeString));
+}
+
+template isOptionsList(T)
+{
+    enum isOptionsList = isForwardRange!T && isSomeString!(ElementType!T);
+}
+
+unittest
+{
+    static assert(isOptionsList!(string[]));
+    static assert(!isOptionsList!(string));
+    static assert(!isOptionsList!(int[]));
+    static assert(!isOptionsList!(int));
 }
