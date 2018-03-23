@@ -47,8 +47,9 @@ template AlignmentContainer(R)
 /// Start the `djunctor` alorithm with preprocessed options.
 void runWithOptions(in ref Options options)
 {
-    import djunctor.dazzler : getMappings;
+    import djunctor.dazzler : getLocalAlignments, getMappings;
 
     logInfo("starting");
     writeln(getMappings(options.refDb, options.readsDb, options));
+    writeln(getLocalAlignments(options.refDb, options));
 }

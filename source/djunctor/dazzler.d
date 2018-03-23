@@ -102,14 +102,21 @@ string provideDamFileInWorkdir(in string dbFile, ProvideMethod provideMethod)
     return inWorkdir(dbFile);
 }
 
-AlignmentChain[] getLocalAlignments(in string dbA)
+AlignmentContainer!(AlignmentChain[]) getLocalAlignments(Options)(in string dbA, in Options options)
+        if (hasOption!(Options, "dalignerOptions", isOptionsList)
+            && hasOption!(Options, "ladumpOptions", isOptionsList))
 {
-    return getLocalAlignments(dbA, null);
+    return getLocalAlignments(dbA, null, options);
 }
 
-AlignmentChain[] getLocalAlignments(in string dbA, in string dbB)
+AlignmentContainer!(AlignmentChain[]) getLocalAlignments(Options)(in string dbA,
+        in string dbB, in Options options)
+        if (hasOption!(Options, "dalignerOptions", isOptionsList)
+            && hasOption!(Options, "ladumpOptions", isOptionsList))
 {
-    assert(0);
+    dalign(dbA, dbB, options.dalignerOptions);
+
+    return processGeneratedLasFiles(dbA, dbB, options);
 }
 
 AlignmentContainer!(AlignmentChain[]) getMappings(Options)(in string dbA,
@@ -128,6 +135,7 @@ private auto processGeneratedLasFiles(Options)(in string dbA, in string dbB, in 
     auto lasFileLists = getLasFiles(dbA, dbB);
     AlignmentContainer!(AlignmentChain[]) results;
 
+    // TODO prevent double execution if dbB == null
     static foreach (order; typeof(lasFileLists).orders)
     {
         {
@@ -136,11 +144,12 @@ private auto processGeneratedLasFiles(Options)(in string dbA, in string dbB, in 
 
             //lasort(lasFileList);
             // dfmt off
-            auto alignmentChains = lasFileList
-                .map!(lasFile => ladump(lasFile, dbFiles.expand, options.ladumpOptions))
-                .map!(lasDump => readAlignmentList(lasDump))
-                .joiner
-                .array;
+            auto alignmentChains =
+                lasFileList
+                    .map!(lasFile => ladump(lasFile, dbFiles.expand, options.ladumpOptions))
+                    .map!(lasDump => readAlignmentList(lasDump))
+                    .joiner
+                    .array;
             alignmentChains.sort!("a < b", SwapStrategy.stable);
             __traits(getMember, results, order) = alignmentChains;
             // dfmt on
@@ -481,7 +490,9 @@ AlignmentContainer!(string[]) getLasFiles(string dbA)
 
 AlignmentContainer!(string[]) getLasFiles(string dbA, string dbB)
 {
-    struct InferredParams
+    import std.algorithm : max;
+
+    static struct InferredParams
     {
         size_t numBlocks;
         string directory;
@@ -491,9 +502,12 @@ AlignmentContainer!(string[]) getLasFiles(string dbA, string dbB)
         {
             import std.path : baseName, dirName, stripExtension;
 
-            this.numBlocks = getNumBlocks(dbFile);
-            this.directory = dbFile.dirName;
-            this.fileStem = dbFile.baseName.stripExtension;
+            if (dbFile != null)
+            {
+                this.numBlocks = getNumBlocks(dbFile);
+                this.directory = dbFile.dirName;
+                this.fileStem = dbFile.baseName.stripExtension;
+            }
         }
 
         string fileNamePart(in size_t blockIdx = 0)
@@ -506,22 +520,31 @@ AlignmentContainer!(string[]) getLasFiles(string dbA, string dbB)
         }
     }
 
-    immutable fileTemplate = "%s.%s.las";
+    immutable singleFileTemplate = "%s.las";
+    immutable twoFileTemplate = "%s.%s.las";
     auto aOptions = InferredParams(dbA);
     auto bOptions = InferredParams(dbB);
-    size_t numLasFilesPerList = aOptions.numBlocks * bOptions.numBlocks;
+    size_t numLasFilesPerList = aOptions.numBlocks * max(1, bOptions.numBlocks);
     AlignmentContainer!(string[]) fileLists;
 
     fileLists.a2b.length = numLasFilesPerList;
     fileLists.b2a.length = numLasFilesPerList;
     foreach (size_t i; 0 .. aOptions.numBlocks)
     {
-        foreach (size_t j; 0 .. bOptions.numBlocks)
+        if (bOptions.numBlocks > 0)
         {
-            fileLists.a2b[i * bOptions.numBlocks + j] = format!fileTemplate(
-                    aOptions.fileNamePart(i), bOptions.fileNamePart(j));
-            fileLists.b2a[i * bOptions.numBlocks + j] = format!fileTemplate(
-                    bOptions.fileNamePart(j), aOptions.fileNamePart(i));
+            foreach (size_t j; 0 .. bOptions.numBlocks)
+            {
+                fileLists.a2b[i * bOptions.numBlocks + j] = format!twoFileTemplate(
+                        aOptions.fileNamePart(i), bOptions.fileNamePart(j));
+                fileLists.b2a[i * bOptions.numBlocks + j] = format!twoFileTemplate(
+                        bOptions.fileNamePart(j), aOptions.fileNamePart(i));
+            }
+        }
+        else
+        {
+            fileLists.a2b[i] = fileLists.b2a[i] = format!singleFileTemplate(
+                    aOptions.fileNamePart(i));
         }
     }
 
@@ -530,6 +553,11 @@ AlignmentContainer!(string[]) getLasFiles(string dbA, string dbB)
 
 private
 {
+    void dalign(in string refDam, in string[] dalignerOpts)
+    {
+        dalign(refDam, null, dalignerOpts);
+    }
+
     void dalign(in string refDam, in string readsDam, in string[] dalignerOpts)
     {
         executeScript(chain(only("HPC.daligner"), dalignerOpts, only(refDam), only(readsDam)));
