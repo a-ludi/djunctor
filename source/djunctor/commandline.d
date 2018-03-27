@@ -13,7 +13,7 @@ import darg : ArgParseError, ArgParseHelp, Argument, Help, helpString, Option,
 import std.conv;
 import std.stdio;
 import djunctor.dazzler : provideDamFileInWorkdir, ProvideMethod, setWorkdir;
-import djunctor.log;
+import djunctor.util.log;
 import std.meta : Instantiate;
 import std.range.primitives : ElementType, isForwardRange;
 import std.traits : hasMember, isSomeString;

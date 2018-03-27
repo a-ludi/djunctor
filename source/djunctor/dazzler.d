@@ -10,7 +10,7 @@ module djunctor.dazzler;
 
 import djunctor.commandline : hasOption, isOptionsList;
 import djunctor.djunctor : AlignmentChain, AlignmentContainer;
-import djunctor.log;
+import djunctor.util.log;
 import std.algorithm : equal, map, joiner, sort, splitter, SwapStrategy;
 import std.array : array;
 import std.conv : to;

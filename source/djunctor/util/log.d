@@ -6,7 +6,7 @@
              included LICENSE file.
     Authors: Arne Ludwig <arne.ludwig@posteo.de>
 */
-module djunctor.log;
+module djunctor.util.log;
 
 import std.array;
 import std.datetime;

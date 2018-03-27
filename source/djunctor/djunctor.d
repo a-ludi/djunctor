@@ -9,7 +9,7 @@
 module djunctor.djunctor;
 
 import djunctor.commandline : Options;
-import djunctor.log;
+import djunctor.util.log;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
 import std.format : format;
