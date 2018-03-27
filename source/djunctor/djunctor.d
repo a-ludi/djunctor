@@ -10,10 +10,16 @@ module djunctor.djunctor;
 
 import djunctor.commandline : Options;
 import djunctor.util.log;
+import djunctor.util.math : mean, median;
+import std.algorithm : any, canFind, chunkBy, each, filter, group, isSorted,
+    map, sort, swap;
+import std.array : appender, array;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
 import std.format : format;
+import std.range : ElementType, isForwardRange, only, walkLength;
 import std.stdio : writeln;
+import std.typecons : tuple, Tuple;
 
 /// General container for alignment data.
 template AlignmentContainer(R)
@@ -596,7 +602,6 @@ unittest
 
 auto equalIdsRange(in AlignmentChain[] acList, in size_t contigAID, in size_t contigBID) pure
 {
-    import std.algorithm : isSorted;
     import std.range : assumeSorted, SortedRange;
 
     assert(isSorted!idsPred(acList));
@@ -749,10 +754,6 @@ class DJunctor
 
     protected DJunctor filterUseless()
     {
-        import std.algorithm : any, canFind, chunkBy, filter, map;
-        import std.array : appender, array;
-        import std.math : ceil;
-
         auto sizeReserve = numExpectedUseless(catUnsure.length, iteration);
         if (sizeReserve == 0)
         {
