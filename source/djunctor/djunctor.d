@@ -530,13 +530,13 @@ unittest
             {
                 auto la = LocalAlignment(Locus(0, 1), Locus(0, 1), 1);
                 // dfmt off
-            auto acs = [
-                AlignmentChain(Contig(1, 10), Contig(1, 10), no, [la]),
-                AlignmentChain(Contig(1, 10), Contig(2, 10), no, [la]),
-                AlignmentChain(Contig(2, 10), Contig(1, 10), no, [la]),
-                AlignmentChain(Contig(2, 10), Contig(2, 10), no, [la]),
-            ];
-            // dfmt on
+                auto acs = [
+                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [la]),
+                    AlignmentChain(Contig(1, 10), Contig(2, 10), no, [la]),
+                    AlignmentChain(Contig(2, 10), Contig(1, 10), no, [la]),
+                    AlignmentChain(Contig(2, 10), Contig(2, 10), no, [la]),
+                ];
+                // dfmt on
 
                 foreach (i; 0 .. acs.length)
                     foreach (j; 0 .. acs.length)
