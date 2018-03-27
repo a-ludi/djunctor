@@ -644,6 +644,48 @@ unittest
             }
 }
 
+/**
+    Returns true iff ac1 begins befor ac2 taking complementary alignment into account.
+*/
+bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
+        if (contig == "contigA" || contig == "contigB")
+{
+    assert(__traits(getMember, ac1, contig) == __traits(getMember, ac2, contig),
+            "alignment chains do not belong to the same contig");
+
+    return __traits(getMember, ac1.first, contig).begin < __traits(getMember,
+            ac2.first, contig).begin;
+}
+
+unittest
+{
+    with (AlignmentChain) with (Complement) with (LocalAlignment)
+            {
+                // dfmt off
+                auto acs = [
+                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [LocalAlignment(Locus(1, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(Contig(1, 10), Contig(2, 10), yes, [LocalAlignment(Locus(2, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(Contig(1, 10), Contig(3, 10), no, [LocalAlignment(Locus(3, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(Contig(1, 10), Contig(4, 10), yes, [LocalAlignment(Locus(4, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(Contig(1, 10), Contig(5, 10), no, [LocalAlignment(Locus(5, 6), Locus(0, 1), 0)]),
+                ];
+                // dfmt on
+
+                foreach (i; 0 .. acs.length)
+                    foreach (j; 0 .. acs.length)
+                    {
+                        auto compareValue = isBefore!"contigA"(acs[i], acs[j]);
+                        alias errorMessage = (expValue) => format!"expected idsPred(%s, %s) to be %s but got %s"(
+                                acs[i], acs[j], expValue, compareValue);
+
+                        if (i < j)
+                            assert(compareValue, errorMessage(true));
+                        else
+                            assert(!compareValue, errorMessage(false));
+                    }
+            }
+}
+
 /// Start the `djunctor` alorithm with preprocessed options.
 void runWithOptions(in ref Options options)
 {
