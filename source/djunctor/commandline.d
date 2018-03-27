@@ -176,7 +176,7 @@ struct Options
         import std.array : array;
         import std.format : format;
         import std.range : zip;
-        import std.traits : getUDAs;
+        import std.traits : hasUDA;
 
         const(string)[] options = [];
         const(string)[] values = [];
@@ -185,8 +185,8 @@ struct Options
         {
             static if (!is(typeof(__traits(getMember, this, member)) == function))
             {
-                static if (getUDAs!(__traits(getMember, this, member), Option)
-                        .length || getUDAs!(__traits(getMember, this, member), Argument).length)
+                static if (hasUDA!(__traits(getMember, this, member), Option)
+                        || hasUDA!(__traits(getMember, this, member), Argument))
                 {
                     options ~= member;
                     values ~= to!string(__traits(getMember, this, member));
