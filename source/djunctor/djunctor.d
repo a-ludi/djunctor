@@ -722,7 +722,7 @@ class DJunctor
         AlignmentChain.maxScore .
     */
     static immutable maxAbsoluteDiff = AlignmentChain.maxScore / 100; // 1% wrt. score
-    alias numExpectedUseless = (numCatUnsure, iteration) => (numCatUnsure - numCatUnsure / 20) / (
+    alias numEstimateUseless = (numCatUnsure, iteration) => (numCatUnsure - numCatUnsure / 20) / (
             iteration + 1);
     AlignmentContainer!(AlignmentChain[]) selfAlignment;
     AlignmentContainer!(AlignmentChain[]) readsAlignment;
@@ -730,7 +730,7 @@ class DJunctor
     /// Set of read ids not to be considered in further processing.
     size_t[] catUseless;
     /// Set of alignments to be considered in further processing.
-    AlignmentChain[] catUnsure;
+    AlignmentContainer!(AlignmentChain[]) catCandidates;
     /// Set of alignments to be used for gap filling.
     BinaryHeap!(AlignmentChain[]) catHits;
     size_t iteration;
@@ -764,7 +764,8 @@ class DJunctor
         logInfo("BEGIN djunctor.init");
         selfAlignment = getLocalAlignments(options.refDb, options);
         readsAlignment = getMappings(options.refDb, options.readsDb, options);
-        catUnsure = readsAlignment.a2b.dup;
+        catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup,
+                readsAlignment.b2a.dup);
         logInfo("END djunctor.init");
 
         return this;
@@ -778,8 +779,9 @@ class DJunctor
             filterUseless();
             findHits();
 
-            logDiagnostic("i: %d, useless: %d, unsure: %d, hits: %d",
-                    iteration, catUseless.length, catUnsure.length, catHits.length);
+            logDiagnostic("i: %d, useless: %d, candiates.a2b: %d candiates.b2a: %d, hits: %d",
+                    iteration, catUseless.length,
+                    catCandidates.a2b.length, catCandidates.b2a.length, catHits.length);
 
             if (catHits.length > 0)
             {
@@ -796,42 +798,47 @@ class DJunctor
 
     protected DJunctor filterUseless()
     {
-        auto sizeReserve = numExpectedUseless(catUnsure.length, iteration);
+        auto sizeReserve = numEstimateUseless(catCandidates.a2b.length, iteration);
         if (sizeReserve == 0)
         {
             logDiagnostic("skipping filterUseless: expected count is zero");
             // Skip this step if we do not expect to find "useless" reads;
             // it is not harmful to consider some "useless" reads as
-            // candidates (catUnsure).
+            // candidates (catCandidates).
             return this;
         }
 
         auto uselessAcc = appender!(size_t[]);
-        uselessAcc.reserve(numExpectedUseless(catUnsure.length, iteration));
+        auto candidatesAcc = appender!(AlignmentChain[]);
+        uselessAcc.reserve(sizeReserve);
+        alias isNotUseless = ac => !uselessAcc.data.canFind(ac.contigA.id);
 
         logInfo("BEGIN djunctor.filterUseless");
-        foreach (alignmentsChunk; catUnsure.chunkBy!haveEqualIds)
+        foreach (alignmentsChunk; catCandidates.a2b.chunkBy!haveEqualIds)
         {
             auto alignments = alignmentsChunk.array;
+            alignments.sort!"a.score > b.score";
+
             // Mark reads as useless if either: (s. issue #3)
             // (a) The aligned read, ie. the alignment extened with the exceeding
             //     read sequence on either end, is fully contained in a single
             //     contig.
             // (b) It aligns in multiple locations of one contig with
             //     approximately equal quality.
-            // dfmt off
-            if (alignments.any!"a.isFullyContained" ||
-                (alignments.length > 1 && similarScore(alignments[0].score, alignments[1].score)))
-                // dfmt on
+            if (alignments[0].isFullyContained || (alignments.length > 1
+                    && similarScore(alignments[0].score, alignments[1].score)))
             {
                 uselessAcc ~= alignments[0].contigB.id;
             }
+            else
+            {
+                candidatesAcc ~= alignments;
+            }
         }
-        logDebug("useless expected: %d found: %d",
-                numExpectedUseless(catUnsure.length, iteration), uselessAcc.data.length);
+        logDebug("useless expected: %d found: %d", sizeReserve, uselessAcc.data.length);
         this.catUseless ~= uselessAcc.data;
-        this.catUnsure = this.catUnsure.filter!(
-                ac => !uselessAcc.data.canFind(ac.contigB.id)).array;
+        this.catCandidates.a2b = candidatesAcc.data;
+        this.catCandidates.b2a = this.catCandidates.b2a.filter!isNotUseless.array;
         logInfo("END djunctor.filterUseless");
 
         return this;
@@ -871,7 +878,78 @@ class DJunctor
 
     protected DJunctor findHits()
     {
+        static bool orderByReferenceIds(T)(T a, T b) pure
+        {
+            return a[0].contigB.id < b[0].contigB.id && (!(a.length > 1
+                    && a[0].contigB.id == b[0].contigB.id) || a[1].contigB.id < b[1].contigB.id);
+        }
+
+        static size_t numContigsInvolved(T)(T readsByNumFlanksByGap)
+        {
+            auto readsByGap = readsByNumFlanksByGap.front;
+            auto readsByFirstGap = readsByGap.front;
+            auto reads = readsByFirstGap.front;
+
+            return reads.length;
+        }
+
+        static bool isSameRead(T)(T a, T b)
+        {
+            return a.contigA.id == b.contigA.id;
+        }
+
         logInfo("BEGIN djunctor.findHits");
+        // dfmt off
+        auto readsByNumFlanks = catCandidates
+            .b2a
+            .chunkBy!isSameRead
+            .map!array
+            .array
+            .sort!"a.length < b.length"
+            .groupBy;
+        auto readsByNumFlanksByGap = readsByNumFlanks
+            .map!(group => group
+                .array
+                .sort!orderByReferenceIds
+                .groupBy);
+        // dfmt on
+
+        if (!readsByNumFlanksByGap.empty && numContigsInvolved(readsByNumFlanksByGap) == 1)
+        {
+            auto extendingReadsByGap = readsByNumFlanksByGap.front;
+            readsByNumFlanksByGap.popFront();
+
+            logDiagnostic("extending %d contigs", extendingReadsByGap.save.walkLength);
+
+            // dfmt off
+            extendingReadsByGap
+                .save
+                .map!(readsByGap => readsByGap
+                    .map!(extendingAlignments => extensionSize(extendingAlignments[0]))
+                    .array
+                    .mean)
+                .writeln;
+            // dfmt on
+        }
+
+        if (!readsByNumFlanksByGap.empty && numContigsInvolved(readsByNumFlanksByGap) == 2)
+        {
+            auto spanningReadsByGap = readsByNumFlanksByGap.front;
+            readsByNumFlanksByGap.popFront();
+
+            logDiagnostic("spanning %d gaps", spanningReadsByGap.save.walkLength);
+
+            // dfmt off
+            spanningReadsByGap
+                .save
+                .map!(readsByGap => readsByGap
+                    .map!(spanningAlignments => spanningGapSize(spanningAlignments[0], spanningAlignments[1]))
+                    .array
+                    .mean)
+                .writeln;
+            // dfmt on
+        }
+
         logInfo("END djunctor.findHits");
 
         return this;
