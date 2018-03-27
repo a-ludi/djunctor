@@ -13,6 +13,7 @@ import djunctor.log;
 import std.conv;
 import std.stdio : writeln;
 
+/// General container for alignment data.
 template AlignmentContainer(R)
 {
     import std.typecons : tuple;
@@ -33,6 +34,16 @@ template AlignmentContainer(R)
                 assert(0, "illegal value");
         }
 
+        unittest
+        {
+            import core.exception : AssertError;
+            import std.exception : assertThrown;
+
+            assert(getOrdered("a2b", 0, 1) == tuple(0, 1));
+            assert(getOrdered("b2a", 0, 1) == tuple(1, 0));
+            assertThrown!AssertError(getOrdered("foo", 0, 1));
+        }
+
         static auto getOrdered(string order, T)(T thingA, T thingB) pure nothrow
                 if (order == "a2b" || order == "b2a")
         {
@@ -40,6 +51,16 @@ template AlignmentContainer(R)
                 return tuple(thingA, thingB);
             else
                 return tuple(thingB, thingA);
+        }
+
+        unittest
+        {
+            import core.exception : AssertError;
+            import std.exception : assertThrown;
+
+            assert(getOrdered!"a2b"(0, 1) == tuple(0, 1));
+            assert(getOrdered!"b2a"(0, 1) == tuple(1, 0));
+            assert(!__traits(compiles, getOrdered!"foo"(0, 1)));
         }
     }
 }
