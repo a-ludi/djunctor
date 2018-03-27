@@ -363,11 +363,11 @@ struct AlignmentChain
     {
         import std.math : sgn;
 
-        long idCompare = other.contigA.id - this.contigA.id;
+        long idCompare = this.contigA.id - other.contigA.id;
         if (idCompare != 0)
             return cast(int) sgn(idCompare);
 
-        idCompare = other.contigB.id - this.contigB.id;
+        idCompare = this.contigB.id - other.contigB.id;
         if (idCompare != 0)
             return cast(int) sgn(idCompare);
 
@@ -396,9 +396,9 @@ struct AlignmentChain
                                 acs[i], acs[j], cmp, compareValue);
 
                         if (i < j)
-                            assert(compareValue > 0, errorMessage(">"));
-                        else if (i > j)
                             assert(compareValue < 0, errorMessage("<"));
+                        else if (i > j)
+                            assert(compareValue > 0, errorMessage(">"));
                         else
                             assert(compareValue == 0, errorMessage("=="));
                     }
@@ -413,19 +413,19 @@ struct AlignmentChain
         if (idCompare != 0)
             return idCompare;
 
-        long locusCompare = other.first.contigA.begin - this.first.contigA.begin;
+        long locusCompare = this.first.contigA.begin - other.first.contigA.begin;
         if (locusCompare != 0)
             return cast(int) sgn(locusCompare);
 
-        locusCompare = other.first.contigB.begin - this.first.contigB.begin;
+        locusCompare = this.first.contigB.begin - other.first.contigB.begin;
         if (locusCompare != 0)
             return cast(int) sgn(locusCompare);
 
-        locusCompare = other.last.contigA.end - this.last.contigA.end;
+        locusCompare = this.last.contigA.end - other.last.contigA.end;
         if (locusCompare != 0)
             return cast(int) sgn(locusCompare);
 
-        locusCompare = other.last.contigB.end - this.last.contigB.end;
+        locusCompare = this.last.contigB.end - other.last.contigB.end;
         if (locusCompare != 0)
             return cast(int) sgn(locusCompare);
 
@@ -455,9 +455,9 @@ struct AlignmentChain
                                 acs[i], acs[j], cmp, compareValue);
 
                         if (i < j)
-                            assert(compareValue > 0, errorMessage(">"));
-                        else if (i > j)
                             assert(compareValue < 0, errorMessage("<"));
+                        else if (i > j)
+                            assert(compareValue > 0, errorMessage(">"));
                         else
                             assert(compareValue == 0, errorMessage("=="));
                     }
@@ -507,9 +507,9 @@ struct AlignmentChain
                                 acs[i], acs[j], cmp, compareValue);
 
                         if (i < j)
-                            assert(compareValue > 0, errorMessage(">"));
-                        else if (i > j)
                             assert(compareValue < 0, errorMessage("<"));
+                        else if (i > j)
+                            assert(compareValue > 0, errorMessage(">"));
                         else
                             assert(compareValue == 0, errorMessage("=="));
                     }
@@ -521,7 +521,7 @@ bool idsPred(in AlignmentChain ac1, in AlignmentChain ac2) pure
 {
     auto cmpValue = ac1.compareIds(ac2);
 
-    return 0 != cmpValue && 0 < cmpValue;
+    return 0 != cmpValue && cmpValue < 0;
 }
 
 unittest
