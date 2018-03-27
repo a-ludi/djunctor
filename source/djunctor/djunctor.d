@@ -877,6 +877,94 @@ class DJunctor
         return this;
     }
 
+    /**
+        Returns the (approximate) size of the gap spanned by alignmentsRange.
+        ---
+                        contig a                  contig b
+
+                  0         cax cay la      0   cbx cby       lb
+        reference |---------+---+---|       |---+---+---------|
+                             \ \ \             / / /
+                              \ \ \           / / /
+                  alignment 1  \ \ \         / / /  alignment 2
+                                \ \ \       / / /
+        read            |--------+---+-----+---+-------|
+                        0        a1x a1y   a2x a2y     lr
+
+        gap_size ~= a2x - a1y - (la - cay) - (cbx - 0)
+                  = a2x - a1y - (la - cay + cbx)
+        ---
+    */
+    protected long spanningGapSize(in AlignmentChain alignment1, in AlignmentChain alignment2) pure
+    {
+        auto alignments = isBefore!"contigA"(alignment1, alignment2) ? tuple(alignment1, alignment2) : tuple(
+                alignment2, alignment1);
+        auto firstAlignment = alignments[0];
+        auto secondAlignment = alignments[1];
+
+        assert(secondAlignment.first.contigA.begin > firstAlignment.last.contigA.end,
+                tuple(firstAlignment, secondAlignment).to!string);
+        auto readsSequenceLength = secondAlignment.first.contigA.begin
+            - firstAlignment.last.contigA.end;
+        auto referenceExcess = firstAlignment.contigB.length
+            - firstAlignment.last.contigB.end + secondAlignment.first.contigB.begin;
+
+        return readsSequenceLength.to!long - referenceExcess.to!long;
+    }
+
+    /**
+        Returns the (approximate) size of the extension constituted by alignmentsRange.
+        ---
+        CASE 1 (right extension):
+
+                       0       rx  ry  lr
+            reference  |-------+---+---|
+                                \ \ \
+                                 \ \ \
+                       alignment  \ \ \
+                                   \ \ \
+            read            |-------+---+-------|
+                            0       ax  ay      la
+
+            extension_size ~= la - ay - (lr - ry)
+
+
+        CASE 2 (left extension):
+
+                                0    rx  ry lr
+            reference           |---+---+-------|
+                                   / / /
+                                  / / /
+                      alignment  / / /
+                                / / /
+            read       |-------+---+-------|
+                       0       ax  ay      la
+
+            extension_size ~= ax - 0 - (rx - 0)
+                            = ax - rx
+        ---
+    */
+    protected long extensionSize(in AlignmentChain alignment) pure
+    {
+        if (alignment.last.contigB.end > alignment.contigB.length / 2)
+        {
+            // CASE 1 (right extension)
+            auto readsSequenceLength = alignment.contigA.length - alignment.last.contigA.end;
+            auto referenceExcess = alignment.contigB.length - alignment.last.contigB.end;
+
+            return readsSequenceLength.to!long - referenceExcess.to!long;
+        }
+        else if (alignment.first.contigB.begin < alignment.contigB.length / 2)
+        {
+            // CASE 2 (left extension)
+            return alignment.first.contigA.begin.to!long - alignment.first.contigB.begin.to!long;
+        }
+        else
+        {
+            assert(0, "alignment does not seem to extend the reference");
+        }
+    }
+
     protected DJunctor fillGaps()
     {
         logInfo("BEGIN djunctor.fillGaps");
