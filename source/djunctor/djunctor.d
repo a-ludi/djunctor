@@ -10,6 +10,7 @@ module djunctor.djunctor;
 
 import djunctor.commandline : Options;
 import djunctor.log;
+import std.container : BinaryHeap, heapify, make;
 import std.conv;
 import std.format : format;
 import std.stdio : writeln;
@@ -641,9 +642,211 @@ unittest
 /// Start the `djunctor` alorithm with preprocessed options.
 void runWithOptions(in ref Options options)
 {
-    import djunctor.dazzler : getLocalAlignments, getMappings;
+    new DJunctor(options).run();
+}
 
-    logInfo("starting");
-    writeln(getMappings(options.refDb, options.readsDb, options));
-    writeln(getLocalAlignments(options.refDb, options));
+class DJunctor
+{
+    /// Stop after maxLoops `mainLoop`s at the latest.
+    static immutable maxLoops = 1;
+    /**
+        Two scores are condsidered similar if the relative "error" of them is
+        smaller than defaulMaxRelativeDiff.
+
+        The relative error is defined as:
+
+            relError(a, b) = abs(a - b)/max(a - b)
+
+        **Implementation note:** all computations are done in integer
+        arithmetic hence AlignmentChain.maxScore corresponds to 1 in the above
+        equation.
+    */
+    static immutable maxRelativeDiff = AlignmentChain.maxScore / 20; // 5% of larger value
+    /**
+        Two scores are condsidered similar if the absolute "error" of them is
+        smaller than defaulMaxAbsoluteDiff.
+
+        The relative error is defined as:
+
+            absError(a, b) = abs(a - b)
+
+        **Implementation note:** all computations are done in integer
+        arithmetic hence all scores are lower than or equal to
+        AlignmentChain.maxScore .
+    */
+    static immutable maxAbsoluteDiff = AlignmentChain.maxScore / 100; // 1% wrt. score
+    alias numExpectedUseless = (numCatUnsure, iteration) => (numCatUnsure - numCatUnsure / 20) / (
+            iteration + 1);
+    AlignmentContainer!(AlignmentChain[]) selfAlignment;
+    AlignmentContainer!(AlignmentChain[]) readsAlignment;
+    const Options options;
+    /// Set of read ids not to be considered in further processing.
+    size_t[] catUseless;
+    /// Set of alignments to be considered in further processing.
+    AlignmentChain[] catUnsure;
+    /// Set of alignments to be used for gap filling.
+    BinaryHeap!(AlignmentChain[]) catHits;
+    size_t iteration;
+
+    this(in ref Options options)
+    {
+        this.options = options;
+        this.catUseless = [];
+        this.catHits = make!(typeof(this.catHits))();
+        this.iteration = 0;
+    }
+
+    DJunctor run()
+    {
+        logInfo("BEGIN djunctor");
+        // dfmt off
+        this
+            .init
+            .mainLoop
+            .finish;
+        // dfmt on
+        logInfo("END djunctor");
+
+        return this;
+    }
+
+    protected DJunctor init()
+    {
+        import djunctor.dazzler : getLocalAlignments, getMappings;
+
+        logInfo("BEGIN djunctor.init");
+        selfAlignment = getLocalAlignments(options.refDb, options);
+        readsAlignment = getMappings(options.refDb, options.readsDb, options);
+        catUnsure = readsAlignment.a2b.dup;
+        logInfo("END djunctor.init");
+
+        return this;
+    }
+
+    protected DJunctor mainLoop()
+    {
+        logInfo("BEGIN djunctor.mainLoop");
+        do
+        {
+            filterUseless();
+            findHits();
+
+            logDiagnostic("i: %d, useless: %d, unsure: %d, hits: %d",
+                    iteration, catUseless.length, catUnsure.length, catHits.length);
+
+            if (catHits.length > 0)
+            {
+                fillGaps();
+            }
+
+            ++iteration;
+        }
+        while (catHits.length > 0 && iteration < maxLoops);
+        logInfo("END djunctor.mainLoop");
+
+        return this;
+    }
+
+    protected DJunctor filterUseless()
+    {
+        import std.algorithm : any, canFind, chunkBy, filter, map;
+        import std.array : appender, array;
+        import std.math : ceil;
+
+        auto sizeReserve = numExpectedUseless(catUnsure.length, iteration);
+        if (sizeReserve == 0)
+        {
+            logDiagnostic("skipping filterUseless: expected count is zero");
+            // Skip this step if we do not expect to find "useless" reads;
+            // it is not harmful to consider some "useless" reads as
+            // candidates (catUnsure).
+            return this;
+        }
+
+        auto uselessAcc = appender!(size_t[]);
+        uselessAcc.reserve(numExpectedUseless(catUnsure.length, iteration));
+
+        logInfo("BEGIN djunctor.filterUseless");
+        foreach (alignmentsChunk; catUnsure.chunkBy!haveEqualIds)
+        {
+            auto alignments = alignmentsChunk.array;
+            // Mark reads as useless if either: (s. issue #3)
+            // (a) The aligned read, ie. the alignment extened with the exceeding
+            //     read sequence on either end, is fully contained in a single
+            //     contig.
+            // (b) It aligns in multiple locations of one contig with
+            //     approximately equal quality.
+            // dfmt off
+            if (alignments.any!"a.isFullyContained" ||
+                (alignments.length > 1 && similarScore(alignments[0].score, alignments[1].score)))
+                // dfmt on
+            {
+                uselessAcc ~= alignments[0].contigB.id;
+            }
+        }
+        logDebug("useless expected: %d found: %d",
+                numExpectedUseless(catUnsure.length, iteration), uselessAcc.data.length);
+        this.catUseless ~= uselessAcc.data;
+        this.catUnsure = this.catUnsure.filter!(
+                ac => !uselessAcc.data.canFind(ac.contigB.id)).array;
+        logInfo("END djunctor.filterUseless");
+
+        return this;
+    }
+
+    protected static bool similarScore(size_t a, size_t b) pure
+    {
+        auto diff = a > b ? a - b : b - a;
+        auto magnitude = a > b ? a : b;
+
+        return diff < maxAbsoluteDiff || (diff * AlignmentChain.maxScore / magnitude) < maxRelativeDiff;
+    }
+
+    unittest
+    {
+        immutable eps = 1;
+        immutable refValueSmall = 2 * maxAbsoluteDiff;
+        immutable refValueLarge = AlignmentChain.maxScore / 2;
+
+        // test absolute part
+        assert(similarScore(refValueSmall, refValueSmall));
+        assert(similarScore(refValueSmall, refValueSmall + (maxAbsoluteDiff - 1)));
+        assert(similarScore(refValueSmall, refValueSmall - (maxAbsoluteDiff - 1)));
+        assert(!similarScore(refValueSmall, refValueSmall + (maxAbsoluteDiff + 1)));
+        assert(!similarScore(refValueSmall, refValueSmall - (maxAbsoluteDiff + 1)));
+        // test relative part
+        assert(similarScore(refValueLarge, refValueLarge));
+        assert(similarScore(refValueLarge,
+                refValueLarge + refValueLarge * maxRelativeDiff / AlignmentChain.maxScore));
+        assert(similarScore(refValueLarge,
+                refValueLarge - refValueLarge * maxRelativeDiff / AlignmentChain.maxScore) + eps);
+        assert(!similarScore(refValueLarge,
+                refValueLarge + refValueLarge * 2 * maxRelativeDiff / AlignmentChain.maxScore));
+        assert(!similarScore(refValueLarge,
+                refValueLarge - refValueLarge * 2 * maxRelativeDiff / AlignmentChain.maxScore));
+    }
+
+    protected DJunctor findHits()
+    {
+        logInfo("BEGIN djunctor.findHits");
+        logInfo("END djunctor.findHits");
+
+        return this;
+    }
+
+    protected DJunctor fillGaps()
+    {
+        logInfo("BEGIN djunctor.fillGaps");
+        logInfo("END djunctor.fillGaps");
+
+        return this;
+    }
+
+    protected DJunctor finish()
+    {
+        logInfo("BEGIN djunctor.finish");
+        logInfo("END djunctor.finish");
+
+        return this;
+    }
 }
