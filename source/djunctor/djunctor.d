@@ -958,36 +958,204 @@ class DJunctor
     /**
         Returns the (approximate) size of the gap spanned by alignmentsRange.
         ---
-                        contig a                  contig b
+        gapSize = readsSequenceLength - referenceExcess
 
-                  0         cax cay la      0   cbx cby       lb
-        reference |---------+---+---|       |---+---+---------|
-                             \ \ \             / / /
-                              \ \ \           / / /
-                  alignment 1  \ \ \         / / /  alignment 2
-                                \ \ \       / / /
-        read            |--------+---+-----+---+-------|
-                        0        a1x a1y   a2x a2y     lr
+        readsSequenceLength ~= a2x - a1y
 
-        gap_size ~= a2x - a1y - (la - cay) - (cbx - 0)
-                  = a2x - a1y - (la - cay + cbx)
+        referenceExcess ~= referenceExcess1 + referenceExcess2
+
+        CASE 1 (no complement):
+
+                            contig a                  contig b
+
+                      0         cax cay la      0   cbx cby       lb
+            reference |---------+---+---|       |---+---+---------|
+                                 \ \ \             / / /
+                                  \ \ \           / / /
+                      alignment 1  \ \ \         / / /  alignment 2
+                                    \ \ \       / / /
+            read            |-->-->--+->-+-->--+->-+-->-->--|
+                            0        a1x a1y   a2x a2y      lr
+
+        referenceExcess1 ~= la - cay
+        referenceExcess2 ~= cbx - 0 = cbx
+
+        CASE 2 (complement):
+
+                            contig b                  contig a
+
+                      0         cax cay la      0   cbx cby       lb
+            reference |---------+---+---|       |---+---+---------|
+                                 \ \ \             / / /
+                                  \ \ \           / / /
+                      alignment 2  \ \ \         / / /  alignment 1
+                                    \ \ \       / / /
+            read            |--<--<--+-<-+--<--+-<-+--<--<--|
+                            lr       a2y a2x   a1y a1x      0
+
+        referenceExcess1 ~= lb - cby
+        referenceExcess2 ~= cax - 0 = cax
         ---
     */
-    protected long spanningGapSize(in AlignmentChain alignment1, in AlignmentChain alignment2) pure
+    static protected long spanningGapSize(in AlignmentChain alignment1, in AlignmentChain alignment2) pure
     {
-        auto alignments = isBefore!"contigA"(alignment1, alignment2) ? tuple(alignment1, alignment2) : tuple(
-                alignment2, alignment1);
+        // dfmt off
+        auto alignments = isBefore!"contigA"(alignment1, alignment2)
+            ? tuple(alignment1, alignment2)
+            : tuple(alignment2, alignment1);
+        // dfmt on
         auto firstAlignment = alignments[0];
         auto secondAlignment = alignments[1];
 
         assert(secondAlignment.first.contigA.begin > firstAlignment.last.contigA.end,
-                tuple(firstAlignment, secondAlignment).to!string);
-        auto readsSequenceLength = secondAlignment.first.contigA.begin
+                format!"intersecting local alignments in %s"(tuple(firstAlignment,
+                    secondAlignment).to!string));
+        long readsSequenceLength = secondAlignment.first.contigA.begin
             - firstAlignment.last.contigA.end;
-        auto referenceExcess = firstAlignment.contigB.length
-            - firstAlignment.last.contigB.end + secondAlignment.first.contigB.begin;
+        // dfmt off
+        long referenceExcess1 = firstAlignment.complement
+            ? secondAlignment.contigB.length - secondAlignment.last.contigB.end
+            : firstAlignment.contigB.length - firstAlignment.last.contigB.end;
+        long referenceExcess2 = firstAlignment.complement
+            ? firstAlignment.first.contigB.begin
+            : secondAlignment.first.contigB.begin;
+        // dfmt on
+        long referenceExcess = referenceExcess1 + referenceExcess2;
 
-        return readsSequenceLength.to!long - referenceExcess.to!long;
+        return readsSequenceLength - referenceExcess;
+    }
+
+    unittest
+    {
+        with (AlignmentChain) with (LocalAlignment) with (Complement)
+                {
+                    // dfmt off
+                    auto testCases = [
+                        // CASE 1 (no complement)
+                        // ------------------------------------
+                        //           0     30  50  50     0   0  20     50
+                        // reference |------+---+---|     |---+---+------|
+                        //                   \ \ \           / / /
+                        //       alignment 1  \ \ \         / / /  alignment 2
+                        //                     \ \ \       / / /
+                        // read        |-->-->--+->-+-->--+->-+-->-->--|
+                        //             0       10   30   50  70       80
+                        tuple(
+                            AlignmentChain(Contig(1, 80), Contig(1, 50), no, [
+                                LocalAlignment(Locus(10, 15), Locus(30, 35), 0),
+                                LocalAlignment(Locus(20, 30), Locus(40, 50), 1),
+                            ]),
+                            AlignmentChain(Contig(1, 80), Contig(2, 50), no, [
+                                LocalAlignment(Locus(50, 55), Locus(0, 10), 2),
+                                LocalAlignment(Locus(60, 70), Locus(15, 20), 3),
+                            ]),
+                            20
+                        ),
+                        //           0     30  45  50     0   5  20     50
+                        // reference |------+---+---|     |---+---+------|
+                        //                   \ \ \           / / /
+                        //       alignment 1  \ \ \         / / /  alignment 2
+                        //                     \ \ \       / / /
+                        // read        |-->-->--+->-+-->--+->-+-->-->--|
+                        //             0       10   30   50  70       80
+                        tuple(
+                            AlignmentChain(Contig(1, 80), Contig(1, 50), no, [
+                                LocalAlignment(Locus(10, 15), Locus(30, 35), 4),
+                                LocalAlignment(Locus(20, 30), Locus(40, 45), 5),
+                            ]),
+                            AlignmentChain(Contig(1, 80), Contig(2, 50), no, [
+                                LocalAlignment(Locus(50, 55), Locus(5, 10), 6),
+                                LocalAlignment(Locus(60, 70), Locus(15, 20), 7),
+                            ]),
+                            10
+                        ),
+                        //           0     30  45  50     0   5  20     50
+                        // reference |------+---+---|     |---+---+------|
+                        //                   \ \ \           / / /
+                        //       alignment 2  \ \ \         / / /  alignment 1
+                        //                     \ \ \       / / /
+                        // read        |-->-->--+->-+-->--+->-+-->-->--|
+                        //             0       10   30   50  70       80
+                        tuple(
+                            AlignmentChain(Contig(1, 80), Contig(2, 50), no, [
+                                LocalAlignment(Locus(50, 55), Locus(5, 10), 6),
+                                LocalAlignment(Locus(60, 70), Locus(15, 20), 7),
+                            ]),
+                            AlignmentChain(Contig(1, 80), Contig(1, 50), no, [
+                                LocalAlignment(Locus(10, 15), Locus(30, 35), 4),
+                                LocalAlignment(Locus(20, 30), Locus(40, 45), 5),
+                            ]),
+                            10
+                        ),
+                        // CASE 2 (complement)
+                        // ------------------------------------
+                        //           0     30  50  50     0   0  20     50
+                        // reference |------+---+---|     |---+---+------|
+                        //                   \ \ \           / / /
+                        //       alignment 1  \ \ \         / / /  alignment 2
+                        //                     \ \ \       / / /
+                        // read        |--<--<--+-<-+--<--+-<-+--<--<--|
+                        //            80       70  50    30  10        0
+                        tuple(
+                            AlignmentChain(Contig(1, 80), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(10, 15), Locus(0, 10), 8),
+                                LocalAlignment(Locus(20, 30), Locus(15, 20), 9),
+                            ]),
+                            AlignmentChain(Contig(1, 80), Contig(2, 50), yes, [
+                                LocalAlignment(Locus(50, 55), Locus(30, 35), 10),
+                                LocalAlignment(Locus(60, 70), Locus(40, 50), 11),
+                            ]),
+                            20
+                        ),
+                        //           0     30  45  50     0   5  20     50
+                        // reference |------+---+---|     |---+---+------|
+                        //                   \ \ \           / / /
+                        //       alignment 1  \ \ \         / / /  alignment 2
+                        //                     \ \ \       / / /
+                        // read        |--<--<--+-<-+--<--+-<-+--<--<--|
+                        //            80       70  50    30  10        0
+                        tuple(
+                            AlignmentChain(Contig(1, 80), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(10, 15), Locus(5, 10), 12),
+                                LocalAlignment(Locus(20, 30), Locus(15, 20), 13),
+                            ]),
+                            AlignmentChain(Contig(1, 80), Contig(2, 50), yes, [
+                                LocalAlignment(Locus(50, 55), Locus(30, 35), 14),
+                                LocalAlignment(Locus(60, 70), Locus(40, 45), 15),
+                            ]),
+                            10
+                        ),
+                        //           0     30  45  50     0   5  20     50
+                        // reference |------+---+---|     |---+---+------|
+                        //                   \ \ \           / / /
+                        //       alignment 2  \ \ \         / / /  alignment 1
+                        //                     \ \ \       / / /
+                        // read        |--<--<--+-<-+--<--+-<-+--<--<--|
+                        //            80       70  50    30  10        0
+                        tuple(
+                            AlignmentChain(Contig(1, 80), Contig(2, 50), yes, [
+                                LocalAlignment(Locus(50, 55), Locus(30, 35), 14),
+                                LocalAlignment(Locus(60, 70), Locus(40, 45), 15),
+                            ]),
+                            AlignmentChain(Contig(1, 80), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(10, 15), Locus(5, 10), 12),
+                                LocalAlignment(Locus(20, 30), Locus(15, 20), 13),
+                            ]),
+                            10
+                        ),
+                    ];
+                    // dfmt on
+
+                    foreach (testCaseIdx, testCase; testCases.enumerate)
+                    {
+                        auto gotValue = spanningGapSize(testCase[0], testCase[1]);
+                        auto expValue = testCase[2];
+                        auto errorMessage = format!"expected spanning gap size %d but got %d for test case %d"(
+                                expValue, gotValue, testCaseIdx);
+
+                        assert(gotValue == expValue, errorMessage);
+                    }
+                }
     }
 
     /**
