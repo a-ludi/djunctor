@@ -17,7 +17,7 @@ import std.array : appender, array;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
 import std.format : format;
-import std.range : ElementType, isForwardRange, only, walkLength;
+import std.range : ElementType, enumerate, isForwardRange, only, walkLength;
 import std.stdio : writeln;
 import std.typecons : tuple, Tuple;
 
@@ -993,7 +993,9 @@ class DJunctor
     /**
         Returns the (approximate) size of the extension constituted by alignmentsRange.
         ---
-        CASE 1 (right extension):
+        extensionSize ~= readsSequenceLength - referenceExcess
+
+        CASE 1 (right extension, no complement):
 
                        0       rx  ry  lr
             reference  |-------+---+---|
@@ -1001,13 +1003,13 @@ class DJunctor
                                  \ \ \
                        alignment  \ \ \
                                    \ \ \
-            read            |-------+---+-------|
+            read            |-->-->-+->-+->-->--|
                             0       ax  ay      la
 
-            extension_size ~= la - ay - (lr - ry)
+            readsSequenceLength ~= la - ay
+            referenceExcess ~= lr - ry
 
-
-        CASE 2 (left extension):
+        CASE 2 (left extension, no complement):
 
                                 0    rx  ry lr
             reference           |---+---+-------|
@@ -1015,32 +1017,203 @@ class DJunctor
                                   / / /
                       alignment  / / /
                                 / / /
-            read       |-------+---+-------|
+            read       |-->-->-+->-+->-->--|
                        0       ax  ay      la
 
-            extension_size ~= ax - 0 - (rx - 0)
-                            = ax - rx
+            readsSequenceLength ~= ax - 0 = ax
+            referenceExcess ~= rx - 0 = rx
+
+        CASE 3 (right extension, complement):
+
+                       0       rx  ry  lr
+            reference  |-------+---+---|
+                                \ \ \
+                                 \ \ \
+                       alignment  \ \ \
+                                   \ \ \
+            read            |--<--<-+-<-+-<--<--|
+                            la      ay  ax      0
+
+            readsSequenceLength ~= ax - 0 = ax
+            referenceExcess ~= lr - ry
+
+        CASE 4 (left extension, complement):
+
+                                0    rx  ry lr
+            reference           |---+---+-------|
+                                   / / /
+                                  / / /
+                      alignment  / / /
+                                / / /
+            read       |--<--<-+-<-+-<--<--|
+                       la      ay  ax      0
+
+            readsSequenceLength ~= la - ay
+            referenceExcess ~= rx - 0 = rx
         ---
     */
-    protected long extensionSize(in AlignmentChain alignment) pure
+    static protected long extensionSize(in AlignmentChain alignment) pure
     {
-        if (alignment.last.contigB.end > alignment.contigB.length / 2)
-        {
-            // CASE 1 (right extension)
-            auto readsSequenceLength = alignment.contigA.length - alignment.last.contigA.end;
-            auto referenceExcess = alignment.contigB.length - alignment.last.contigB.end;
+        import std.algorithm : max;
 
-            return readsSequenceLength.to!long - referenceExcess.to!long;
-        }
-        else if (alignment.first.contigB.begin < alignment.contigB.length / 2)
+        // CASE 1/4 (right extension, no complement OR left extension, complement)
+        long readsSequenceLengthCase1Or4 = alignment.contigA.length - alignment.last.contigA.end;
+        // CASE 2/3 (left extension, no complement OR right extension, complement)
+        long readsSequenceLengthCase2Or3 = alignment.first.contigA.begin;
+        // CASE 1/3 (right extension)
+        long referenceExcessCase1Or3 = alignment.contigB.length - alignment.last.contigB.end;
+        // CASE 2/4 (left extension)
+        long referenceExcessCase2Or4 = alignment.first.contigB.begin;
+
+        if (alignment.complement)
         {
-            // CASE 2 (left extension)
-            return alignment.first.contigA.begin.to!long - alignment.first.contigB.begin.to!long;
+            // CASE 3/4 (complement)
+            // dfmt off
+            return max(
+                // Case 3 (right extension)
+                readsSequenceLengthCase2Or3 - referenceExcessCase1Or3,
+                // Case 4 (left extension)
+                readsSequenceLengthCase1Or4 - referenceExcessCase2Or4,
+            );
+            // dfmt on
         }
         else
         {
-            assert(0, "alignment does not seem to extend the reference");
+            // CASE 1/2 (no complement)
+            // dfmt off
+            return max(
+                // Case 1 (right extension)
+                readsSequenceLengthCase1Or4 - referenceExcessCase1Or3,
+                // Case 2 (left extension)
+                readsSequenceLengthCase2Or3 - referenceExcessCase2Or4,
+            );
+            // dfmt on
         }
+    }
+
+    unittest
+    {
+        with (AlignmentChain) with (LocalAlignment) with (Complement)
+                {
+                    // dfmt off
+                    auto testCases = [
+                        // CASE 1 (right extension, no complement)
+                        // ------------------------------------
+                        //            0      10  50  50
+                        // reference  |-------+---+---|
+                        //                     \ \ \
+                        // read         |-->-->-+->-+->-->--|
+                        //              0       0  40      50
+                        tuple(
+                            AlignmentChain(Contig(1, 50), Contig(1, 50), no, [
+                                LocalAlignment(Locus(0, 15), Locus(10, 20), 0),
+                                LocalAlignment(Locus(20, 40), Locus(30, 50), 1),
+                            ]),
+                            10
+                        ),
+                        //            0      10  45  50
+                        // reference  |-------+---+---|
+                        //                     \ \ \
+                        // read         |-->-->-+->-+->-->--|
+                        //              0       0  50      50
+                        tuple(
+                            AlignmentChain(Contig(1, 50), Contig(1, 50), no, [
+                                LocalAlignment(Locus(0, 15), Locus(10, 20), 2),
+                                LocalAlignment(Locus(20, 40), Locus(30, 45), 3),
+                            ]),
+                            5
+                        ),
+                        // CASE 2 (left extension, no complement):
+                        // ------------------------------------
+                        //                  0   0  40      50
+                        // reference        |---+---+-------|
+                        //                     / / /
+                        // read       |-->-->-+->-+->-->--|
+                        //            0      10  50      50
+                        tuple(
+                            AlignmentChain(Contig(1, 50), Contig(1, 50), no, [
+                                LocalAlignment(Locus(10, 15), Locus(0, 20), 4),
+                                LocalAlignment(Locus(20, 50), Locus(30, 40), 5),
+                            ]),
+                            10
+                        ),
+                        //                  0   5  40      50
+                        // reference        |---+---+-------|
+                        //                     / / /
+                        // read       |-->-->-+->-+->-->--|
+                        //            0      10  50      50
+                        tuple(
+                            AlignmentChain(Contig(1, 50), Contig(1, 50), no, [
+                                LocalAlignment(Locus(10, 15), Locus(5, 20), 6),
+                                LocalAlignment(Locus(20, 50), Locus(30, 40), 7),
+                            ]),
+                            5
+                        ),
+                        // CASE 3 (right extension, complement):
+                        // ------------------------------------
+                        //            0      10  50  50
+                        // reference  |-------+---+---|
+                        //                     \ \ \
+                        // read         |--<--<-+-<-+-<--<--|
+                        //             50       50  10      0
+                        tuple(
+                            AlignmentChain(Contig(1, 50), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(10, 15), Locus(10, 20), 8),
+                                LocalAlignment(Locus(20, 50), Locus(30, 50), 9),
+                            ]),
+                            10
+                        ),
+                        //            0      10  45  50
+                        // reference  |-------+---+---|
+                        //                     \ \ \
+                        // read         |--<--<-+-<-+-<--<--|
+                        //             50       50  10      0
+                        tuple(
+                            AlignmentChain(Contig(1, 50), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(10, 15), Locus(10, 20), 10),
+                                LocalAlignment(Locus(20, 50), Locus(30, 45), 11),
+                            ]),
+                            5
+                        ),
+                        // CASE 4 (left extension, complement):
+                        // ------------------------------------
+                        //                  0   0  40      50
+                        // reference        |---+---+-------|
+                        //                     / / /
+                        // read       |--<--<-+-<-+-<--<--|
+                        //           50      40   0      0
+                        tuple(
+                            AlignmentChain(Contig(1, 50), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(0, 15), Locus(0, 20), 12),
+                                LocalAlignment(Locus(20, 40), Locus(30, 40), 13),
+                            ]),
+                            10
+                        ),
+                        //                  0   5  40      50
+                        // reference        |---+---+-------|
+                        //                     / / /
+                        // read       |--<--<-+-<-+-<--<--|
+                        //           50      40   0      0
+                        tuple(
+                            AlignmentChain(Contig(1, 50), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(0, 15), Locus(5, 20), 14),
+                                LocalAlignment(Locus(20, 40), Locus(30, 40), 15),
+                            ]),
+                            5
+                        ),
+                    ];
+                    // dfmt on
+
+                    foreach (testCaseIdx, testCase; testCases.enumerate)
+                    {
+                        auto gotValue = extensionSize(testCase[0]);
+                        auto expValue = testCase[1];
+                        auto errorMessage = format!"expected extension size %d but got %d for test case %d"(
+                                expValue, gotValue, testCaseIdx);
+
+                        assert(gotValue == expValue, errorMessage);
+                    }
+                }
     }
 
     protected DJunctor fillGaps()
