@@ -647,7 +647,7 @@ unittest
 /**
     Returns true iff ac1 begins befor ac2 taking complementary alignment into account.
 */
-bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
+bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure 
         if (contig == "contigA" || contig == "contigB")
 {
     assert(__traits(getMember, ac1, contig) == __traits(getMember, ac2, contig),
