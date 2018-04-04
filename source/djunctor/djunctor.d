@@ -11,21 +11,37 @@ module djunctor.djunctor;
 import djunctor.commandline : Options;
 import djunctor.util.log;
 import djunctor.util.math : mean, median;
-import std.algorithm : any, canFind, chunkBy, each, filter, group, isSorted,
-    map, sort, swap;
+import core.exception : AssertError;
+import std.algorithm : all, any, canFind, chunkBy, each, equal, filter, group,
+    isSorted, map, max, sort, sum, swap;
 import std.array : appender, array;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
+import std.exception : assertNotThrown, assertThrown;
 import std.format : format;
-import std.range : ElementType, enumerate, isForwardRange, only, walkLength;
+import std.math : sgn;
+import std.range : assumeSorted, chunks, ElementType, enumerate, isForwardRange,
+    only, SortedRange, walkLength;
 import std.stdio : writeln;
 import std.typecons : tuple, Tuple;
+
+version (unittest)
+{
+    import djunctor.util.testing : MockCallable;
+    import djunctor.dazzler : origGetLocalAlignments = getLocalAlignments,
+        origGetMappings = getMappings;
+
+    MockCallable!(AlignmentContainer!(AlignmentChain[]), const string, const Options) getLocalAlignments;
+    MockCallable!(origGetMappings!Options) getMappings;
+}
+else
+{
+    import djunctor.dazzler : getLocalAlignments, getMappings;
+}
 
 /// General container for alignment data.
 template AlignmentContainer(R)
 {
-    import std.typecons : tuple;
-
     struct AlignmentContainer
     {
         static immutable orders = tuple("a2b", "b2a");
@@ -44,9 +60,6 @@ template AlignmentContainer(R)
 
         unittest
         {
-            import core.exception : AssertError;
-            import std.exception : assertThrown;
-
             assert(getOrdered("a2b", 0, 1) == tuple(0, 1));
             assert(getOrdered("b2a", 0, 1) == tuple(1, 0));
             assertThrown!AssertError(getOrdered("foo", 0, 1));
@@ -63,9 +76,6 @@ template AlignmentContainer(R)
 
         unittest
         {
-            import core.exception : AssertError;
-            import std.exception : assertThrown;
-
             assert(getOrdered!"a2b"(0, 1) == tuple(0, 1));
             assert(getOrdered!"b2a"(0, 1) == tuple(1, 0));
             assert(!__traits(compiles, getOrdered!"foo"(0, 1)));
@@ -114,8 +124,6 @@ struct AlignmentChain
 
     invariant
     {
-        import std.algorithm : all;
-
         assert(localAlignments.length >= 1, "empty chain is forbidden");
         assert(localAlignments.all!(la => 0 <= la.contigA.begin
                 && la.contigA.begin < la.contigA.end && la.contigA.end <= contigA.length),
@@ -127,9 +135,6 @@ struct AlignmentChain
 
     unittest
     {
-        import core.exception : AssertError;
-        import std.exception : assertNotThrown, assertThrown;
-
         with (Complement) with (LocalAlignment)
             {
                 auto acZeroLength = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, []);
@@ -290,8 +295,6 @@ struct AlignmentChain
 
     @property size_t totalDiffs()
     {
-        import std.algorithm : map, sum;
-
         return localAlignments.map!"a.numDiffs".sum;
     }
 
@@ -309,9 +312,6 @@ struct AlignmentChain
 
     @property size_t totalGapLength()
     {
-        import std.algorithm : map, sum;
-        import std.range : chunks;
-
         // dfmt off
         return localAlignments
             .chunks(2)
@@ -368,8 +368,6 @@ struct AlignmentChain
 
     int compareIds(ref const AlignmentChain other) const pure nothrow
     {
-        import std.math : sgn;
-
         long idCompare = this.contigA.id - other.contigA.id;
         if (idCompare != 0)
             return cast(int) sgn(idCompare);
@@ -414,8 +412,6 @@ struct AlignmentChain
 
     int opCmp(ref const AlignmentChain other) const pure nothrow
     {
-        import std.math : sgn;
-
         const int idCompare = this.compareIds(other);
         if (idCompare != 0)
             return idCompare;
@@ -569,9 +565,6 @@ auto haveEqualIds(in AlignmentChain ac1, in AlignmentChain ac2) pure
 
 unittest
 {
-    import std.algorithm : chunkBy, equal;
-    import std.array : array;
-
     with (AlignmentChain) with (Complement) with (LocalAlignment)
             {
                 // dfmt off
@@ -603,8 +596,6 @@ unittest
 
 auto equalIdsRange(in AlignmentChain[] acList, in size_t contigAID, in size_t contigBID) pure
 {
-    import std.range : assumeSorted, SortedRange;
-
     assert(isSorted!idsPred(acList));
     // dfmt off
     AlignmentChain needle = {
@@ -619,9 +610,6 @@ auto equalIdsRange(in AlignmentChain[] acList, in size_t contigAID, in size_t co
 
 unittest
 {
-    import std.algorithm : equal;
-    import std.array : array;
-
     with (AlignmentChain) with (Complement) with (LocalAlignment)
             {
                 // dfmt off
@@ -760,8 +748,6 @@ class DJunctor
 
     protected DJunctor init()
     {
-        import djunctor.dazzler : getLocalAlignments, getMappings;
-
         logInfo("BEGIN djunctor.init");
         selfAlignment = getLocalAlignments(options.refDb, options);
         readsAlignment = getMappings(options.refDb, options.readsDb, options);
@@ -770,6 +756,21 @@ class DJunctor
         logInfo("END djunctor.init");
 
         return this;
+    }
+
+    unittest
+    {
+        auto options = Options();
+        auto djunctor = new DJunctor(options);
+
+        djunctor.init();
+
+        assert(getLocalAlignments.wasCalled);
+        assert(djunctor.selfAlignment == getLocalAlignments.returnValue);
+        getLocalAlignments.reset();
+        assert(getMappings.wasCalled);
+        assert(djunctor.readsAlignment == getMappings.returnValue);
+        getMappings.reset();
     }
 
     protected DJunctor mainLoop()
@@ -1223,8 +1224,6 @@ class DJunctor
     */
     static protected long extensionSize(in AlignmentChain alignment) pure
     {
-        import std.algorithm : max;
-
         // CASE 1/4 (right extension, no complement OR left extension, complement)
         long readsSequenceLengthCase1Or4 = alignment.contigA.length - alignment.last.contigA.end;
         // CASE 2/3 (left extension, no complement OR right extension, complement)
