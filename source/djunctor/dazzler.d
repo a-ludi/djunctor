@@ -162,7 +162,7 @@ private auto processGeneratedLasFiles(Options)(in string dbA, in string dbB, in 
 private auto readAlignmentList(S)(in S lasDump) if (isSomeString!S)
 {
     import std.algorithm : chunkBy, count, filter;
-    import std.range : chunks, drop;
+    import std.range : chunks, drop, enumerate;
     import std.string : lineSplitter;
 
     immutable recordSeparator = ';';
@@ -243,16 +243,18 @@ private auto readAlignmentList(S)(in S lasDump) if (isSomeString!S)
             assertSameComplementValue(chainPart1(), chainPart2()));
     /// Convert the chunk of chain parts into an AlignmentChain.
     alias buildAlignmentChain = chainPartChunk => AlignmentChain(
-        chainPartChunk.front()().contigA,
-        chainPartChunk.front()().contigB,
-        chainPartChunk.front()().complement,
-        chainPartChunk
+        chainPartChunk[0],
+        chainPartChunk[1].front()().contigA,
+        chainPartChunk[1].front()().contigB,
+        chainPartChunk[1].front()().complement,
+        chainPartChunk[1]
             .map!(chainPart => chainPart().localAlignment)
             .array);
 
     return byChainPartSplitter(lasDump)
         .map!parseChainPart
         .chunkBy!belongToSameChain
+        .enumerate
         .map!buildAlignmentChain;
     // dfmt on
 }
@@ -306,6 +308,7 @@ EOF".outdent;
                 // dfmt off
             assert(alignmentChains == [
                 AlignmentChain(
+                    0,
                     Contig(1, 8),
                     Contig(2, 9),
                     no,
@@ -323,6 +326,7 @@ EOF".outdent;
                     ]
                 ),
                 AlignmentChain(
+                    1,
                     Contig(19, 26),
                     Contig(20, 27),
                     yes,
@@ -340,6 +344,7 @@ EOF".outdent;
                     ]
                 ),
                 AlignmentChain(
+                    2,
                     Contig(37, 35),
                     Contig(38, 36),
                     no,
@@ -352,6 +357,7 @@ EOF".outdent;
                     ]
                 ),
                 AlignmentChain(
+                    3,
                     Contig(46, 53),
                     Contig(47, 54),
                     yes,
@@ -364,6 +370,7 @@ EOF".outdent;
                     ]
                 ),
                 AlignmentChain(
+                    4,
                     Contig(46, 53),
                     Contig(47, 54),
                     no,
@@ -376,6 +383,7 @@ EOF".outdent;
                     ]
                 ),
                 AlignmentChain(
+                    5,
                     Contig(64, 71),
                     Contig(65, 72),
                     yes,
@@ -388,6 +396,7 @@ EOF".outdent;
                     ]
                 ),
                 AlignmentChain(
+                    6,
                     Contig(55, 80),
                     Contig(56, 81),
                     yes,

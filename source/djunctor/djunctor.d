@@ -106,6 +106,7 @@ struct AlignmentChain
 
     static immutable maxScore = 2 ^^ 16;
 
+    size_t id;
     Contig contigA;
     Contig contigB;
     Complement complement;
@@ -131,17 +132,17 @@ struct AlignmentChain
 
         with (Complement) with (LocalAlignment)
             {
-                auto acZeroLength = AlignmentChain(Contig(1, 10), Contig(1, 10), no, []);
-                auto ac1 = AlignmentChain(Contig(1, 10), Contig(1, 10), no,
+                auto acZeroLength = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, []);
+                auto ac1 = AlignmentChain(1, Contig(1, 10), Contig(1, 10), no,
                         [LocalAlignment(Locus(1, 1), Locus(1, 9), 0)]);
-                auto ac2 = AlignmentChain(Contig(1, 10), Contig(1, 10), no,
+                auto ac2 = AlignmentChain(2, Contig(1, 10), Contig(1, 10), no,
                         [LocalAlignment(Locus(1, 11), Locus(1, 9), 0)]);
-                auto ac3 = AlignmentChain(Contig(1, 10), Contig(1, 10), no,
+                auto ac3 = AlignmentChain(3, Contig(1, 10), Contig(1, 10), no,
                         [LocalAlignment(Locus(1, 9), Locus(1, 1), 0)]);
-                auto ac4 = AlignmentChain(Contig(1, 10), Contig(1, 10), no,
+                auto ac4 = AlignmentChain(4, Contig(1, 10), Contig(1, 10), no,
                         [LocalAlignment(Locus(1, 9), Locus(1, 11), 0)]);
-                auto acFine = AlignmentChain(Contig(1, 10), Contig(1, 10), no,
-                        [LocalAlignment(Locus(1, 9), Locus(1, 9), 0)]);
+                auto acFine = AlignmentChain(5, Contig(1, 10), Contig(1, 10),
+                        no, [LocalAlignment(Locus(1, 9), Locus(1, 9), 0)]);
 
                 assertThrown!AssertError(acZeroLength.totalLength);
                 assertThrown!AssertError(ac1.totalLength);
@@ -163,7 +164,7 @@ struct AlignmentChain
             {
                 auto firstLA = LocalAlignment(Locus(1, 9), Locus(1, 9), 0);
                 auto otherLA = LocalAlignment(Locus(9, 10), Locus(9, 10), 0);
-                auto ac = AlignmentChain(Contig(1, 10), Contig(1, 10), no, [firstLA, otherLA]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [firstLA, otherLA]);
 
                 assert(ac.first == firstLA);
             }
@@ -180,7 +181,7 @@ struct AlignmentChain
             {
                 auto lastLA = LocalAlignment(Locus(1, 9), Locus(1, 9), 0);
                 auto otherLA = LocalAlignment(Locus(9, 10), Locus(9, 10), 0);
-                auto ac = AlignmentChain(Contig(1, 10), Contig(1, 10), no, [otherLA, lastLA]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [otherLA, lastLA]);
 
                 assert(ac.last == lastLA);
             }
@@ -225,7 +226,7 @@ struct AlignmentChain
         with (Complement) with (LocalAlignment)
             {
                 auto la = LocalAlignment(Locus(30, 35), Locus(5, 10), 1);
-                auto ac = AlignmentChain(Contig(1, 50), Contig(1, 15), no, [la]);
+                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), no, [la]);
 
                 // read with extension align an contigA from 25 to 40
                 assert(ac.isFullyContained);
@@ -235,7 +236,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(10, 20), Locus(5, 10), 1);
                 auto la2 = LocalAlignment(Locus(30, 40), Locus(5, 10), 1);
-                auto ac = AlignmentChain(Contig(1, 50), Contig(1, 15), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), no, [la1, la2]);
 
                 // read with extension align an contigA from 5 to 45
                 assert(ac.isFullyContained);
@@ -244,7 +245,7 @@ struct AlignmentChain
         with (Complement) with (LocalAlignment)
             {
                 auto la = LocalAlignment(Locus(0, 10), Locus(5, 10), 1);
-                auto ac = AlignmentChain(Contig(1, 50), Contig(1, 15), no, [la]);
+                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), no, [la]);
 
                 // read with extension align an contigA from -5 to 15
                 assert(!ac.isFullyContained);
@@ -253,7 +254,7 @@ struct AlignmentChain
         with (Complement) with (LocalAlignment)
             {
                 auto la = LocalAlignment(Locus(40, 50), Locus(5, 10), 1);
-                auto ac = AlignmentChain(Contig(1, 50), Contig(1, 15), no, [la]);
+                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), no, [la]);
 
                 // read with extension align an contigA from 35 to 55
                 assert(!ac.isFullyContained);
@@ -263,7 +264,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(0, 20), Locus(5, 10), 1);
                 auto la2 = LocalAlignment(Locus(30, 50), Locus(5, 10), 1);
-                auto ac = AlignmentChain(Contig(1, 50), Contig(1, 15), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), no, [la1, la2]);
 
                 // read with extension align an contigA from -5 to 55
                 assert(!ac.isFullyContained);
@@ -281,7 +282,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(1, 3), Locus(1, 3), 1);
                 auto la2 = LocalAlignment(Locus(5, 10), Locus(5, 10), 2);
-                auto ac = AlignmentChain(Contig(1, 10), Contig(1, 10), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la1, la2]);
 
                 assert(ac.totalLength == 9);
             }
@@ -300,7 +301,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(1, 3), Locus(1, 3), 1);
                 auto la2 = LocalAlignment(Locus(5, 10), Locus(5, 10), 2);
-                auto ac = AlignmentChain(Contig(1, 10), Contig(1, 10), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la1, la2]);
 
                 assert(ac.totalDiffs == 3);
             }
@@ -325,7 +326,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(1, 3), Locus(1, 3), 1);
                 auto la2 = LocalAlignment(Locus(5, 10), Locus(5, 10), 2);
-                auto ac = AlignmentChain(Contig(1, 10), Contig(1, 10), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la1, la2]);
 
                 assert(ac.totalGapLength == 2);
             }
@@ -342,7 +343,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(1, 3), Locus(1, 3), 1);
                 auto la2 = LocalAlignment(Locus(5, 10), Locus(5, 10), 2);
-                auto ac = AlignmentChain(Contig(1, 10), Contig(1, 10), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la1, la2]);
 
                 assert(ac.numMatchingBps == 9 - (3 + 2));
             }
@@ -359,7 +360,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(1, 3), Locus(1, 3), 1);
                 auto la2 = LocalAlignment(Locus(5, 10), Locus(5, 10), 2);
-                auto ac = AlignmentChain(Contig(1, 10), Contig(1, 10), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la1, la2]);
 
                 assert(ac.score == 4 * maxScore / 9);
             }
@@ -387,10 +388,10 @@ struct AlignmentChain
                 auto la = LocalAlignment(Locus(0, 1), Locus(0, 1), 1);
                 // dfmt off
                 auto acs = [
-                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [la]),
-                    AlignmentChain(Contig(1, 10), Contig(2, 10), no, [la]),
-                    AlignmentChain(Contig(2, 10), Contig(1, 10), no, [la]),
-                    AlignmentChain(Contig(2, 10), Contig(2, 10), no, [la]),
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la]),
+                    AlignmentChain(1, Contig(1, 10), Contig(2, 10), no, [la]),
+                    AlignmentChain(2, Contig(2, 10), Contig(1, 10), no, [la]),
+                    AlignmentChain(3, Contig(2, 10), Contig(2, 10), no, [la]),
                 ];
                 // dfmt on
 
@@ -446,10 +447,10 @@ struct AlignmentChain
                 auto la = LocalAlignment(Locus(0, 1), Locus(0, 1), 1);
                 // dfmt off
                 auto acs = [
-                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [la]),
-                    AlignmentChain(Contig(1, 10), Contig(2, 10), no, [la]),
-                    AlignmentChain(Contig(2, 10), Contig(1, 10), no, [la]),
-                    AlignmentChain(Contig(2, 10), Contig(2, 10), no, [la]),
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la]),
+                    AlignmentChain(1, Contig(1, 10), Contig(2, 10), no, [la]),
+                    AlignmentChain(2, Contig(2, 10), Contig(1, 10), no, [la]),
+                    AlignmentChain(3, Contig(2, 10), Contig(2, 10), no, [la]),
                 ];
                 // dfmt on
 
@@ -474,31 +475,31 @@ struct AlignmentChain
             {
                 // dfmt off
                 auto acs = [
-                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [
                         LocalAlignment(Locus(0, 2), Locus(0, 2), 1),
                         LocalAlignment(Locus(3, 5), Locus(3, 5), 1)
                     ]),
-                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(1, Contig(1, 10), Contig(1, 10), no, [
                         LocalAlignment(Locus(0, 2), Locus(1, 2), 1),
                         LocalAlignment(Locus(3, 5), Locus(3, 5), 1)
                     ]),
-                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(2, Contig(1, 10), Contig(1, 10), no, [
                         LocalAlignment(Locus(1, 2), Locus(0, 2), 1),
                         LocalAlignment(Locus(3, 5), Locus(3, 5), 1)
                     ]),
-                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(3, Contig(1, 10), Contig(1, 10), no, [
                         LocalAlignment(Locus(1, 2), Locus(1, 2), 1),
                         LocalAlignment(Locus(3, 5), Locus(3, 5), 1)
                     ]),
-                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(4, Contig(1, 10), Contig(1, 10), no, [
                         LocalAlignment(Locus(1, 2), Locus(1, 2), 1),
                         LocalAlignment(Locus(3, 5), Locus(3, 6), 1)
                     ]),
-                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(5, Contig(1, 10), Contig(1, 10), no, [
                         LocalAlignment(Locus(1, 2), Locus(1, 2), 1),
                         LocalAlignment(Locus(3, 6), Locus(3, 5), 1)
                     ]),
-                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(6, Contig(1, 10), Contig(1, 10), no, [
                         LocalAlignment(Locus(1, 2), Locus(1, 2), 1),
                         LocalAlignment(Locus(3, 6), Locus(3, 6), 1)
                     ]),
@@ -537,10 +538,10 @@ unittest
                 auto la = LocalAlignment(Locus(0, 1), Locus(0, 1), 1);
                 // dfmt off
                 auto acs = [
-                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [la]),
-                    AlignmentChain(Contig(1, 10), Contig(2, 10), no, [la]),
-                    AlignmentChain(Contig(2, 10), Contig(1, 10), no, [la]),
-                    AlignmentChain(Contig(2, 10), Contig(2, 10), no, [la]),
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la]),
+                    AlignmentChain(1, Contig(1, 10), Contig(2, 10), no, [la]),
+                    AlignmentChain(2, Contig(2, 10), Contig(1, 10), no, [la]),
+                    AlignmentChain(3, Contig(2, 10), Contig(2, 10), no, [la]),
                 ];
                 // dfmt on
 
@@ -575,15 +576,15 @@ unittest
             {
                 // dfmt off
                 auto sortedTestChains = [
-                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [LocalAlignment(Locus(0, 10), Locus(0, 1), 0)]),
-                    AlignmentChain(Contig(1, 10), Contig(2, 20), no, [LocalAlignment(Locus(0, 10), Locus(0, 2), 0)]),
-                    AlignmentChain(Contig(1, 10), Contig(3, 30), no, [LocalAlignment(Locus(0, 10), Locus(0, 3), 0)]),
-                    AlignmentChain(Contig(2, 20), Contig(1, 10), no, [LocalAlignment(Locus(0, 20), Locus(0, 4), 0)]),
-                    AlignmentChain(Contig(2, 20), Contig(1, 10), no, [LocalAlignment(Locus(0, 20), Locus(0, 5), 0)]),
-                    AlignmentChain(Contig(2, 20), Contig(3, 30), no, [LocalAlignment(Locus(0, 20), Locus(0, 6), 0)]),
-                    AlignmentChain(Contig(3, 30), Contig(1, 10), no, [LocalAlignment(Locus(0, 30), Locus(0, 7), 0)]),
-                    AlignmentChain(Contig(3, 30), Contig(2, 20), no, [LocalAlignment(Locus(0, 30), Locus(0, 8), 0)]),
-                    AlignmentChain(Contig(3, 30), Contig(3, 30), no, [LocalAlignment(Locus(0, 30), Locus(0, 9), 0)]),
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [LocalAlignment(Locus(0, 10), Locus(0, 1), 0)]),
+                    AlignmentChain(1, Contig(1, 10), Contig(2, 20), no, [LocalAlignment(Locus(0, 10), Locus(0, 2), 0)]),
+                    AlignmentChain(2, Contig(1, 10), Contig(3, 30), no, [LocalAlignment(Locus(0, 10), Locus(0, 3), 0)]),
+                    AlignmentChain(3, Contig(2, 20), Contig(1, 10), no, [LocalAlignment(Locus(0, 20), Locus(0, 4), 0)]),
+                    AlignmentChain(4, Contig(2, 20), Contig(1, 10), no, [LocalAlignment(Locus(0, 20), Locus(0, 5), 0)]),
+                    AlignmentChain(5, Contig(2, 20), Contig(3, 30), no, [LocalAlignment(Locus(0, 20), Locus(0, 6), 0)]),
+                    AlignmentChain(6, Contig(3, 30), Contig(1, 10), no, [LocalAlignment(Locus(0, 30), Locus(0, 7), 0)]),
+                    AlignmentChain(7, Contig(3, 30), Contig(2, 20), no, [LocalAlignment(Locus(0, 30), Locus(0, 8), 0)]),
+                    AlignmentChain(8, Contig(3, 30), Contig(3, 30), no, [LocalAlignment(Locus(0, 30), Locus(0, 9), 0)]),
                 ];
 
                 assert(sortedTestChains.chunkBy!haveEqualIds.equal!equal([
@@ -625,15 +626,15 @@ unittest
             {
                 // dfmt off
                 auto sortedTestChains = [
-                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [LocalAlignment(Locus(0, 1), Locus(0, 1), 0)]),
-                    AlignmentChain(Contig(1, 10), Contig(2, 20), no, [LocalAlignment(Locus(0, 2), Locus(0, 2), 0)]),
-                    AlignmentChain(Contig(1, 10), Contig(3, 30), no, [LocalAlignment(Locus(0, 3), Locus(0, 3), 0)]),
-                    AlignmentChain(Contig(2, 20), Contig(1, 10), no, [LocalAlignment(Locus(0, 4), Locus(0, 4), 0)]),
-                    AlignmentChain(Contig(2, 20), Contig(1, 10), no, [LocalAlignment(Locus(0, 5), Locus(0, 5), 0)]),
-                    AlignmentChain(Contig(2, 20), Contig(3, 30), no, [LocalAlignment(Locus(0, 6), Locus(0, 6), 0)]),
-                    AlignmentChain(Contig(3, 30), Contig(1, 10), no, [LocalAlignment(Locus(0, 7), Locus(0, 7), 0)]),
-                    AlignmentChain(Contig(3, 30), Contig(2, 20), no, [LocalAlignment(Locus(0, 8), Locus(0, 8), 0)]),
-                    AlignmentChain(Contig(3, 30), Contig(3, 30), no, [LocalAlignment(Locus(0, 9), Locus(0, 9), 0)]),
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [LocalAlignment(Locus(0, 1), Locus(0, 1), 0)]),
+                    AlignmentChain(1, Contig(1, 10), Contig(2, 20), no, [LocalAlignment(Locus(0, 2), Locus(0, 2), 0)]),
+                    AlignmentChain(2, Contig(1, 10), Contig(3, 30), no, [LocalAlignment(Locus(0, 3), Locus(0, 3), 0)]),
+                    AlignmentChain(3, Contig(2, 20), Contig(1, 10), no, [LocalAlignment(Locus(0, 4), Locus(0, 4), 0)]),
+                    AlignmentChain(4, Contig(2, 20), Contig(1, 10), no, [LocalAlignment(Locus(0, 5), Locus(0, 5), 0)]),
+                    AlignmentChain(5, Contig(2, 20), Contig(3, 30), no, [LocalAlignment(Locus(0, 6), Locus(0, 6), 0)]),
+                    AlignmentChain(6, Contig(3, 30), Contig(1, 10), no, [LocalAlignment(Locus(0, 7), Locus(0, 7), 0)]),
+                    AlignmentChain(7, Contig(3, 30), Contig(2, 20), no, [LocalAlignment(Locus(0, 8), Locus(0, 8), 0)]),
+                    AlignmentChain(8, Contig(3, 30), Contig(3, 30), no, [LocalAlignment(Locus(0, 9), Locus(0, 9), 0)]),
                 ];
                 // dfmt on
 
@@ -663,11 +664,11 @@ unittest
             {
                 // dfmt off
                 auto acs = [
-                    AlignmentChain(Contig(1, 10), Contig(1, 10), no, [LocalAlignment(Locus(1, 6), Locus(0, 1), 0)]),
-                    AlignmentChain(Contig(1, 10), Contig(2, 10), yes, [LocalAlignment(Locus(2, 6), Locus(0, 1), 0)]),
-                    AlignmentChain(Contig(1, 10), Contig(3, 10), no, [LocalAlignment(Locus(3, 6), Locus(0, 1), 0)]),
-                    AlignmentChain(Contig(1, 10), Contig(4, 10), yes, [LocalAlignment(Locus(4, 6), Locus(0, 1), 0)]),
-                    AlignmentChain(Contig(1, 10), Contig(5, 10), no, [LocalAlignment(Locus(5, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [LocalAlignment(Locus(1, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(1, Contig(1, 10), Contig(2, 10), yes, [LocalAlignment(Locus(2, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(2, Contig(1, 10), Contig(3, 10), no, [LocalAlignment(Locus(3, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(3, Contig(1, 10), Contig(4, 10), yes, [LocalAlignment(Locus(4, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(4, Contig(1, 10), Contig(5, 10), no, [LocalAlignment(Locus(5, 6), Locus(0, 1), 0)]),
                 ];
                 // dfmt on
 
@@ -1041,11 +1042,11 @@ class DJunctor
                         // read        |-->-->--+->-+-->--+->-+-->-->--|
                         //             0       10   30   50  70       80
                         tuple(
-                            AlignmentChain(Contig(1, 80), Contig(1, 50), no, [
+                            AlignmentChain(0, Contig(1, 80), Contig(1, 50), no, [
                                 LocalAlignment(Locus(10, 15), Locus(30, 35), 0),
                                 LocalAlignment(Locus(20, 30), Locus(40, 50), 1),
                             ]),
-                            AlignmentChain(Contig(1, 80), Contig(2, 50), no, [
+                            AlignmentChain(1, Contig(1, 80), Contig(2, 50), no, [
                                 LocalAlignment(Locus(50, 55), Locus(0, 10), 2),
                                 LocalAlignment(Locus(60, 70), Locus(15, 20), 3),
                             ]),
@@ -1059,11 +1060,11 @@ class DJunctor
                         // read        |-->-->--+->-+-->--+->-+-->-->--|
                         //             0       10   30   50  70       80
                         tuple(
-                            AlignmentChain(Contig(1, 80), Contig(1, 50), no, [
+                            AlignmentChain(2, Contig(1, 80), Contig(1, 50), no, [
                                 LocalAlignment(Locus(10, 15), Locus(30, 35), 4),
                                 LocalAlignment(Locus(20, 30), Locus(40, 45), 5),
                             ]),
-                            AlignmentChain(Contig(1, 80), Contig(2, 50), no, [
+                            AlignmentChain(3, Contig(1, 80), Contig(2, 50), no, [
                                 LocalAlignment(Locus(50, 55), Locus(5, 10), 6),
                                 LocalAlignment(Locus(60, 70), Locus(15, 20), 7),
                             ]),
@@ -1077,11 +1078,11 @@ class DJunctor
                         // read        |-->-->--+->-+-->--+->-+-->-->--|
                         //             0       10   30   50  70       80
                         tuple(
-                            AlignmentChain(Contig(1, 80), Contig(2, 50), no, [
+                            AlignmentChain(4, Contig(1, 80), Contig(2, 50), no, [
                                 LocalAlignment(Locus(50, 55), Locus(5, 10), 6),
                                 LocalAlignment(Locus(60, 70), Locus(15, 20), 7),
                             ]),
-                            AlignmentChain(Contig(1, 80), Contig(1, 50), no, [
+                            AlignmentChain(5, Contig(1, 80), Contig(1, 50), no, [
                                 LocalAlignment(Locus(10, 15), Locus(30, 35), 4),
                                 LocalAlignment(Locus(20, 30), Locus(40, 45), 5),
                             ]),
@@ -1097,11 +1098,11 @@ class DJunctor
                         // read        |--<--<--+-<-+--<--+-<-+--<--<--|
                         //            80       70  50    30  10        0
                         tuple(
-                            AlignmentChain(Contig(1, 80), Contig(1, 50), yes, [
+                            AlignmentChain(6, Contig(1, 80), Contig(1, 50), yes, [
                                 LocalAlignment(Locus(10, 15), Locus(0, 10), 8),
                                 LocalAlignment(Locus(20, 30), Locus(15, 20), 9),
                             ]),
-                            AlignmentChain(Contig(1, 80), Contig(2, 50), yes, [
+                            AlignmentChain(7, Contig(1, 80), Contig(2, 50), yes, [
                                 LocalAlignment(Locus(50, 55), Locus(30, 35), 10),
                                 LocalAlignment(Locus(60, 70), Locus(40, 50), 11),
                             ]),
@@ -1115,11 +1116,11 @@ class DJunctor
                         // read        |--<--<--+-<-+--<--+-<-+--<--<--|
                         //            80       70  50    30  10        0
                         tuple(
-                            AlignmentChain(Contig(1, 80), Contig(1, 50), yes, [
+                            AlignmentChain(8, Contig(1, 80), Contig(1, 50), yes, [
                                 LocalAlignment(Locus(10, 15), Locus(5, 10), 12),
                                 LocalAlignment(Locus(20, 30), Locus(15, 20), 13),
                             ]),
-                            AlignmentChain(Contig(1, 80), Contig(2, 50), yes, [
+                            AlignmentChain(9, Contig(1, 80), Contig(2, 50), yes, [
                                 LocalAlignment(Locus(50, 55), Locus(30, 35), 14),
                                 LocalAlignment(Locus(60, 70), Locus(40, 45), 15),
                             ]),
@@ -1133,11 +1134,11 @@ class DJunctor
                         // read        |--<--<--+-<-+--<--+-<-+--<--<--|
                         //            80       70  50    30  10        0
                         tuple(
-                            AlignmentChain(Contig(1, 80), Contig(2, 50), yes, [
+                            AlignmentChain(10, Contig(1, 80), Contig(2, 50), yes, [
                                 LocalAlignment(Locus(50, 55), Locus(30, 35), 14),
                                 LocalAlignment(Locus(60, 70), Locus(40, 45), 15),
                             ]),
-                            AlignmentChain(Contig(1, 80), Contig(1, 50), yes, [
+                            AlignmentChain(11, Contig(1, 80), Contig(1, 50), yes, [
                                 LocalAlignment(Locus(10, 15), Locus(5, 10), 12),
                                 LocalAlignment(Locus(20, 30), Locus(15, 20), 13),
                             ]),
@@ -1273,7 +1274,7 @@ class DJunctor
                         // read         |-->-->-+->-+->-->--|
                         //              0       0  40      50
                         tuple(
-                            AlignmentChain(Contig(1, 50), Contig(1, 50), no, [
+                            AlignmentChain(0, Contig(1, 50), Contig(1, 50), no, [
                                 LocalAlignment(Locus(0, 15), Locus(10, 20), 0),
                                 LocalAlignment(Locus(20, 40), Locus(30, 50), 1),
                             ]),
@@ -1285,7 +1286,7 @@ class DJunctor
                         // read         |-->-->-+->-+->-->--|
                         //              0       0  50      50
                         tuple(
-                            AlignmentChain(Contig(1, 50), Contig(1, 50), no, [
+                            AlignmentChain(1, Contig(1, 50), Contig(1, 50), no, [
                                 LocalAlignment(Locus(0, 15), Locus(10, 20), 2),
                                 LocalAlignment(Locus(20, 40), Locus(30, 45), 3),
                             ]),
@@ -1299,7 +1300,7 @@ class DJunctor
                         // read       |-->-->-+->-+->-->--|
                         //            0      10  50      50
                         tuple(
-                            AlignmentChain(Contig(1, 50), Contig(1, 50), no, [
+                            AlignmentChain(2, Contig(1, 50), Contig(1, 50), no, [
                                 LocalAlignment(Locus(10, 15), Locus(0, 20), 4),
                                 LocalAlignment(Locus(20, 50), Locus(30, 40), 5),
                             ]),
@@ -1311,7 +1312,7 @@ class DJunctor
                         // read       |-->-->-+->-+->-->--|
                         //            0      10  50      50
                         tuple(
-                            AlignmentChain(Contig(1, 50), Contig(1, 50), no, [
+                            AlignmentChain(3, Contig(1, 50), Contig(1, 50), no, [
                                 LocalAlignment(Locus(10, 15), Locus(5, 20), 6),
                                 LocalAlignment(Locus(20, 50), Locus(30, 40), 7),
                             ]),
@@ -1325,7 +1326,7 @@ class DJunctor
                         // read         |--<--<-+-<-+-<--<--|
                         //             50       50  10      0
                         tuple(
-                            AlignmentChain(Contig(1, 50), Contig(1, 50), yes, [
+                            AlignmentChain(4, Contig(1, 50), Contig(1, 50), yes, [
                                 LocalAlignment(Locus(10, 15), Locus(10, 20), 8),
                                 LocalAlignment(Locus(20, 50), Locus(30, 50), 9),
                             ]),
@@ -1337,7 +1338,7 @@ class DJunctor
                         // read         |--<--<-+-<-+-<--<--|
                         //             50       50  10      0
                         tuple(
-                            AlignmentChain(Contig(1, 50), Contig(1, 50), yes, [
+                            AlignmentChain(5, Contig(1, 50), Contig(1, 50), yes, [
                                 LocalAlignment(Locus(10, 15), Locus(10, 20), 10),
                                 LocalAlignment(Locus(20, 50), Locus(30, 45), 11),
                             ]),
@@ -1351,7 +1352,7 @@ class DJunctor
                         // read       |--<--<-+-<-+-<--<--|
                         //           50      40   0      0
                         tuple(
-                            AlignmentChain(Contig(1, 50), Contig(1, 50), yes, [
+                            AlignmentChain(6, Contig(1, 50), Contig(1, 50), yes, [
                                 LocalAlignment(Locus(0, 15), Locus(0, 20), 12),
                                 LocalAlignment(Locus(20, 40), Locus(30, 40), 13),
                             ]),
@@ -1363,7 +1364,7 @@ class DJunctor
                         // read       |--<--<-+-<-+-<--<--|
                         //           50      40   0      0
                         tuple(
-                            AlignmentChain(Contig(1, 50), Contig(1, 50), yes, [
+                            AlignmentChain(7, Contig(1, 50), Contig(1, 50), yes, [
                                 LocalAlignment(Locus(0, 15), Locus(5, 20), 14),
                                 LocalAlignment(Locus(20, 40), Locus(30, 40), 15),
                             ]),
