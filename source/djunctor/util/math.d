@@ -1,5 +1,5 @@
 /**
-    Central logging facility for djunctor.
+    Some additional mathematical functions.
 
     Copyright: © 2018 Arne Ludwig <arne.ludwig@posteo.de>
     License: Subject to the terms of the MIT license, as written in the
@@ -12,6 +12,7 @@ import std.algorithm : sort, sum;
 import std.conv : to;
 import std.range : ElementType, isForwardRange, walkLength;
 
+/// Caluclate the mean of range.
 ElementType!Range mean(Range)(Range values) if (isForwardRange!Range)
 {
     auto sum = values.sum;
@@ -32,6 +33,7 @@ unittest
     }
 }
 
+/// Caluclate the median of range.
 ElementType!Range median(Range)(Range values) if (__traits(compiles, sort(values)))
 {
     assert(values.length > 0, "median is undefined for empty set");
