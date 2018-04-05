@@ -966,6 +966,9 @@ class DJunctor
 
         referenceExcess ~= referenceExcess1 + referenceExcess2
 
+        referenceExcess1 ~= la - cay
+        referenceExcess2 ~= cbx - 0 = cbx
+
         CASE 1 (no complement):
 
                             contig a                  contig b
@@ -979,9 +982,6 @@ class DJunctor
             read            |-->-->--+->-+-->--+->-+-->-->--|
                             0        a1x a1y   a2x a2y      lr
 
-        referenceExcess1 ~= la - cay
-        referenceExcess2 ~= cbx - 0 = cbx
-
         CASE 2 (complement):
 
                             contig b                  contig a
@@ -993,10 +993,7 @@ class DJunctor
                       alignment 2  \ \ \         / / /  alignment 1
                                     \ \ \       / / /
             read            |--<--<--+-<-+--<--+-<-+--<--<--|
-                            lr       a2y a2x   a1y a1x      0
-
-        referenceExcess1 ~= lb - cby
-        referenceExcess2 ~= cax - 0 = cax
+                            0        a1x a1y   a2x a2y      lr
         ---
     */
     static protected long spanningGapSize(in AlignmentChain alignment1, in AlignmentChain alignment2) pure
@@ -1015,12 +1012,8 @@ class DJunctor
         long readsSequenceLength = secondAlignment.first.contigA.begin
             - firstAlignment.last.contigA.end;
         // dfmt off
-        long referenceExcess1 = firstAlignment.complement
-            ? secondAlignment.contigB.length - secondAlignment.last.contigB.end
-            : firstAlignment.contigB.length - firstAlignment.last.contigB.end;
-        long referenceExcess2 = firstAlignment.complement
-            ? firstAlignment.first.contigB.begin
-            : secondAlignment.first.contigB.begin;
+        long referenceExcess1 = firstAlignment.contigB.length - firstAlignment.last.contigB.end;
+        long referenceExcess2 = secondAlignment.first.contigB.begin;
         // dfmt on
         long referenceExcess = referenceExcess1 + referenceExcess2;
 
@@ -1097,15 +1090,15 @@ class DJunctor
                         //       alignment 1  \ \ \         / / /  alignment 2
                         //                     \ \ \       / / /
                         // read        |--<--<--+-<-+--<--+-<-+--<--<--|
-                        //            80       70  50    30  10        0
+                        //             0       10   30   50  70       80
                         tuple(
                             AlignmentChain(6, Contig(1, 80), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(10, 15), Locus(0, 10), 8),
-                                LocalAlignment(Locus(20, 30), Locus(15, 20), 9),
+                                LocalAlignment(Locus(10, 15), Locus(30, 35), 8),
+                                LocalAlignment(Locus(20, 30), Locus(40, 50), 9),
                             ]),
                             AlignmentChain(7, Contig(1, 80), Contig(2, 50), yes, [
-                                LocalAlignment(Locus(50, 55), Locus(30, 35), 10),
-                                LocalAlignment(Locus(60, 70), Locus(40, 50), 11),
+                                LocalAlignment(Locus(50, 55), Locus(0, 10), 10),
+                                LocalAlignment(Locus(60, 70), Locus(15, 20), 11),
                             ]),
                             20
                         ),
@@ -1115,15 +1108,15 @@ class DJunctor
                         //       alignment 1  \ \ \         / / /  alignment 2
                         //                     \ \ \       / / /
                         // read        |--<--<--+-<-+--<--+-<-+--<--<--|
-                        //            80       70  50    30  10        0
+                        //             0       10   30   50  70       80
                         tuple(
                             AlignmentChain(8, Contig(1, 80), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(10, 15), Locus(5, 10), 12),
-                                LocalAlignment(Locus(20, 30), Locus(15, 20), 13),
+                                LocalAlignment(Locus(10, 15), Locus(30, 35), 12),
+                                LocalAlignment(Locus(20, 30), Locus(40, 45), 13),
                             ]),
                             AlignmentChain(9, Contig(1, 80), Contig(2, 50), yes, [
-                                LocalAlignment(Locus(50, 55), Locus(30, 35), 14),
-                                LocalAlignment(Locus(60, 70), Locus(40, 45), 15),
+                                LocalAlignment(Locus(50, 55), Locus(5, 10), 14),
+                                LocalAlignment(Locus(60, 70), Locus(15, 20), 15),
                             ]),
                             10
                         ),
@@ -1133,15 +1126,15 @@ class DJunctor
                         //       alignment 2  \ \ \         / / /  alignment 1
                         //                     \ \ \       / / /
                         // read        |--<--<--+-<-+--<--+-<-+--<--<--|
-                        //            80       70  50    30  10        0
+                        //             0       10   30   50  70       80
                         tuple(
                             AlignmentChain(10, Contig(1, 80), Contig(2, 50), yes, [
-                                LocalAlignment(Locus(50, 55), Locus(30, 35), 14),
-                                LocalAlignment(Locus(60, 70), Locus(40, 45), 15),
+                                LocalAlignment(Locus(50, 55), Locus(5, 10), 14),
+                                LocalAlignment(Locus(60, 70), Locus(15, 20), 15),
                             ]),
                             AlignmentChain(11, Contig(1, 80), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(10, 15), Locus(5, 10), 12),
-                                LocalAlignment(Locus(20, 30), Locus(15, 20), 13),
+                                LocalAlignment(Locus(10, 15), Locus(30, 35), 12),
+                                LocalAlignment(Locus(20, 30), Locus(40, 45), 13),
                             ]),
                             10
                         ),
@@ -1202,9 +1195,9 @@ class DJunctor
                        alignment  \ \ \
                                    \ \ \
             read            |--<--<-+-<-+-<--<--|
-                            la      ay  ax      0
+                            0       ax  ay      la
 
-            readsSequenceLength ~= ax - 0 = ax
+            readsSequenceLength ~= la - ay
             referenceExcess ~= lr - ry
 
         CASE 4 (left extension, complement):
@@ -1216,47 +1209,30 @@ class DJunctor
                       alignment  / / /
                                 / / /
             read       |--<--<-+-<-+-<--<--|
-                       la      ay  ax      0
+                       0       ax  ay      la
 
-            readsSequenceLength ~= la - ay
+            readsSequenceLength ~= ax - 0 = ax
             referenceExcess ~= rx - 0 = rx
         ---
     */
     static protected long extensionSize(in AlignmentChain alignment) pure
     {
-        // CASE 1/4 (right extension, no complement OR left extension, complement)
-        long readsSequenceLengthCase1Or4 = alignment.contigA.length - alignment.last.contigA.end;
-        // CASE 2/3 (left extension, no complement OR right extension, complement)
-        long readsSequenceLengthCase2Or3 = alignment.first.contigA.begin;
         // CASE 1/3 (right extension)
-        long referenceExcessCase1Or3 = alignment.contigB.length - alignment.last.contigB.end;
+        long readsSequenceLengthRightExtension = alignment.contigA.length
+            - alignment.last.contigA.end;
+        long referenceExcessRightExtension = alignment.contigB.length - alignment.last.contigB.end;
         // CASE 2/4 (left extension)
-        long referenceExcessCase2Or4 = alignment.first.contigB.begin;
+        long readsSequenceLengthLeftExtension = alignment.first.contigA.begin;
+        long referenceExcessLeftExtension = alignment.first.contigB.begin;
 
-        if (alignment.complement)
-        {
-            // CASE 3/4 (complement)
-            // dfmt off
-            return max(
-                // Case 3 (right extension)
-                readsSequenceLengthCase2Or3 - referenceExcessCase1Or3,
-                // Case 4 (left extension)
-                readsSequenceLengthCase1Or4 - referenceExcessCase2Or4,
-            );
-            // dfmt on
-        }
-        else
-        {
-            // CASE 1/2 (no complement)
-            // dfmt off
-            return max(
-                // Case 1 (right extension)
-                readsSequenceLengthCase1Or4 - referenceExcessCase1Or3,
-                // Case 2 (left extension)
-                readsSequenceLengthCase2Or3 - referenceExcessCase2Or4,
-            );
-            // dfmt on
-        }
+        // dfmt off
+        return max(
+            // Case 1/3 (right extension)
+            readsSequenceLengthRightExtension - referenceExcessRightExtension,
+            // Case 2/4 (left extension)
+            readsSequenceLengthLeftExtension - referenceExcessLeftExtension,
+        );
+        // dfmt on
     }
 
     unittest
@@ -1283,7 +1259,7 @@ class DJunctor
                         // reference  |-------+---+---|
                         //                     \ \ \
                         // read         |-->-->-+->-+->-->--|
-                        //              0       0  50      50
+                        //              0       0  40      50
                         tuple(
                             AlignmentChain(1, Contig(1, 50), Contig(1, 50), no, [
                                 LocalAlignment(Locus(0, 15), Locus(10, 20), 2),
@@ -1323,11 +1299,11 @@ class DJunctor
                         // reference  |-------+---+---|
                         //                     \ \ \
                         // read         |--<--<-+-<-+-<--<--|
-                        //             50       50  10      0
+                        //              0       0   40      50
                         tuple(
                             AlignmentChain(4, Contig(1, 50), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(10, 15), Locus(10, 20), 8),
-                                LocalAlignment(Locus(20, 50), Locus(30, 50), 9),
+                                LocalAlignment(Locus(0, 15), Locus(10, 20), 8),
+                                LocalAlignment(Locus(20, 40), Locus(30, 50), 9),
                             ]),
                             10
                         ),
@@ -1335,11 +1311,11 @@ class DJunctor
                         // reference  |-------+---+---|
                         //                     \ \ \
                         // read         |--<--<-+-<-+-<--<--|
-                        //             50       50  10      0
+                        //              0       0   50      50
                         tuple(
                             AlignmentChain(5, Contig(1, 50), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(10, 15), Locus(10, 20), 10),
-                                LocalAlignment(Locus(20, 50), Locus(30, 45), 11),
+                                LocalAlignment(Locus(0, 15), Locus(10, 20), 10),
+                                LocalAlignment(Locus(20, 40), Locus(30, 45), 11),
                             ]),
                             5
                         ),
@@ -1349,11 +1325,11 @@ class DJunctor
                         // reference        |---+---+-------|
                         //                     / / /
                         // read       |--<--<-+-<-+-<--<--|
-                        //           50      40   0      0
+                        //            0       10  50      50
                         tuple(
                             AlignmentChain(6, Contig(1, 50), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(0, 15), Locus(0, 20), 12),
-                                LocalAlignment(Locus(20, 40), Locus(30, 40), 13),
+                                LocalAlignment(Locus(10, 15), Locus(0, 20), 12),
+                                LocalAlignment(Locus(20, 50), Locus(30, 40), 13),
                             ]),
                             10
                         ),
@@ -1361,11 +1337,11 @@ class DJunctor
                         // reference        |---+---+-------|
                         //                     / / /
                         // read       |--<--<-+-<-+-<--<--|
-                        //           50      40   0      0
+                        //            0       10  50      50
                         tuple(
                             AlignmentChain(7, Contig(1, 50), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(0, 15), Locus(5, 20), 14),
-                                LocalAlignment(Locus(20, 40), Locus(30, 40), 15),
+                                LocalAlignment(Locus(10, 15), Locus(5, 20), 14),
+                                LocalAlignment(Locus(20, 50), Locus(30, 40), 15),
                             ]),
                             5
                         ),
