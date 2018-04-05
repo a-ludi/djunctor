@@ -20,7 +20,7 @@ import std.range : chain, only;
 import std.range.primitives : ElementType, isInputRange;
 import std.stdio : File, writeln;
 import std.string : outdent;
-import std.traits : hasMember, isSomeString, Unqual;
+import std.traits : hasMember, isIntegral, isSomeString, Unqual;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
 
 /// File suffixes of hidden DB files.
@@ -415,6 +415,131 @@ EOF".outdent;
             }
 }
 
+/// Get the designated set of records in FASTA format.
+auto getFastaEntries(Options, Range)(in string dbFile, Range recordNumbers, in Options options)
+        if (hasOption!(Options, "dbdumpOptions", isOptionsList) && hasOption!(Options,
+            "fastaLineWidth", isIntegral) && isInputRange!Range && is(ElementType!Range == size_t))
+{
+    return readDbDump(dbdump(dbFile, options.dbdumpOptions), recordNumbers,
+            options.fastaLineWidth);
+}
+
+private auto readDbDump(S, Range)(in S dbDump, Range recordNumbers, in size_t lineLength)
+        if (isSomeString!S && isInputRange!Range && is(ElementType!Range == size_t))
+{
+    import std.algorithm : count, filter, sort;
+    import std.array : appender;
+    import std.range : chunks, drop;
+    import std.string : lineSplitter;
+
+    immutable lineSeparator = '\n';
+    immutable subrecordSeparator = ';';
+    immutable recordFormat = "R %d;H %d %s;L %d %d %d;S %d %s";
+    immutable numRecordLines = recordFormat.count(subrecordSeparator) + 1;
+
+    auto sortedRecordNumbers = recordNumbers.sort;
+    /// Build chunks of numRecordLines lines.
+    alias byRecordSplitter = dbDump => dbDump.lineSplitter.drop(6).chunks(numRecordLines);
+    /// Parse chunks of numRecordLines lines into FASTA format.
+    alias parseRecord = recordLines => {
+        size_t recordNumber;
+        size_t headerLineLength;
+        string headerLine;
+        size_t locationWell;
+        size_t locationPulseStart;
+        size_t locationPulseEnd;
+        size_t sequenceLength;
+        string sequence;
+
+        auto joinedLines = recordLines.joiner(only(subrecordSeparator));
+        // dfmt off
+        int numMatches = joinedLines
+            .array
+            .formattedRead!recordFormat(
+                recordNumber,
+                headerLineLength,
+                headerLine,
+                locationWell,
+                locationPulseStart,
+                locationPulseEnd,
+                sequenceLength,
+                sequence,
+            );
+        // dfmt on
+        assert(numMatches == 8, format!"%d matches in chunk: `%s`"(numMatches, joinedLines.array));
+
+        // skip unwanted records
+        if (sortedRecordNumbers.length > 0 && !sortedRecordNumbers.contains(recordNumber))
+            return "";
+
+        auto fastaData = appender!string;
+        fastaData.reserve(headerLine.length + sequence.length + sequence.length / lineLength + 1);
+
+        fastaData ~= headerLine ~ lineSeparator;
+        fastaData ~= sequence.chunks(lineLength).joiner(only(lineSeparator));
+
+        return fastaData.data;
+    };
+
+    return byRecordSplitter(dbDump).map!parseRecord.filter!`a() != ""`;
+}
+
+unittest
+{
+    immutable testDbDump = q"EOF
+        + R 4
+        + M 0
+        + H 104539
+        @ H 26
+        + S 38
+        @ S 19574
+        R 1
+        H 22 >Sim/1/0_14 RQ=0.975
+        L 0 0 14
+        S 14 ggcccaggcagccc
+        R 2
+        H 22 >Sim/2/0_9 RQ=0.975
+        L 0 0 9
+        S 9 cacattgtg
+        R 3
+        H 23 >Sim/3/0_11 RQ=0.975
+        L 0 0 11
+        S 11 gagtgcagtgg
+        R 4
+        H 23 >Sim/4/0_4 RQ=0.975
+        L 0 0 4
+        S 4 gagc
+        R 5
+        H 24 >Sim/5/0_60 RQ=0.975
+        L 0 0 60
+        S 60 gagcgagcgagcgagcgagcgagcgagcgagcgagcgagcgagcgagcgagcgagcgagc
+EOF".outdent;
+
+    {
+        size_t[] recordIds = [];
+        auto fastaEntries = readDbDump(testDbDump, recordIds, 50).map!"a()".array;
+        // dfmt off
+        assert(fastaEntries == [
+            ">Sim/1/0_14 RQ=0.975\nggcccaggcagccc",
+            ">Sim/2/0_9 RQ=0.975\ncacattgtg",
+            ">Sim/3/0_11 RQ=0.975\ngagtgcagtgg",
+            ">Sim/4/0_4 RQ=0.975\ngagc",
+            ">Sim/5/0_60 RQ=0.975\ngagcgagcgagcgagcgagcgagcgagcgagcgagcgagcgagcgagcga\ngcgagcgagc",
+        ]);
+        // dfmt on
+    }
+    {
+        size_t[] recordIds = [1, 3];
+        auto fastaEntries = readDbDump(testDbDump, recordIds, 50).map!"a()".array;
+        // dfmt off
+        assert(fastaEntries == [
+            ">Sim/1/0_14 RQ=0.975\nggcccaggcagccc",
+            ">Sim/3/0_11 RQ=0.975\ngagtgcagtgg",
+        ]);
+        // dfmt on
+    }
+}
+
 AlignmentContainer!(string[]) getLasFiles(string dbA)
 {
     return getLasFiles(dbA, null);
@@ -529,6 +654,11 @@ private
     {
         return executeCommand(chain(only("LAdump"), ladumpOpts, only(dbA),
                 only(dbB), only(lasFile)));
+    }
+
+    string dbdump(in string dbFile, in string[] dbdumpOptions)
+    {
+        return executeCommand(chain(only("DBdump"), dbdumpOptions, only(dbFile)));
     }
 
     string dbshow(in string dbFile, in string contigId)
