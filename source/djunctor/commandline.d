@@ -54,6 +54,14 @@ ReturnCode runDjunctorCommandline(string[] args)
     const Options finalOptions = options;
     logInfo(finalOptions.to!string);
 
+    scope (exit)
+    {
+        if (!finalOptions.keepTemp)
+        {
+            cleanWorkDir(finalOptions);
+        }
+    }
+
     try
     {
         import djunctor.djunctor : runWithOptions;
@@ -67,13 +75,6 @@ ReturnCode runDjunctorCommandline(string[] args)
         writeln(e);
 
         return ReturnCode.djunctorError;
-    }
-    finally
-    {
-        if (!finalOptions.keepTemp)
-        {
-            cleanWorkDir(finalOptions);
-        }
     }
 }
 
@@ -296,32 +297,13 @@ private
 
     void createWorkDir(ref Options options)
     {
-        import std.algorithm : endsWith;
-        import std.exception : ErrnoException;
         import std.file : tempDir;
         import std.path : buildPath;
-        import std.string : fromStringz, toStringz;
+        import djunctor.util.tempfile : mkdtemp;
 
-        version (Posix)
-        {
-            import core.sys.posix.stdlib : mkdtemp;
+        auto workdirTemplate = buildPath(tempDir(), options.workdirTemplate);
 
-            char[255] workdirNameBuffer;
-            auto workdirTemplate = buildPath(tempDir(), options.workdirTemplate);
-            auto len = workdirTemplate.length;
-            assert(len < workdirNameBuffer.length);
-            assert(workdirTemplate.endsWith("XXXXXX"));
-
-            workdirNameBuffer[0 .. len] = workdirTemplate[];
-            workdirNameBuffer[len] = 0;
-
-            if (null == mkdtemp(workdirNameBuffer.ptr))
-            {
-                throw new ErrnoException("cannot create workdir", __FILE__, __LINE__);
-            }
-
-            options.workdir = to!string(fromStringz(workdirNameBuffer.ptr));
-        }
+        options.workdir = mkdtemp(workdirTemplate);
     }
 
     void cleanWorkDir(in ref Options options)
