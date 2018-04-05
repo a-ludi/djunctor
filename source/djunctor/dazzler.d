@@ -197,7 +197,6 @@ private auto readAlignmentList(S)(in S lasDump) if (isSomeString!S)
         auto joinedLines = chainPartLines.joiner(only(recordSeparator));
         // dfmt off
         int numMatches = joinedLines
-            .save
             .array
             .formattedRead!chainPartFormat(
                 contigA.id,
@@ -306,112 +305,113 @@ EOF".outdent;
     with (AlignmentChain) with (Complement) with (LocalAlignment)
             {
                 // dfmt off
-            assert(alignmentChains == [
-                AlignmentChain(
-                    0,
-                    Contig(1, 8),
-                    Contig(2, 9),
-                    no,
+                assert(alignmentChains ==
                     [
-                        LocalAlignment(
-                            Locus(3, 4),
-                            Locus(5, 6),
-                            7
+                        AlignmentChain(
+                            0,
+                            Contig(1, 8),
+                            Contig(2, 9),
+                            no,
+                            [
+                                LocalAlignment(
+                                    Locus(3, 4),
+                                    Locus(5, 6),
+                                    7
+                                ),
+                                LocalAlignment(
+                                    Locus(12, 13),
+                                    Locus(14, 15),
+                                    16
+                                )
+                            ]
                         ),
-                        LocalAlignment(
-                            Locus(12, 13),
-                            Locus(14, 15),
-                            16
-                        )
-                    ]
-                ),
-                AlignmentChain(
-                    1,
-                    Contig(19, 26),
-                    Contig(20, 27),
-                    yes,
-                    [
-                        LocalAlignment(
-                            Locus(21, 22),
-                            Locus(23, 24),
-                            25
+                        AlignmentChain(
+                            1,
+                            Contig(19, 26),
+                            Contig(20, 27),
+                            yes,
+                            [
+                                LocalAlignment(
+                                    Locus(21, 22),
+                                    Locus(23, 24),
+                                    25
+                                ),
+                                LocalAlignment(
+                                    Locus(30, 31),
+                                    Locus(32, 33),
+                                    34
+                                )
+                            ]
                         ),
-                        LocalAlignment(
-                            Locus(30, 31),
-                            Locus(32, 33),
-                            34
-                        )
-                    ]
-                ),
-                AlignmentChain(
-                    2,
-                    Contig(37, 35),
-                    Contig(38, 36),
-                    no,
-                    [
-                        LocalAlignment(
-                            Locus(39, 40),
-                            Locus(41, 42),
-                            43
-                        )
-                    ]
-                ),
-                AlignmentChain(
-                    3,
-                    Contig(46, 53),
-                    Contig(47, 54),
-                    yes,
-                    [
-                        LocalAlignment(
-                            Locus(48, 49),
-                            Locus(50, 51),
-                            52
+                        AlignmentChain(
+                            2,
+                            Contig(37, 35),
+                            Contig(38, 36),
+                            no,
+                            [
+                                LocalAlignment(
+                                    Locus(39, 40),
+                                    Locus(41, 42),
+                                    43
+                                )
+                            ]
                         ),
-                    ]
-                ),
-                AlignmentChain(
-                    4,
-                    Contig(46, 53),
-                    Contig(47, 54),
-                    no,
-                    [
-                        LocalAlignment(
-                            Locus(57, 58),
-                            Locus(59, 60),
-                            61
+                        AlignmentChain(
+                            3,
+                            Contig(46, 53),
+                            Contig(47, 54),
+                            yes,
+                            [
+                                LocalAlignment(
+                                    Locus(48, 49),
+                                    Locus(50, 51),
+                                    52
+                                ),
+                            ]
+                        ),
+                        AlignmentChain(
+                            4,
+                            Contig(46, 53),
+                            Contig(47, 54),
+                            no,
+                            [
+                                LocalAlignment(
+                                    Locus(57, 58),
+                                    Locus(59, 60),
+                                    61
+                                )
+                            ]
+                        ),
+                        AlignmentChain(
+                            5,
+                            Contig(64, 71),
+                            Contig(65, 72),
+                            yes,
+                            [
+                                LocalAlignment(
+                                    Locus(66, 67),
+                                    Locus(68, 69),
+                                    70
+                                )
+                            ]
+                        ),
+                        AlignmentChain(
+                            6,
+                            Contig(55, 80),
+                            Contig(56, 81),
+                            yes,
+                            [
+                                LocalAlignment(
+                                    Locus(75, 76),
+                                    Locus(77, 78),
+                                    79
+                                )
+                            ]
                         )
-                    ]
-                ),
-                AlignmentChain(
-                    5,
-                    Contig(64, 71),
-                    Contig(65, 72),
-                    yes,
-                    [
-                        LocalAlignment(
-                            Locus(66, 67),
-                            Locus(68, 69),
-                            70
-                        )
-                    ]
-                ),
-                AlignmentChain(
-                    6,
-                    Contig(55, 80),
-                    Contig(56, 81),
-                    yes,
-                    [
-                        LocalAlignment(
-                            Locus(75, 76),
-                            Locus(77, 78),
-                            79
-                        )
-                    ]
-                )
-            ],
-            format!"error parsing test input; result was: %s"(alignmentChains)
-        );
-        // dfmt on
+                    ],
+                    format!"error parsing test input; result was: %s"(alignmentChains)
+                );
+                // dfmt on
             }
 }
 
