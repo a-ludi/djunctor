@@ -573,20 +573,17 @@ unittest
     }
 
     auto tmpDir = mkdtemp("./.unittest-XXXXXX");
-    // TODO fix workdir handling (issue #10)
-    //auto options = Options([], "./");
     auto options = Options([], tmpDir);
     scope (exit)
         rmdirRecurse(tmpDir);
 
-    auto dbName = buildDamFile(fastaRecords[], options);
+    string dbName = buildDamFile(fastaRecords[], options);
 
     assert(dbName.isFile);
-    // TODO
-    //foreach (suffix; getHiddenDbFiles(dbName))
-    //{
-    //    assert(dbName.withExtension(suffix).isFile);
-    //}
+    foreach (hiddenDbFile; getHiddenDbFiles(dbName))
+    {
+        assert(hiddenDbFile.isFile);
+    }
 }
 
 AlignmentContainer!(string[]) getLasFiles(in string dbA)
