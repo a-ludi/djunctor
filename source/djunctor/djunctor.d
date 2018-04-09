@@ -734,26 +734,26 @@ class DJunctor
 
     DJunctor run()
     {
-        logInfo("BEGIN djunctor");
+        logDiagnostic("BEGIN djunctor");
         // dfmt off
         this
             .init
             .mainLoop
             .finish;
         // dfmt on
-        logInfo("END djunctor");
+        logDiagnostic("END djunctor");
 
         return this;
     }
 
     protected DJunctor init()
     {
-        logInfo("BEGIN djunctor.init");
+        logDiagnostic("BEGIN djunctor.init");
         selfAlignment = getLocalAlignments(options.refDb, options);
         readsAlignment = getMappings(options.refDb, options.readsDb, options);
         catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup,
                 readsAlignment.b2a.dup);
-        logInfo("END djunctor.init");
+        logDiagnostic("END djunctor.init");
 
         return this;
     }
@@ -775,7 +775,7 @@ class DJunctor
 
     protected DJunctor mainLoop()
     {
-        logInfo("BEGIN djunctor.mainLoop");
+        logDiagnostic("BEGIN djunctor.mainLoop");
         do
         {
             filterUseless();
@@ -793,7 +793,7 @@ class DJunctor
             ++iteration;
         }
         while (catHits.length > 0 && iteration < maxLoops);
-        logInfo("END djunctor.mainLoop");
+        logDiagnostic("END djunctor.mainLoop");
 
         return this;
     }
@@ -815,7 +815,7 @@ class DJunctor
         uselessAcc.reserve(sizeReserve);
         alias isNotUseless = ac => !uselessAcc.data.canFind(ac.contigA.id);
 
-        logInfo("BEGIN djunctor.filterUseless");
+        logDiagnostic("BEGIN djunctor.filterUseless");
         foreach (alignmentsChunk; catCandidates.a2b.chunkBy!haveEqualIds)
         {
             auto alignments = alignmentsChunk.array;
@@ -841,7 +841,7 @@ class DJunctor
         this.catUseless ~= uselessAcc.data;
         this.catCandidates.a2b = candidatesAcc.data;
         this.catCandidates.b2a = this.catCandidates.b2a.filter!isNotUseless.array;
-        logInfo("END djunctor.filterUseless");
+        logDiagnostic("END djunctor.filterUseless");
 
         return this;
     }
@@ -900,7 +900,7 @@ class DJunctor
             return a.contigA.id == b.contigA.id;
         }
 
-        logInfo("BEGIN djunctor.findHits");
+        logDiagnostic("BEGIN djunctor.findHits");
         // dfmt off
         auto readsByNumFlanks = catCandidates
             .b2a
@@ -966,7 +966,7 @@ class DJunctor
             */
         }
 
-        logInfo("END djunctor.findHits");
+        logDiagnostic("END djunctor.findHits");
 
         return this;
     }
@@ -1376,16 +1376,16 @@ class DJunctor
 
     protected DJunctor fillGaps()
     {
-        logInfo("BEGIN djunctor.fillGaps");
-        logInfo("END djunctor.fillGaps");
+        logDiagnostic("BEGIN djunctor.fillGaps");
+        logDiagnostic("END djunctor.fillGaps");
 
         return this;
     }
 
     protected DJunctor finish()
     {
-        logInfo("BEGIN djunctor.finish");
-        logInfo("END djunctor.finish");
+        logDiagnostic("BEGIN djunctor.finish");
+        logDiagnostic("END djunctor.finish");
 
         return this;
     }
