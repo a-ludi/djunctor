@@ -924,13 +924,15 @@ class DJunctor
             logDiagnostic("extending %d contigs", extendingReadsByGap.save.walkLength);
 
             // dfmt off
-            extendingReadsByGap
-                .save
-                .map!(readsByGap => readsByGap
-                    .map!(extendingAlignments => extensionSize(extendingAlignments[0]))
-                    .array
-                    .mean)
-                .writeln;
+            logDebug(
+                "extending size (raw averages): %s",
+                extendingReadsByGap
+                    .save
+                    .map!(readsByGap => readsByGap
+                        .map!(extendingAlignments => extensionSize(extendingAlignments[0]))
+                        .array
+                        .mean)
+            );
             // dfmt on
         }
 
@@ -942,14 +944,26 @@ class DJunctor
             logDiagnostic("spanning %d gaps", spanningReadsByGap.save.walkLength);
 
             // dfmt off
-            spanningReadsByGap
-                .save
-                .map!(readsByGap => readsByGap
-                    .map!(spanningAlignments => spanningGapSize(spanningAlignments[0], spanningAlignments[1]))
-                    .array
-                    .mean)
-                .writeln;
+            logDebug(
+                "spanning size (raw averages): %s",
+                spanningReadsByGap
+                    .save
+                    .map!(readsByGap => readsByGap
+                        .map!(spanningAlignments => spanningGapSize(spanningAlignments[0], spanningAlignments[1]))
+                        .array
+                        .mean)
+            );
             // dfmt on
+
+            /*
+                for each gap/pile up:
+                    1. determine the range of the reference that is
+                       covered by the pile up plus some margin
+                    2. get the corresponding subsequence of the reference
+                    3. get the list of read sequences
+                    4. dalign read sequences to the ref subsequence
+                    5. build consensus using daccord
+            */
         }
 
         logInfo("END djunctor.findHits");
