@@ -11,11 +11,13 @@ module djunctor.dazzler;
 import djunctor.commandline : hasOption, isOptionsList;
 import djunctor.djunctor : AlignmentChain, AlignmentContainer;
 import djunctor.util.log;
+import djunctor.util.tempfile : mkstemp;
 import std.algorithm : equal, map, joiner, sort, splitter, SwapStrategy;
 import std.array : array;
 import std.conv : to;
 import std.format : format, formattedRead;
 import std.meta : Instantiate;
+import std.path : absolutePath, buildPath, relativePath;
 import std.range : chain, only;
 import std.range.primitives : ElementType, isInputRange;
 import std.stdio : File, writeln;
@@ -25,6 +27,9 @@ import std.typecons : Flag, No, tuple, Tuple, Yes;
 
 /// File suffixes of hidden DB files.
 private immutable hiddenDbFileSuffixes = [".bps", ".hdr", ".idx"];
+
+/// Constant holding the .dam file extension.
+immutable damFileExtension = ".dam";
 
 /**
     Return a list of hidden files associated to every `.dam`/`.db` file. These
@@ -415,7 +420,10 @@ EOF".outdent;
             }
 }
 
-/// Get the designated set of records in FASTA format.
+/**
+    Get the designated set of records in FASTA format. If recordNumbers is
+    empty the whole DB will be converted.
+*/
 auto getFastaEntries(Options, Range)(in string dbFile, Range recordNumbers, in Options options)
         if (hasOption!(Options, "dbdumpOptions", isOptionsList) && hasOption!(Options,
             "fastaLineWidth", isIntegral) && isInputRange!Range && is(ElementType!Range == size_t))
@@ -540,6 +548,52 @@ EOF".outdent;
     }
 }
 
+/// Build a .dam file with the given set of FASTA records.
+string buildDamFile(Range, Options)(Range fastaRecords, Options options)
+        if (hasOption!(Options, "dbsplitOptions", isOptionsList) && hasOption!(Options, "workdir",
+            isSomeString) && isInputRange!Range && isSomeString!(ElementType!Range))
+{
+    import std.file : remove;
+
+    immutable tempDbNameTemplate = "auxiliary-XXXXXX";
+
+    auto tempDbTemplate = buildPath(options.workdir, tempDbNameTemplate);
+    auto tempDb = mkstemp(tempDbTemplate, damFileExtension);
+
+    tempDb.file.close();
+    remove(tempDb.name);
+    fasta2dam(tempDb.name, fastaRecords);
+    dbsplit(tempDb.name, options.dbsplitOptions);
+
+    return tempDb.name;
+}
+
+unittest
+{
+    import djunctor.util.tempfile : mkdtemp;
+    import std.file : rmdirRecurse, isFile;
+
+    // dfmt off
+    auto fastaRecords = [
+        ">Sim/1/0_14 RQ=0.975\nggcccaggcagccc",
+        ">Sim/3/0_11 RQ=0.975\ngagtgcagtgg",
+    ];
+    struct Options
+    {
+        string[] dbsplitOptions;
+        string workdir;
+    }
+    // dfmt on
+    auto options = Options([], mkdtemp("./.unittest-XXXXXX"));
+    scope (exit)
+        rmdirRecurse(options.workdir);
+
+    setWorkdir(options.workdir);
+    auto dbName = buildDamFile(fastaRecords[], options);
+
+    assert(dbName.isFile);
+}
+
 AlignmentContainer!(string[]) getLasFiles(string dbA)
 {
     return getLasFiles(dbA, null);
@@ -626,14 +680,46 @@ private
                 only(refDam), only(readsDam)));
     }
 
+    void fasta2dam(Range)(in string outFile, Range fastaRecords)
+            if (isInputRange!(Unqual!Range) && isSomeString!(ElementType!(Unqual!Range)))
+    {
+        import std.algorithm : each, joiner;
+        import std.file : getcwd;
+        import std.process : Config, pipeProcess, Redirect, wait;
+        import std.range : chunks;
+
+        immutable writeChunkSize = 1024 * 1024;
+        auto outFileArg = getRelativeToWorkdir(outFile);
+        auto process = pipeProcess(["fasta2DAM", "-i", outFileArg],
+                Redirect.stdin, null, // env
+                Config.none, getWorkdir());
+
+        //dfmt off
+        fastaRecords
+            .joiner(only('\n'))
+            .chain("\n")
+            .chunks(writeChunkSize)
+            .each!(chunk => process.stdin.write(chunk.array));
+        //dfmt on
+        process.stdin.close();
+        auto exitStatus = wait(process.pid);
+        if (exitStatus != 0)
+        {
+            throw new DazzlerCommandException(
+                    format!"command `fasta2dam` failed with exit code %d"(exitStatus));
+        }
+
+        return;
+    }
+
     void fasta2dam(in string inFile, in string outFile)
     {
-        executeCommand(only("fasta2DAM", outFile, inFile));
+        executeCommand(only("fasta2DAM", getRelativeToWorkdir(outFile), inFile));
     }
 
     void dbsplit(in string dbFile, in string[] dbsplitOptions)
     {
-        executeCommand(chain(only("DBsplit"), dbsplitOptions, only(dbFile)));
+        executeCommand(chain(only("DBsplit"), dbsplitOptions, only(getRelativeToWorkdir(dbFile))));
     }
 
     void lasort(in string[] lasFiles)
@@ -744,5 +830,10 @@ private
         import std.process : escapeShellCommand;
 
         return escapeShellCommand(command) ~ " | sh -sv";
+    }
+
+    string getRelativeToWorkdir(in string fileName)
+    {
+        return relativePath(absolutePath(fileName), absolutePath(getWorkdir()));
     }
 }
