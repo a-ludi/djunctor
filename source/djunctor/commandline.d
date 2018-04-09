@@ -12,7 +12,7 @@ import darg : ArgParseError, ArgParseHelp, Argument, Help, helpString, Option,
     OptionFlag, parseArgs, usageString;
 import std.conv;
 import std.stdio;
-import djunctor.dazzler : provideDamFileInWorkdir, ProvideMethod, setWorkdir;
+import djunctor.dazzler : provideDamFileInWorkdir, ProvideMethod;
 import djunctor.util.log;
 import std.meta : Instantiate;
 import std.range.primitives : ElementType, isForwardRange;
@@ -87,10 +87,9 @@ Options processOptions(string[] args)
     addDefaultOptions(options);
     verifyOptions(options);
     createWorkDir(options);
-    // set workdir for dazzler tools
-    setWorkdir(options.workdir);
-    options.refDb = provideDamFileInWorkdir(options.refFile, options.provideMethod);
-    options.readsDb = provideDamFileInWorkdir(options.readsFile, options.provideMethod);
+    options.refDb = provideDamFileInWorkdir(options.refFile, options.provideMethod, options.workdir);
+    options.readsDb = provideDamFileInWorkdir(options.readsFile,
+            options.provideMethod, options.workdir);
 
     return options;
 }

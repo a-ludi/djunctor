@@ -45,21 +45,6 @@ auto getHiddenDbFiles(string dbFile)
             "." ~ dbFile.baseName.withExtension(suffix).to!string));
 }
 
-private string workdir;
-
-void setWorkdir(string workdir_)
-{
-    workdir = workdir_;
-    logDebug(format!"using workdir `%s`"(workdir));
-}
-
-string getWorkdir()
-{
-    assert(workdir != null);
-
-    return workdir;
-}
-
 class DazzlerCommandException : Exception
 {
     pure nothrow @nogc @safe this(string msg, string file = __FILE__,
@@ -80,12 +65,12 @@ enum ProvideMethod
 
     Returns: Workdir location of the dbFile.
 */
-string provideDamFileInWorkdir(in string dbFile, ProvideMethod provideMethod)
+string provideDamFileInWorkdir(in string dbFile, ProvideMethod provideMethod, in string workdir)
 {
     import std.file : copy, symlink;
     import std.range : chain, only;
 
-    alias inWorkdir = anyDbFile => buildPath(getWorkdir(), anyDbFile.baseName);
+    alias inWorkdir = anyDbFile => buildPath(workdir, anyDbFile.baseName);
     auto allDbFiles = chain(only(dbFile), getHiddenDbFiles(dbFile));
 
     foreach (anyDbFile; allDbFiles)
@@ -107,34 +92,35 @@ string provideDamFileInWorkdir(in string dbFile, ProvideMethod provideMethod)
 }
 
 AlignmentContainer!(AlignmentChain[]) getLocalAlignments(Options)(in string dbA, in Options options)
-        if (hasOption!(Options, "dalignerOptions", isOptionsList)
-            && hasOption!(Options, "ladumpOptions", isOptionsList))
+        if (hasOption!(Options, "dalignerOptions", isOptionsList) && hasOption!(Options,
+            "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
     return getLocalAlignments(dbA, null, options);
 }
 
 AlignmentContainer!(AlignmentChain[]) getLocalAlignments(Options)(in string dbA,
         in string dbB, in Options options)
-        if (hasOption!(Options, "dalignerOptions", isOptionsList)
-            && hasOption!(Options, "ladumpOptions", isOptionsList))
+        if (hasOption!(Options, "dalignerOptions", isOptionsList) && hasOption!(Options,
+            "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
-    dalign(dbA, dbB, options.dalignerOptions);
+    dalign(dbA, dbB, options.dalignerOptions, options.workdir);
 
     return processGeneratedLasFiles(dbA, dbB, options);
 }
 
 AlignmentContainer!(AlignmentChain[]) getMappings(Options)(in string dbA,
         in string dbB, in Options options)
-        if (hasOption!(Options, "damapperOptions", isOptionsList)
-            && hasOption!(Options, "ladumpOptions", isOptionsList))
+        if (hasOption!(Options, "damapperOptions", isOptionsList) && hasOption!(Options,
+            "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
-    damapper(dbA, dbB, options.damapperOptions);
+    damapper(dbA, dbB, options.damapperOptions, options.workdir);
 
     return processGeneratedLasFiles(dbA, dbB, options);
 }
 
 private auto processGeneratedLasFiles(Options)(in string dbA, in string dbB, in Options options)
-        if (hasOption!(Options, "ladumpOptions", isOptionsList))
+        if (hasOption!(Options, "ladumpOptions", isOptionsList)
+            && hasOption!(Options, "workdir", isSomeString))
 {
     auto lasFileLists = getLasFiles(dbA, dbB);
     AlignmentContainer!(AlignmentChain[]) results;
@@ -150,7 +136,7 @@ private auto processGeneratedLasFiles(Options)(in string dbA, in string dbB, in 
             // dfmt off
             auto alignmentChains =
                 lasFileList
-                    .map!(lasFile => ladump(lasFile, dbFiles.expand, options.ladumpOptions))
+                    .map!(lasFile => ladump(lasFile, dbFiles.expand, options.ladumpOptions, options.workdir))
                     .map!(lasDump => readAlignmentList(lasDump))
                     .joiner
                     .array;
@@ -424,11 +410,13 @@ EOF".outdent;
     empty the whole DB will be converted.
 */
 auto getFastaEntries(Options, Range)(in string dbFile, Range recordNumbers, in Options options)
-        if (hasOption!(Options, "dbdumpOptions", isOptionsList) && hasOption!(Options,
-            "fastaLineWidth", isIntegral) && isInputRange!Range && is(ElementType!Range == size_t))
+        if (hasOption!(Options, "dbdumpOptions", isOptionsList)
+            && hasOption!(Options, "fastaLineWidth",
+            isIntegral) && hasOption!(Options, "workdir", isSomeString)
+            && isInputRange!Range && is(ElementType!Range == size_t))
 {
-    return readDbDump(dbdump(dbFile, options.dbdumpOptions), recordNumbers,
-            options.fastaLineWidth);
+    return readDbDump(dbdump(dbFile, options.dbdumpOptions, options.workdir),
+            recordNumbers, options.fastaLineWidth);
 }
 
 private auto readDbDump(S, Range)(in S dbDump, Range recordNumbers, in size_t lineLength)
@@ -561,8 +549,8 @@ string buildDamFile(Range, Options)(Range fastaRecords, Options options)
 
     tempDb.file.close();
     remove(tempDb.name);
-    fasta2dam(tempDb.name, fastaRecords);
-    dbsplit(tempDb.name, options.dbsplitOptions);
+    fasta2dam(tempDb.name, fastaRecords, options.workdir);
+    dbsplit(tempDb.name, options.dbsplitOptions, options.workdir);
 
     return tempDb.name;
 }
@@ -583,22 +571,30 @@ unittest
         string[] dbsplitOptions;
         string workdir;
     }
-    auto options = Options([], mkdtemp("./.unittest-XXXXXX"));
-    scope (exit)
-        rmdirRecurse(options.workdir);
 
-    setWorkdir(options.workdir);
+    auto tmpDir = mkdtemp("./.unittest-XXXXXX");
+    // TODO fix workdir handling (issue #10)
+    //auto options = Options([], "./");
+    auto options = Options([], tmpDir);
+    scope (exit)
+        rmdirRecurse(tmpDir);
+
     auto dbName = buildDamFile(fastaRecords[], options);
 
     assert(dbName.isFile);
+    // TODO
+    //foreach (suffix; getHiddenDbFiles(dbName))
+    //{
+    //    assert(dbName.withExtension(suffix).isFile);
+    //}
 }
 
-AlignmentContainer!(string[]) getLasFiles(string dbA)
+AlignmentContainer!(string[]) getLasFiles(in string dbA)
 {
     return getLasFiles(dbA, null);
 }
 
-AlignmentContainer!(string[]) getLasFiles(string dbA, string dbB)
+AlignmentContainer!(string[]) getLasFiles(in string dbA, in string dbB)
 {
     import std.algorithm : max;
 
@@ -661,24 +657,25 @@ AlignmentContainer!(string[]) getLasFiles(string dbA, string dbB)
 
 private
 {
-    void dalign(in string refDam, in string[] dalignerOpts)
+    void dalign(in string refDam, in string[] dalignerOpts, in string workdir)
     {
-        dalign(refDam.relativeToWorkdir, null, dalignerOpts);
+        dalign(refDam.relativeToWorkdir(workdir), null, dalignerOpts, workdir);
     }
 
-    void dalign(in string refDam, in string readsDam, in string[] dalignerOpts)
+    void dalign(in string refDam, in string readsDam, in string[] dalignerOpts, in string workdir)
     {
         executeScript(chain(only("HPC.daligner"), dalignerOpts,
-                only(refDam.relativeToWorkdir), only(readsDam.relativeToWorkdir)));
+                only(refDam.relativeToWorkdir(workdir)),
+                only(readsDam.relativeToWorkdir(workdir))), workdir);
     }
 
-    void damapper(in string refDam, in string readsDam, in string[] damapperOpts)
+    void damapper(in string refDam, in string readsDam, in string[] damapperOpts, in string workdir)
     {
         executeScript(chain(only("HPC.damapper", "-C"), damapperOpts,
-                only(refDam.relativeToWorkdir), only(readsDam.relativeToWorkdir)));
+                only(refDam.relativeToWorkdir(workdir)), only(readsDam.relativeToWorkdir(workdir))), workdir);
     }
 
-    void fasta2dam(Range)(in string outFile, Range fastaRecords)
+    void fasta2dam(Range)(in string outFile, Range fastaRecords, in string workdir)
             if (isInputRange!(Unqual!Range) && isSomeString!(ElementType!(Unqual!Range)))
     {
         import std.algorithm : each, joiner;
@@ -687,12 +684,10 @@ private
         import std.range : chunks;
 
         immutable writeChunkSize = 1024 * 1024;
-        auto outFileArg = outFile.relativeToWorkdir;
+        auto outFileArg = outFile.relativeToWorkdir(workdir);
         auto process = pipeProcess(["fasta2DAM", "-i", outFileArg],
                 Redirect.stdin, null, // env
-                Config.none, getWorkdir());
-
-        //dfmt off
+                Config.none, workdir);//dfmt off
         fastaRecords
             .joiner(only('\n'))
             .chain("\n")
@@ -710,44 +705,48 @@ private
         return;
     }
 
-    void fasta2dam(in string inFile, in string outFile)
+    void fasta2dam(in string inFile, in string outFile, in string workdir)
     {
-        executeCommand(only("fasta2DAM", outFile.relativeToWorkdir, inFile));
+        executeCommand(only("fasta2DAM", outFile.relativeToWorkdir(workdir), inFile), workdir);
     }
 
-    void dbsplit(in string dbFile, in string[] dbsplitOptions)
+    void dbsplit(in string dbFile, in string[] dbsplitOptions, in string workdir)
     {
-        executeCommand(chain(only("DBsplit"), dbsplitOptions, only(dbFile.relativeToWorkdir)));
+        executeCommand(chain(only("DBsplit"), dbsplitOptions,
+                only(dbFile.relativeToWorkdir(workdir))), workdir);
     }
 
-    void lasort(in string[] lasFiles)
+    void lasort(in string[] lasFiles, in string workdir)
     {
         import std.file : rename;
         import std.path : setExtension;
 
         alias sortedName = (lasFile) => lasFile.setExtension(".S.las");
 
-        executeCommand(chain(only("LAsort"), lasFiles));
+        executeCommand(chain(only("LAsort"), lasFiles), workdir);
         foreach (lasFile; lasFiles)
         {
             rename(sortedName(lasFile), lasFile);
         }
     }
 
-    string ladump(in string lasFile, in string dbA, in string dbB, in string[] ladumpOpts)
+    string ladump(in string lasFile, in string dbA, in string dbB,
+            in string[] ladumpOpts, in string workdir)
     {
         return executeCommand(chain(only("LAdump"), ladumpOpts,
-                only(dbA.relativeToWorkdir), only(dbB.relativeToWorkdir), only(lasFile)));
+                only(dbA.relativeToWorkdir(workdir)),
+                only(dbB.relativeToWorkdir(workdir)), only(lasFile)), workdir);
     }
 
-    string dbdump(in string dbFile, in string[] dbdumpOptions)
+    string dbdump(in string dbFile, in string[] dbdumpOptions, in string workdir)
     {
-        return executeCommand(chain(only("DBdump"), dbdumpOptions, only(dbFile.relativeToWorkdir)));
+        return executeCommand(chain(only("DBdump"), dbdumpOptions,
+                only(dbFile.relativeToWorkdir(workdir))), workdir);
     }
 
-    string dbshow(in string dbFile, in string contigId)
+    string dbshow(in string dbFile, in string contigId, in string workdir)
     {
-        return executeCommand(only("DBshow", dbFile.relativeToWorkdir, contigId));
+        return executeCommand(only("DBshow", dbFile.relativeToWorkdir(workdir), contigId), workdir);
     }
 
     size_t getNumBlocks(in string damFile)
@@ -777,28 +776,25 @@ private
         return numBlocks;
     }
 
-    string executeCommand(Range)(in Range command)
+    string executeCommand(Range)(in Range command, in string workdir = null)
             if (isInputRange!(Unqual!Range) && isSomeString!(ElementType!(Unqual!Range)))
     {
         import std.process : Config, execute;
 
         string output = command.executeWrapper!("command",
                 sCmd => execute(sCmd, null, // env
-                    Config.none, size_t.max, getWorkdir()));
-
+                    Config.none, size_t.max, workdir));
         return output;
     }
 
-    void executeScript(Range)(in Range command)
+    void executeScript(Range)(in Range command, in string workdir = null)
             if (isInputRange!(Unqual!Range) && isSomeString!(ElementType!(Unqual!Range)))
     {
         import std.process : Config, executeShell;
 
         string output = command.executeWrapper!("script",
                 sCmd => executeShell(sCmd.buildScriptLine, null, // env
-                    Config.none,
-                    size_t.max, getWorkdir()));
-
+                    Config.none, size_t.max, workdir));
         logDiagnostic(output);
     }
 
@@ -812,7 +808,6 @@ private
 
         logDiagnostic("executing " ~ type ~ ": %s", sanitizedCommand);
         auto result = execCall(sanitizedCommand);
-
         if (result.status > 0)
         {
             throw new DazzlerCommandException(
@@ -830,8 +825,8 @@ private
         return escapeShellCommand(command) ~ " | sh -sv";
     }
 
-    string relativeToWorkdir(in string fileName)
+    string relativeToWorkdir(in string fileName, in string workdir)
     {
-        return relativePath(absolutePath(fileName), absolutePath(getWorkdir()));
+        return relativePath(absolutePath(fileName), absolutePath(workdir));
     }
 }
