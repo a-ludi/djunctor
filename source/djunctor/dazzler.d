@@ -17,7 +17,8 @@ import std.array : array;
 import std.conv : to;
 import std.format : format, formattedRead;
 import std.meta : Instantiate;
-import std.path : absolutePath, buildPath, relativePath;
+import std.path : absolutePath, baseName, buildPath, dirName, relativePath,
+    stripExtension, withExtension;
 import std.range : chain, only;
 import std.range.primitives : ElementType, isInputRange;
 import std.stdio : File, writeln;
@@ -39,7 +40,6 @@ immutable damFileExtension = ".dam";
 auto getHiddenDbFiles(string dbFile)
 {
     import std.algorithm : map;
-    import std.path : baseName, buildPath, dirName, withExtension;
 
     return hiddenDbFileSuffixes.map!(suffix => buildPath(dbFile.dirName,
             "." ~ dbFile.baseName.withExtension(suffix).to!string));
@@ -83,7 +83,6 @@ enum ProvideMethod
 string provideDamFileInWorkdir(in string dbFile, ProvideMethod provideMethod)
 {
     import std.file : copy, symlink;
-    import std.path : baseName, buildPath;
     import std.range : chain, only;
 
     alias inWorkdir = anyDbFile => buildPath(getWorkdir(), anyDbFile.baseName);
@@ -578,12 +577,12 @@ unittest
         ">Sim/1/0_14 RQ=0.975\nggcccaggcagccc",
         ">Sim/3/0_11 RQ=0.975\ngagtgcagtgg",
     ];
+    // dfmt on
     struct Options
     {
         string[] dbsplitOptions;
         string workdir;
     }
-    // dfmt on
     auto options = Options([], mkdtemp("./.unittest-XXXXXX"));
     scope (exit)
         rmdirRecurse(options.workdir);
@@ -611,8 +610,6 @@ AlignmentContainer!(string[]) getLasFiles(string dbA, string dbB)
 
         this(string dbFile)
         {
-            import std.path : baseName, dirName, stripExtension;
-
             if (dbFile != null)
             {
                 this.numBlocks = getNumBlocks(dbFile);
@@ -666,18 +663,19 @@ private
 {
     void dalign(in string refDam, in string[] dalignerOpts)
     {
-        dalign(refDam, null, dalignerOpts);
+        dalign(refDam.relativeToWorkdir, null, dalignerOpts);
     }
 
     void dalign(in string refDam, in string readsDam, in string[] dalignerOpts)
     {
-        executeScript(chain(only("HPC.daligner"), dalignerOpts, only(refDam), only(readsDam)));
+        executeScript(chain(only("HPC.daligner"), dalignerOpts,
+                only(refDam.relativeToWorkdir), only(readsDam.relativeToWorkdir)));
     }
 
     void damapper(in string refDam, in string readsDam, in string[] damapperOpts)
     {
         executeScript(chain(only("HPC.damapper", "-C"), damapperOpts,
-                only(refDam), only(readsDam)));
+                only(refDam.relativeToWorkdir), only(readsDam.relativeToWorkdir)));
     }
 
     void fasta2dam(Range)(in string outFile, Range fastaRecords)
@@ -689,7 +687,7 @@ private
         import std.range : chunks;
 
         immutable writeChunkSize = 1024 * 1024;
-        auto outFileArg = getRelativeToWorkdir(outFile);
+        auto outFileArg = outFile.relativeToWorkdir;
         auto process = pipeProcess(["fasta2DAM", "-i", outFileArg],
                 Redirect.stdin, null, // env
                 Config.none, getWorkdir());
@@ -714,12 +712,12 @@ private
 
     void fasta2dam(in string inFile, in string outFile)
     {
-        executeCommand(only("fasta2DAM", getRelativeToWorkdir(outFile), inFile));
+        executeCommand(only("fasta2DAM", outFile.relativeToWorkdir, inFile));
     }
 
     void dbsplit(in string dbFile, in string[] dbsplitOptions)
     {
-        executeCommand(chain(only("DBsplit"), dbsplitOptions, only(getRelativeToWorkdir(dbFile))));
+        executeCommand(chain(only("DBsplit"), dbsplitOptions, only(dbFile.relativeToWorkdir)));
     }
 
     void lasort(in string[] lasFiles)
@@ -738,18 +736,18 @@ private
 
     string ladump(in string lasFile, in string dbA, in string dbB, in string[] ladumpOpts)
     {
-        return executeCommand(chain(only("LAdump"), ladumpOpts, only(dbA),
-                only(dbB), only(lasFile)));
+        return executeCommand(chain(only("LAdump"), ladumpOpts,
+                only(dbA.relativeToWorkdir), only(dbB.relativeToWorkdir), only(lasFile)));
     }
 
     string dbdump(in string dbFile, in string[] dbdumpOptions)
     {
-        return executeCommand(chain(only("DBdump"), dbdumpOptions, only(dbFile)));
+        return executeCommand(chain(only("DBdump"), dbdumpOptions, only(dbFile.relativeToWorkdir)));
     }
 
     string dbshow(in string dbFile, in string contigId)
     {
-        return executeCommand(only("DBshow", dbFile, contigId));
+        return executeCommand(only("DBshow", dbFile.relativeToWorkdir, contigId));
     }
 
     size_t getNumBlocks(in string damFile)
@@ -832,7 +830,7 @@ private
         return escapeShellCommand(command) ~ " | sh -sv";
     }
 
-    string getRelativeToWorkdir(in string fileName)
+    string relativeToWorkdir(in string fileName)
     {
         return relativePath(absolutePath(fileName), absolutePath(getWorkdir()));
     }
