@@ -122,6 +122,10 @@ struct Options
     @Help("list of options to pass to `damapper`")
     string[] damapperOptions = [];
 
+    @Option("daccord-options")
+    @Help("list of options to pass to `daccord`")
+    string[] daccordOptions = [];
+
     @Option("dbsplit-options")
     @Help("list of options to pass to `DBsplit`")
     string[] dbsplitOptions = [];
@@ -134,6 +138,16 @@ struct Options
         "-d", // output number of differences for each local alignment
         "-l", // output lengths of the contigs
         "-o", // output proper overlaps only
+    ];
+    // dfmt on
+
+    /// List of options to pass to `DBdump`
+    @Option()
+    // dfmt off
+    string[] dbdumpOptions = [
+        "-r", // read number
+        "-h", // original file name string (header) and location: well, pulse start, pulse end
+        "-s", // sequence string
     ];
     // dfmt on
 

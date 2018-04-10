@@ -15,14 +15,16 @@ import djunctor.util.tempfile : mkstemp;
 import std.algorithm : equal, map, joiner, sort, splitter, SwapStrategy;
 import std.array : array;
 import std.conv : to;
+import std.file : remove;
 import std.format : format, formattedRead;
 import std.meta : Instantiate;
 import std.path : absolutePath, baseName, buildPath, dirName, relativePath,
     stripExtension, withExtension;
-import std.range : chain, only;
+import std.process : escapeShellCommand;
+import std.range : chain, drop, only;
 import std.range.primitives : ElementType, isInputRange;
 import std.stdio : File, writeln;
-import std.string : outdent;
+import std.string : lineSplitter, outdent;
 import std.traits : hasMember, isIntegral, isSomeString, Unqual;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
 
@@ -153,7 +155,6 @@ private auto readAlignmentList(S)(in S lasDump) if (isSomeString!S)
 {
     import std.algorithm : chunkBy, count, filter;
     import std.range : chunks, drop, enumerate;
-    import std.string : lineSplitter;
 
     immutable recordSeparator = ';';
     immutable chainPartFormat = "P %d %d %c %c;L %d %d;C %d %d %d %d;D %d";
@@ -425,7 +426,6 @@ private auto readDbDump(S, Range)(in S dbDump, Range recordNumbers, in size_t li
     import std.algorithm : count, filter, sort;
     import std.array : appender;
     import std.range : chunks, drop;
-    import std.string : lineSplitter;
 
     immutable lineSeparator = '\n';
     immutable subrecordSeparator = ';';
@@ -540,8 +540,6 @@ string buildDamFile(Range, Options)(Range fastaRecords, Options options)
         if (hasOption!(Options, "dbsplitOptions", isOptionsList) && hasOption!(Options, "workdir",
             isSomeString) && isInputRange!Range && isSomeString!(ElementType!Range))
 {
-    import std.file : remove;
-
     immutable tempDbNameTemplate = "auxiliary-XXXXXX";
 
     auto tempDbTemplate = buildPath(options.workdir, tempDbNameTemplate);
@@ -586,6 +584,58 @@ unittest
     }
 }
 
+string[] getConsensus(Options)(in string dbFile, in Options options)
+        if (hasOption!(Options, "daccordOptions", isOptionsList) && hasOption!(Options,
+            "dalignerOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
+{
+    dalign(dbFile, options.dalignerOptions, options.workdir);
+
+    // dfmt off
+    return getLasFiles(dbFile)
+        .a2b
+        .map!(lasFile => daccord(dbFile, lasFile, options.daccordOptions, options.workdir))
+        .array;
+    // dfmt on
+}
+
+unittest
+{
+    import djunctor.util.tempfile : mkdtemp;
+    import std.file : rmdirRecurse, isFile;
+
+    // dfmt off
+    auto fastaRecords = [
+        ">Sim/1/0_1050 RQ=0.975\nattTgaggcatcagccactgcacccagccttgtgccctttctgagagccgggaagatgctcccaggagccctcg\nggaggcttccctccggtcgtcgtggccagaattgtctcctgctcgtgtggagtcggtggcgggccaggcgaatg\nggagctaccggggctgccgctttggactgctcggcatttgccccatggggctgcacaggggcccaggctggctg\nagaatgtccctgggtccaggaggcagacggaggtacagcccagcagccaggaggtgttcaggatgttccccagt\ncagcacccgtggaggggagggaggaggcagggtgggcgaggaaggtccaacagtggacggcctgcccacaagag\nagctctgagctgggagctggcagagttgctgcaagtgggtgtgggccaggactgactgggcctgtgcacctgcc\ntggatgcatcagtggtcgtggtgctgcccgggaagggcgtgaagctccctgcagccaaggatcctggaggtgca\ngacatcacccagcccaccggacaacagcctgccctacttcgaggagctctgggcagcccagccccatgtccccc\ntcacgccccaccccacactgacaaaaagaccacaggattccaacagtccaaccagggggaggccgttgaattcg\nggggacaaccagaaacgcctgaaacagagataaagagactgatatggaaaagactgggctggcatggtggctcc\ncaactgggatcccagtgcttgtgagaggccgaggcgggaggatcacttgagcccagaagttcaagaccagcgtg\nggcaacatagtgagaccccgtctcttttaaaaatccttttttaattaggcaggcataggtagttgcgtgcctgc\nttttcccagctgctagggaggtagaggcaggagaatcacgggagtttcgaagtccaaggtcacagtgagctgtg\nattgcaccactgcactccagcctgggcaacatggcaagaccccatctctaaaagaaagaaacaagaagacatgg\nagagaaatatccaa",
+        ">Sim/2/0_1050 RQ=0.975\nattagagCcatcagccactgcacccagccttgtgccctttctgagagccgggaagatgctcccaggagccctcg\nggaggcttccctccggtcgtcgtggccagaattgtctcctgctcgtgtggagtcggtggcgggccaggcgaatg\nggagctaccggggctgccgctttggactgctcggcatttgccccatggggctgcacaggggcccaggctggctg\nagaatgtccctgggtccaggaggcagacggaggtacagcccagcagccaggaggtgttcaggatgttccccagt\ncagcacccgtggaggggagggaggaggcagggtgggcgaggaaggtccaacagtggacggcctgcccacaagag\nagctctgagctgggagctggcagagttgctgcaagtgggtgtgggccaggactgactgggcctgtgcacctgcc\ntggatgcatcagtggtcgtggtgctgcccgggaagggcgtgaagctccctgcagccaaggatcctggaggtgca\ngacatcacccagcccaccggacaacagcctgccctacttcgaggagctctgggcagcccagccccatgtccccc\ntcacgccccaccccacactgacaaaaagaccacaggattccaacagtccaaccagggggaggccgttgaattcg\nggggacaaccagaaacgcctgaaacagagataaagagactgatatggaaaagactgggctggcatggtggctcc\ncaactgggatcccagtgcttgtgagaggccgaggcgggaggatcacttgagcccagaagttcaagaccagcgtg\nggcaacatagtgagaccccgtctcttttaaaaatccttttttaattaggcaggcataggtagttgcgtgcctgc\nttttcccagctgctagggaggtagaggcaggagaatcacgggagtttcgaagtccaaggtcacagtgagctgtg\nattgcaccactgcactccagcctgggcaacatggcaagaccccatctctaaaagaaagaaacaagaagacatgg\nagagaaatatccaa",
+        ">Sim/3/0_1050 RQ=0.975\nattagaggcatcagccactgcacccagccttgtgccctttctgagagccgggaagatgctcccaggagccctcg\nggaggcttccctccggtcgtcgtggccagaattgtctcctgctcgtgtggagtcggtggcgggccaggcgaatg\nggagctaccggggctgccgctttggactgctcggcatttgccccatggggctgcacaggggcccaggctggctg\nagaatgtccctgggtccaggaggcagacggaggtacagcccagcagccaggaggtgttcaggatgttccccagt\ncagcacccgtggaggggagggaggaggcagggtgggcgaggaaggtccaacagtggacggcctgcccacaagag\nagctctgagctgggagctggcagagttgctgcaagtgggtgtgggccaggactgactgggcctgtgcacctgcc\ntggatgcatcagtggtcgtggtgctgcccgggaagggcgtgaagctccctgcagccaaggatcctggaggtgca\ngacatcacccagcccaccggacaacagcctgccctacttcgaggagctctgggcagcccagccccatgtccccc\ntcacgccccaccccacactgacaaaaagaccacaggattccaacagtccaaccagggggaggccgttgaattcg\nggggacaaccagaaacgcctgaaacagagataaagagactgatatggaaaagactgggctggcatggtggctcc\ncaactgggatcccagtgcttgtgagaggccgaggcgggaggatcacttgagcccagaagttcaagaccagcgtg\nggcaacatagtgagaccccgtctcttttaaaaatccttttttaattaggcaggcataggtagttgcgtgcctgc\nttttcccagctgctagggaggtagaggcaggagaatcacgggagtttcgaagtccaaggtcacagtgagctgtg\nattgcaccactgcactccagcctgggcaacatggcaagaccccatctctaaaagaaagaaacaagaagacatgg\nagagaaatatccaa",
+    ];
+
+    // dfmt on
+    struct Options
+    {
+        string[] dbsplitOptions;
+        string[] dalignerOptions;
+        string[] daccordOptions;
+        string[] dbdumpOptions;
+        size_t fastaLineWidth;
+        string workdir;
+    }
+
+    auto tmpDir = mkdtemp("./.unittest-XXXXXX");
+    auto options = Options([], ["-l15"], [], ["-r", "-h", "-s"], 74, tmpDir);
+    scope (exit)
+        rmdirRecurse(tmpDir);
+
+    string dbName = buildDamFile(fastaRecords[], options);
+    string[] consensusDbs = getConsensus(dbName, options);
+    assert(consensusDbs.length >= 1);
+    auto consensusFasta = getFastaEntries(consensusDbs[0], cast(size_t[])[], options);
+    auto expectedSequence = fastaRecords[$ - 1].lineSplitter.drop(1).joiner.array;
+    auto consensusSequence = consensusFasta.front()().lineSplitter.drop(1).joiner.array;
+
+    assert(expectedSequence == consensusSequence);
+}
+
 AlignmentContainer!(string[]) getLasFiles(in string dbA)
 {
     return getLasFiles(dbA, null);
@@ -621,8 +671,8 @@ AlignmentContainer!(string[]) getLasFiles(in string dbA, in string dbB)
         }
     }
 
-    immutable singleFileTemplate = "%s.las";
-    immutable twoFileTemplate = "%s.%s.las";
+    immutable singleFileTemplate = "%s/%s.las";
+    immutable twoFileTemplate = "%s/%s.%s.las";
     auto aOptions = InferredParams(dbA);
     auto bOptions = InferredParams(dbB);
     size_t numLasFilesPerList = aOptions.numBlocks * max(1, bOptions.numBlocks);
@@ -637,14 +687,14 @@ AlignmentContainer!(string[]) getLasFiles(in string dbA, in string dbB)
             foreach (size_t j; 0 .. bOptions.numBlocks)
             {
                 fileLists.a2b[i * bOptions.numBlocks + j] = format!twoFileTemplate(
-                        aOptions.fileNamePart(i), bOptions.fileNamePart(j));
+                        aOptions.directory, aOptions.fileNamePart(i), bOptions.fileNamePart(j));
                 fileLists.b2a[i * bOptions.numBlocks + j] = format!twoFileTemplate(
-                        bOptions.fileNamePart(j), aOptions.fileNamePart(i));
+                        bOptions.directory, bOptions.fileNamePart(j), aOptions.fileNamePart(i));
             }
         }
         else
         {
-            fileLists.a2b[i] = fileLists.b2a[i] = format!singleFileTemplate(
+            fileLists.a2b[i] = fileLists.b2a[i] = format!singleFileTemplate(aOptions.directory,
                     aOptions.fileNamePart(i));
         }
     }
@@ -656,7 +706,7 @@ private
 {
     void dalign(in string refDam, in string[] dalignerOpts, in string workdir)
     {
-        dalign(refDam.relativeToWorkdir(workdir), null, dalignerOpts, workdir);
+        dalign(refDam, null, dalignerOpts, workdir);
     }
 
     void dalign(in string refDam, in string readsDam, in string[] dalignerOpts, in string workdir)
@@ -670,6 +720,26 @@ private
     {
         executeScript(chain(only("HPC.damapper", "-C"), damapperOpts,
                 only(refDam.relativeToWorkdir(workdir)), only(readsDam.relativeToWorkdir(workdir))), workdir);
+    }
+
+    string daccord(in string dbFile, in string lasFile, in string[] daccordOpts, in string workdir)
+    {
+        alias esc = escapeShellCommand;
+        string daccordedDb = dbFile.stripExtension.to!string ~ "-daccord.dam";
+
+        // dfmt off
+        executeShell(chain(
+            only("daccord"),
+            only(esc(daccordOpts)),
+            only(esc(lasFile.relativeToWorkdir(workdir))),
+            only(esc(dbFile.relativeToWorkdir(workdir))),
+            only("|"),
+            only("fasta2DAM", "-i"),
+            only(esc(daccordedDb.relativeToWorkdir(workdir))),
+        ), workdir);
+        // dfmt on
+
+        return daccordedDb;
     }
 
     void fasta2dam(Range)(in string outFile, Range fastaRecords, in string workdir)
@@ -784,6 +854,18 @@ private
         return output;
     }
 
+    void executeShell(Range)(in Range command, in string workdir = null)
+            if (isInputRange!(Unqual!Range) && isSomeString!(ElementType!(Unqual!Range)))
+    {
+        import std.algorithm : joiner;
+        import std.process : Config, executeShell;
+
+        string output = command.executeWrapper!("shell",
+                sCmd => executeShell(sCmd.joiner(" ").array.to!string, null, // env
+                    Config.none, size_t.max, workdir));
+        logDiagnostic(output);
+    }
+
     void executeScript(Range)(in Range command, in string workdir = null)
             if (isInputRange!(Unqual!Range) && isSomeString!(ElementType!(Unqual!Range)))
     {
@@ -817,8 +899,6 @@ private
 
     string buildScriptLine(in string[] command)
     {
-        import std.process : escapeShellCommand;
-
         return escapeShellCommand(command) ~ " | sh -sv";
     }
 
