@@ -104,7 +104,14 @@ void log(T...)(LogLevel level, string fmt, lazy T args) nothrow
     {
         auto txt = appender!string();
         txt.reserve(256);
-        formattedWrite(txt, fmt, args);
+        static if (args.length > 0)
+        {
+            formattedWrite(txt, fmt, args);
+        }
+        else
+        {
+            txt ~= fmt;
+        }
 
         if (level >= minLevel)
         {
