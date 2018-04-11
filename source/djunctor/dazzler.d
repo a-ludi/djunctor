@@ -11,8 +11,10 @@ module djunctor.dazzler;
 import djunctor.commandline : hasOption, isOptionsList;
 import djunctor.djunctor : AlignmentChain, AlignmentContainer;
 import djunctor.util.log;
+import djunctor.util.range : arrayChunks;
 import djunctor.util.tempfile : mkstemp;
-import std.algorithm : equal, map, joiner, sort, splitter, SwapStrategy;
+import std.algorithm : endsWith, equal, filter, map, joiner, sort, splitter,
+    startsWith, SwapStrategy;
 import std.array : array;
 import std.conv : to;
 import std.file : remove;
@@ -20,12 +22,13 @@ import std.format : format, formattedRead;
 import std.meta : Instantiate;
 import std.path : absolutePath, baseName, buildPath, dirName, relativePath,
     stripExtension, withExtension;
-import std.process : escapeShellCommand;
+import std.process : Config, escapeShellCommand, pipeProcess, ProcessPipes,
+    Redirect;
 import std.range : chain, drop, only;
-import std.range.primitives : ElementType, isInputRange;
+import std.range.primitives : ElementType, empty, isInputRange;
 import std.stdio : File, writeln;
 import std.string : lineSplitter, outdent;
-import std.traits : hasMember, isIntegral, isSomeString, Unqual;
+import std.traits : hasMember, isIntegral, isSomeChar, isSomeString, Unqual;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
 
 /// File suffixes of hidden DB files.
@@ -420,8 +423,9 @@ auto getFastaEntries(Options, Range)(in string dbFile, Range recordNumbers, in O
             recordNumbers, options.fastaLineWidth);
 }
 
-private auto readDbDump(S, Range)(in S dbDump, Range recordNumbers, in size_t lineLength)
-        if (isSomeString!S && isInputRange!Range && is(ElementType!Range == size_t))
+private auto readDbDump(S, Range)(S dbDump, Range recordNumbers, in size_t lineLength)
+        if (isInputRange!S && isSomeString!(ElementType!S)
+            && isInputRange!Range && is(ElementType!Range == size_t))
 {
     import std.algorithm : count, filter, sort;
     import std.array : appender;
@@ -434,7 +438,7 @@ private auto readDbDump(S, Range)(in S dbDump, Range recordNumbers, in size_t li
 
     auto sortedRecordNumbers = recordNumbers.sort;
     /// Build chunks of numRecordLines lines.
-    alias byRecordSplitter = dbDump => dbDump.lineSplitter.drop(6).chunks(numRecordLines);
+    alias byRecordSplitter = dbDump => dbDump.drop(6).arrayChunks(numRecordLines);
     /// Parse chunks of numRecordLines lines into FASTA format.
     alias parseRecord = recordLines => {
         size_t recordNumber;
@@ -446,10 +450,10 @@ private auto readDbDump(S, Range)(in S dbDump, Range recordNumbers, in size_t li
         size_t sequenceLength;
         string sequence;
 
-        auto joinedLines = recordLines.joiner(only(subrecordSeparator));
+        auto joinedLines = recordLines.joiner(only(subrecordSeparator)).array;
+
         // dfmt off
         int numMatches = joinedLines
-            .array
             .formattedRead!recordFormat(
                 recordNumber,
                 headerLineLength,
@@ -465,7 +469,7 @@ private auto readDbDump(S, Range)(in S dbDump, Range recordNumbers, in size_t li
 
         // skip unwanted records
         if (sortedRecordNumbers.length > 0 && !sortedRecordNumbers.contains(recordNumber))
-            return "";
+            return null;
 
         auto fastaData = appender!string;
         fastaData.reserve(headerLine.length + sequence.length + sequence.length / lineLength + 1);
@@ -476,7 +480,7 @@ private auto readDbDump(S, Range)(in S dbDump, Range recordNumbers, in size_t li
         return fastaData.data;
     };
 
-    return byRecordSplitter(dbDump).map!parseRecord.filter!`a() != ""`;
+    return byRecordSplitter(dbDump).map!parseRecord.map!"a()".filter!`!(a is null)`;
 }
 
 unittest
@@ -512,7 +516,7 @@ EOF".outdent;
 
     {
         size_t[] recordIds = [];
-        auto fastaEntries = readDbDump(testDbDump, recordIds, 50).map!"a()".array;
+        auto fastaEntries = readDbDump(testDbDump.lineSplitter, recordIds, 50).array;
         // dfmt off
         assert(fastaEntries == [
             ">Sim/1/0_14 RQ=0.975\nggcccaggcagccc",
@@ -520,17 +524,17 @@ EOF".outdent;
             ">Sim/3/0_11 RQ=0.975\ngagtgcagtgg",
             ">Sim/4/0_4 RQ=0.975\ngagc",
             ">Sim/5/0_60 RQ=0.975\ngagcgagcgagcgagcgagcgagcgagcgagcgagcgagcgagcgagcga\ngcgagcgagc",
-        ]);
+        ], fastaEntries.to!string);
         // dfmt on
     }
     {
         size_t[] recordIds = [1, 3];
-        auto fastaEntries = readDbDump(testDbDump, recordIds, 50).map!"a()".array;
+        auto fastaEntries = readDbDump(testDbDump.lineSplitter, recordIds, 50).array;
         // dfmt off
         assert(fastaEntries == [
             ">Sim/1/0_14 RQ=0.975\nggcccaggcagccc",
             ">Sim/3/0_11 RQ=0.975\ngagtgcagtgg",
-        ]);
+        ], fastaEntries.to!string);
         // dfmt on
     }
 }
@@ -805,10 +809,63 @@ private
                 only(dbB.relativeToWorkdir(workdir)), only(lasFile)), workdir);
     }
 
-    string dbdump(in string dbFile, in string[] dbdumpOptions, in string workdir)
+    auto dbdump(in string dbFile, in string[] dbdumpOptions, in string workdir)
     {
-        return executeCommand(chain(only("DBdump"), dbdumpOptions,
-                only(dbFile.relativeToWorkdir(workdir))), workdir);
+        static struct DBDump
+        {
+            static immutable lineTerminator = "\n";
+
+            const string dbFile;
+            const string[] dbdumpOptions;
+            const string workdir;
+            ProcessPipes dbdump;
+            string currentLine;
+
+            private void assertInitialized()
+            {
+                if (!(dbdump.pid is null))
+                    return;
+
+                auto command = chain(only("DBdump"), dbdumpOptions,
+                        only(dbFile.relativeToWorkdir(workdir)));
+                dbdump = pipeProcess(command.array, Redirect.stdout, null, Config.none, workdir);
+
+                popFront();
+            }
+
+            void popFront()
+            {
+                import std.string : stripRight;
+
+                assertInitialized();
+                currentLine = dbdump.stdout.readln();
+
+                if (currentLine.empty)
+                {
+                    dbdump.stdout.detach();
+                    currentLine = null;
+                }
+
+                if (currentLine.endsWith(lineTerminator))
+                    currentLine = currentLine[0 .. $ - lineTerminator.length];
+            }
+
+            @property string front()
+            {
+                assertInitialized();
+
+                return currentLine;
+            }
+
+            @property bool empty()
+            {
+                assertInitialized();
+
+                return currentLine is null;
+            }
+        }
+
+        return DBDump(dbFile, dbdumpOptions, workdir);
     }
 
     string dbshow(in string dbFile, in string contigId, in string workdir)
@@ -818,8 +875,6 @@ private
 
     size_t getNumBlocks(in string damFile)
     {
-        import std.algorithm : filter, startsWith;
-
         // see also in dazzler's DB.h:394
         //     #define DB_NBLOCK "blocks = %9d\n"  //  number of blocks
         immutable blockNumFormat = "blocks = %d";
