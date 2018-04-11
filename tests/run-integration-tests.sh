@@ -28,6 +28,10 @@ function init_script()
 
 function clean_up()
 {
+    cp "$OUTPUT_LOG" ./integration-tests.log
+    echo
+    echo "output copied to ./integration-tests.log"
+
     rm -rf "$WORKDIR"
 }
 
@@ -81,10 +85,6 @@ function do_tests()
         do
             echo "    $failed_test_case"
         done
-
-        cp "$OUTPUT_LOG" ./integration-tests.log
-        echo
-        echo "output copied to ./integration-tests.log"
     fi
 }
 
