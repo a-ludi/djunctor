@@ -7,3 +7,4 @@ license "MIT"
 preGenerateCommands "find source/ -name '*.d' -type f -exec dfmt -i {} \\;"
 
 dependency "darg" version="~>0.0.4"
+dependency "vibe-d:data" version="~>0.8.4-alpha.1"

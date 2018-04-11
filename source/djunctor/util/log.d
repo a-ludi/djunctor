@@ -11,6 +11,7 @@ module djunctor.util.log;
 import std.array;
 import std.datetime;
 import std.format;
+import std.range;
 import std.stdio;
 import core.thread;
 
@@ -33,6 +34,86 @@ LogLevel getLogLevel()
 bool shouldLog(LogLevel level)
 {
     return level >= minLevel;
+}
+
+/**
+    Logs a message in JSON format.
+    Params:
+        args = pairs of `name` (`string`) and `value`
+*/
+void logJsonDebug(T...)(lazy T args) nothrow
+{
+    logJson(LogLevel.debug_, args);
+}
+/// ditto
+void logJsonDiagnostic(T...)(lazy T args) nothrow
+{
+    logJson(LogLevel.diagnostic, args);
+}
+/// ditto
+void logJsonInfo(T...)(lazy T args) nothrow
+{
+    logJson(LogLevel.info, args);
+}
+/// ditto
+void logJsonWarn(T...)(lazy T args) nothrow
+{
+    logJson(LogLevel.warn, args);
+}
+/// ditto
+void logJsonError(T...)(lazy T args) nothrow
+{
+    logJson(LogLevel.error, args);
+}
+
+/// ditto
+void logJson(T...)(LogLevel level, lazy T args) nothrow
+{
+    import djunctor.util.range : Chunks, chunks;
+    import std.traits : isSomeString;
+    import vibe.data.json : Json;
+
+    if (level < minLevel)
+        return;
+
+    try
+    {
+        Json json = Json.emptyObject;
+
+        static foreach (KeyValuePair; Chunks!(2, T))
+        {
+            static assert(isSomeString!(KeyValuePair.chunks[0]), "missing name");
+        }
+
+        foreach (keyValuePair; args.chunks!2)
+        {
+            json[keyValuePair[0]] = keyValuePair[1];
+        }
+
+        return log(level, json.to!string);
+    }
+    catch (Exception e)
+    {
+        // this is bad but what can we do..
+        debug assert(false, e.msg);
+    }
+}
+
+///
+unittest
+{
+    import std.stdio : File, stderr;
+
+    auto origStderr = stderr;
+    stderr = File.tmpfile();
+
+    logJsonError("error", "mysterious observation", "secret", 42);
+
+    stderr.rewind();
+    auto expected = `{"secret":42,"error":"mysterious observation"}` ~ '\n';
+    auto observed = stderr.readln;
+
+    assert(observed == expected, "got unexpected output `" ~ observed ~ "`");
 }
 
 /**

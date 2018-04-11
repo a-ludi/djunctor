@@ -1,6 +1,8 @@
 {
 	"fileVersion": 1,
 	"versions": {
-		"darg": "0.0.4"
+		"darg": "0.0.4",
+		"stdx-allocator": "2.77.1",
+		"vibe-d": "0.8.4-alpha.1"
 	}
 }
