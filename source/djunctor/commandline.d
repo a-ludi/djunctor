@@ -130,6 +130,10 @@ struct Options
     @Help("list of options to pass to `DBsplit`")
     string[] dbsplitOptions = [];
 
+    @Option("fastaLineWidth")
+    @Help("list of options to pass to `DBsplit`")
+    size_t fastaLineWidth = 50;
+
     /// List of options to pass to `LAdump`
     @Option()
     // dfmt off
