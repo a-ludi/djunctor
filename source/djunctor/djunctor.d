@@ -1437,6 +1437,8 @@ class DJunctor
     private void logFillingInfo(string step, string type, string readState)(in PileUp[] readsByContig)
             if (type == "extension" || type == "span")
     {
+        immutable lengthFilter = type == "extension" ? "a.length == 1" : "a.length == 2";
+
         // dfmt off
         logJsonDiagnostic(
             "step", step,
@@ -1445,6 +1447,7 @@ class DJunctor
             "numGaps", readsByContig.length,
             "estimateLengths", readsByContig
                 .map!(readsByGap => readsByGap
+                    .filter!lengthFilter
                     .map!estimateSize
                     .array
                     .mean)
