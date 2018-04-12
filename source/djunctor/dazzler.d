@@ -22,8 +22,8 @@ import std.format : format, formattedRead;
 import std.meta : Instantiate;
 import std.path : absolutePath, baseName, buildPath, dirName, relativePath,
     stripExtension, withExtension;
-import std.process : Config, escapeShellCommand, pipeProcess, ProcessPipes,
-    Redirect;
+import std.process : Config, escapeShellCommand, kill, pipeProcess,
+    ProcessPipes, Redirect, wait;
 import std.range : chain, drop, only;
 import std.range.primitives : ElementType, empty, isInputRange;
 import std.stdio : File, writeln;
@@ -847,6 +847,32 @@ private
             ProcessPipes dbdump;
             string currentLine;
 
+            ~this()
+            {
+                if (!(dbdump.pid is null))
+                    releaseProcess();
+            }
+
+            void releaseProcess()
+            {
+                if (!dbdump.stdout.isOpen)
+                    return;
+
+                dbdump.stdout.close();
+
+                version (Posix)
+                {
+                    import core.sys.posix.signal : SIGKILL;
+
+                    dbdump.pid.kill(SIGKILL);
+                }
+                else
+                {
+                    static assert(0, "Only intended for use on POSIX compliant OS.");
+                }
+                dbdump.pid.wait();
+            }
+
             private void assertInitialized()
             {
                 if (!(dbdump.pid is null))
@@ -868,8 +894,8 @@ private
 
                 if (currentLine.empty)
                 {
-                    dbdump.stdout.detach();
                     currentLine = null;
+                    releaseProcess();
                 }
 
                 if (currentLine.endsWith(lineTerminator))
@@ -887,11 +913,20 @@ private
             {
                 assertInitialized();
 
-                return currentLine is null;
+                if (currentLine is null)
+                {
+                    releaseProcess();
+
+                    return true;
+                }
+                else
+                {
+                    return false;
+                }
             }
         }
 
-        return DBDump(dbFile, dbdumpOptions, workdir);
+        return new DBDump(dbFile, dbdumpOptions, workdir);
     }
 
     string dbshow(in string dbFile, in string contigId, in string workdir)
