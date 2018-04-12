@@ -127,7 +127,7 @@ private auto processGeneratedLasFiles(Options)(in string dbA, in string dbB, in 
         if (hasOption!(Options, "ladumpOptions", isOptionsList)
             && hasOption!(Options, "workdir", isSomeString))
 {
-    auto lasFileLists = getLasFiles(dbA, dbB);
+    auto lasFileLists = getLasFiles(dbA, dbB, options.workdir);
     AlignmentContainer!(AlignmentChain[]) results;
 
     // TODO prevent double execution if dbB == null
@@ -648,12 +648,12 @@ unittest
             format!"expected %s but got %s"(expectedSequence, consensusSequence));
 }
 
-AlignmentContainer!(string[]) getLasFiles(in string dbA)
+AlignmentContainer!(string[]) getLasFiles(in string dbA, in string baseDirectory)
 {
-    return getLasFiles(dbA, null);
+    return getLasFiles(dbA, null, baseDirectory);
 }
 
-AlignmentContainer!(string[]) getLasFiles(in string dbA, in string dbB)
+AlignmentContainer!(string[]) getLasFiles(in string dbA, in string dbB, in string baseDirectory)
 {
     import std.algorithm : max;
 
@@ -698,15 +698,15 @@ AlignmentContainer!(string[]) getLasFiles(in string dbA, in string dbB)
         {
             foreach (size_t j; 0 .. bOptions.numBlocks)
             {
-                fileLists.a2b[i * bOptions.numBlocks + j] = format!twoFileTemplate(
-                        aOptions.directory, aOptions.fileNamePart(i), bOptions.fileNamePart(j));
-                fileLists.b2a[i * bOptions.numBlocks + j] = format!twoFileTemplate(
-                        bOptions.directory, bOptions.fileNamePart(j), aOptions.fileNamePart(i));
+                fileLists.a2b[i * bOptions.numBlocks + j] = format!twoFileTemplate(baseDirectory,
+                        aOptions.fileNamePart(i), bOptions.fileNamePart(j));
+                fileLists.b2a[i * bOptions.numBlocks + j] = format!twoFileTemplate(baseDirectory,
+                        bOptions.fileNamePart(j), aOptions.fileNamePart(i));
             }
         }
         else
         {
-            fileLists.a2b[i] = fileLists.b2a[i] = format!singleFileTemplate(aOptions.directory,
+            fileLists.a2b[i] = fileLists.b2a[i] = format!singleFileTemplate(baseDirectory,
                     aOptions.fileNamePart(i));
         }
     }
@@ -814,8 +814,8 @@ private
             in string[] ladumpOpts, in string workdir)
     {
         return executeCommand(chain(only("LAdump"), ladumpOpts,
-                only(dbA.relativeToWorkdir(workdir)),
-                only(dbB.relativeToWorkdir(workdir)), only(lasFile)), workdir);
+                only(dbA.relativeToWorkdir(workdir)), only(dbB.relativeToWorkdir(workdir)),
+                only(lasFile.relativeToWorkdir(workdir))), workdir);
     }
 
     auto dbdump(in string dbFile, in string[] dbdumpOptions, in string workdir)
