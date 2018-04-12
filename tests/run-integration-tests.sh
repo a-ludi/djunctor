@@ -13,7 +13,8 @@ TEST_DATA_ARCHIVE="integration-tests.tar.gz"
 TEST_DATA_READS="integration-tests/reads"
 TEST_DATA_REF="integration-tests/reference"
 TEST_DATA_MODREF="integration-tests/reference_mod"
-DJUNCTOR_OPTS=(-v -v -v)
+DJUNCTOR_OPTS=(-v -v -v --input-provide-method copy)
+JQ_DEFS=''
 
 function init_script()
 {
@@ -24,13 +25,14 @@ function init_script()
     TEST_ROOT="$(dirname "$(realpath "$0")")"
     WORKDIR="$(mktemp --tmpdir -d djunctor-integration-tests.XXXXXX)"
     OUTPUT_LOG="$WORKDIR/output.log"
+    LOG_COPY="./integration-tests.log"
 }
 
 function clean_up()
 {
-    cp "$OUTPUT_LOG" ./integration-tests.log
+    cp "$OUTPUT_LOG" "$LOG_COPY"
     echo
-    echo "output copied to ./integration-tests.log"
+    echo "output copied to $LOG_COPY"
 
     rm -rf "$WORKDIR"
 }
@@ -107,12 +109,19 @@ function main()
 # Test Helpers
 #-----------------------------------------------------------------------------
 
-function expect_line_present()
+function expect_json()
 {
-    if ! grep -qP "$1" < "$OUTPUT_LOG"; then
-        echo "expected '$1' to be in the output"
+    local OBSERVED="$(grep '^{' "$OUTPUT_LOG" | jq --sort-keys --slurp "$JQ_DEFS map(select($1))")"
 
-        false
+    if ! jq --exit-status "$JQ_DEFS $2" &> /dev/null <<<"$OBSERVED"; then
+        echo "expected: $2"
+        echo "observed: $OBSERVED"
+
+        if [[ -n "$3" ]]; then
+            echo "debug: $(jq "$3" <<< "$OBSERVED")"
+        fi
+
+        return 1
     fi
 }
 
@@ -123,20 +132,26 @@ function expect_line_present()
 
 function test_extension_found()
 {
-    expect_line_present 'extending 5 contigs'
-    expect_line_present 'extending size \(raw averages\): \[2639, 4455, 3611, 5385, 1306\]'
+    expect_json \
+        '. | has("estimateLengths") and .type == "extension" and .step == "findHits" and .readState == "raw"' \
+        'length == 1 and .[0].estimateLengths == [1851, 3898, 3249, 5485, 2175] and  .[0].numReads == [20, 55, 54, 42, 28]'
 }
 
 function test_gaps_found()
 {
-    expect_line_present 'spanning 3 gaps'
-    expect_line_present 'spanning size \(raw averages\): \[4154, 8563, 5082\]'
+    expect_json \
+        '. | has("estimateLengths") and .type == "span" and .step == "findHits" and .readState == "raw" and .numGaps > 1' \
+        'length == 1 and .[0].estimateLengths == [4156, 8561, 5064] and .[0].numReads == [38, 6, 4]'
+    expect_json \
+        '. | has("estimateLengths") and .type == "span" and .step == "findHits" and .readState == "consensus" and .numGaps == 1' \
+        '(map(.estimateLengths) | flatten == [4100, 8450, 5003]) and (map(.numReads) | flatten == [36, 6, 4])'
 }
 
 function test_number_of_iterations()
 {
-    expect_line_present 'i: 0'
-    ! expect_line_present 'i: 1'
+    expect_json \
+        '. | has("iteration")' \
+        '. | max_by(.iteration).iteration == 0'
 }
 
 

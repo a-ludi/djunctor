@@ -24,19 +24,22 @@ import std.range : assumeSorted, chunks, ElementType, enumerate, isForwardRange,
     only, SortedRange, walkLength;
 import std.stdio : writeln;
 import std.typecons : tuple, Tuple;
+import vibe.data.json : Json;
 
 version (unittest)
 {
     import djunctor.util.testing : MockCallable;
     import djunctor.dazzler : origGetLocalAlignments = getLocalAlignments,
         origGetMappings = getMappings;
+    import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries;
 
     MockCallable!(AlignmentContainer!(AlignmentChain[]), const string, const Options) getLocalAlignments;
     MockCallable!(origGetMappings!Options) getMappings;
 }
 else
 {
-    import djunctor.dazzler : getLocalAlignments, getMappings;
+    import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
+        getLocalAlignments, getMappings;
 }
 
 /// General container for alignment data.
@@ -724,6 +727,9 @@ class DJunctor
     BinaryHeap!(AlignmentChain[]) catHits;
     size_t iteration;
 
+    alias MatchedAlignmentChains = AlignmentChain[];
+    alias PileUp = MatchedAlignmentChains[];
+
     this(in ref Options options)
     {
         this.options = options;
@@ -734,26 +740,26 @@ class DJunctor
 
     DJunctor run()
     {
-        logDiagnostic("BEGIN djunctor");
+        logJsonDiagnostic("state", "enter", "function", "run");
         // dfmt off
         this
             .init
             .mainLoop
             .finish;
         // dfmt on
-        logDiagnostic("END djunctor");
+        logJsonDiagnostic("state", "exit", "function", "run");
 
         return this;
     }
 
     protected DJunctor init()
     {
-        logDiagnostic("BEGIN djunctor.init");
-        selfAlignment = getLocalAlignments(options.refDb, options);
+        logJsonDiagnostic("state", "enter", "function", "djunctor.init");
+        //selfAlignment = getLocalAlignments(options.refDb, options);
         readsAlignment = getMappings(options.refDb, options.readsDb, options);
         catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup,
                 readsAlignment.b2a.dup);
-        logDiagnostic("END djunctor.init");
+        logJsonDiagnostic("state", "exit", "function", "djunctor.init");
 
         return this;
     }
@@ -775,15 +781,21 @@ class DJunctor
 
     protected DJunctor mainLoop()
     {
-        logDiagnostic("BEGIN djunctor.mainLoop");
+        logJsonDiagnostic("state", "enter", "function", "djunctor.mainLoop");
         do
         {
             filterUseless();
             findHits();
 
-            logDiagnostic("i: %d, useless: %d, candiates.a2b: %d candiates.b2a: %d, hits: %d",
-                    iteration, catUseless.length,
-                    catCandidates.a2b.length, catCandidates.b2a.length, catHits.length);
+            // dfmt off
+            logJsonDiagnostic(
+                "iteration", iteration,
+                "numUseless", catUseless.length,
+                "numCandiatesA2b", catCandidates.a2b.length,
+                "numCandiatesB2a", catCandidates.b2a.length,
+                "numHits", catHits.length
+            );
+            // dfmt on
 
             if (catHits.length > 0)
             {
@@ -793,17 +805,26 @@ class DJunctor
             ++iteration;
         }
         while (catHits.length > 0 && iteration < maxLoops);
-        logDiagnostic("END djunctor.mainLoop");
+        logJsonDiagnostic("state", "exit", "function", "djunctor.mainLoop");
 
         return this;
     }
 
     protected DJunctor filterUseless()
     {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.filterUseless");
+
         auto sizeReserve = numEstimateUseless(catCandidates.a2b.length, iteration);
         if (sizeReserve == 0)
         {
-            logDiagnostic("skipping filterUseless: expected count is zero");
+            // dfmt off
+            logJsonDiagnostic(
+                "state", "exit",
+                "function", "djunctor.filterUseless",
+                "reason", "skipping: expecting zero useless reads",
+            );
+            // dfmt on
+
             // Skip this step if we do not expect to find "useless" reads;
             // it is not harmful to consider some "useless" reads as
             // candidates (catCandidates).
@@ -815,7 +836,6 @@ class DJunctor
         uselessAcc.reserve(sizeReserve);
         alias isNotUseless = ac => !uselessAcc.data.canFind(ac.contigA.id);
 
-        logDiagnostic("BEGIN djunctor.filterUseless");
         foreach (alignmentsChunk; catCandidates.a2b.chunkBy!haveEqualIds)
         {
             auto alignments = alignmentsChunk.array;
@@ -837,11 +857,17 @@ class DJunctor
                 candidatesAcc ~= alignments;
             }
         }
-        logDebug("useless expected: %d found: %d", sizeReserve, uselessAcc.data.length);
+        // dfmt off
+        logJsonDiagnostic(
+            "numUselessExpected", sizeReserve,
+            "numUselessFound", uselessAcc.data.length,
+        );
+        // dfmt on
+
         this.catUseless ~= uselessAcc.data;
         this.catCandidates.a2b = candidatesAcc.data;
         this.catCandidates.b2a = this.catCandidates.b2a.filter!isNotUseless.array;
-        logDiagnostic("END djunctor.filterUseless");
+        logJsonDiagnostic("state", "exit", "function", "djunctor.filterUseless");
 
         return this;
     }
@@ -880,6 +906,49 @@ class DJunctor
 
     protected DJunctor findHits()
     {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.findHits");
+
+        auto groupedByGap = groupByGap(catCandidates);
+        PileUp[] extendingReadsByContig = groupedByGap.extendingReadsByContig;
+        PileUp[] spanningReadsByGap = groupedByGap.spanningReadsByGap;
+
+        logFillingInfo!("findHits", "extension", "raw")(extendingReadsByContig);
+        logFillingInfo!("findHits", "span", "raw")(spanningReadsByGap);
+
+        foreach (gap; spanningReadsByGap)
+        {
+            size_t refContig1Id = gap[0][0].contigB.id;
+            size_t refContig2Id = gap[0][1].contigB.id;
+            size_t[] readIds = gap.map!(reads => reads[0].contigA.id).array;
+            string[] fastaEntries = getFastaEntries(options.readsDb, readIds, options).array;
+            string pileupDb = buildDamFile(fastaEntries, options);
+            string[] consensusDbs = getConsensus(pileupDb, options);
+
+            // dfmt off
+            logJsonDebug(
+                "consensusDbs", consensusDbs.map!Json.array,
+                "contigIds", [Json(refContig1Id), Json(refContig2Id)],
+            );
+            // dfmt on
+
+            foreach (consensusDb; consensusDbs)
+            {
+                auto consensusAlignments = getMappings(options.refDb, consensusDb, options);
+                auto consensusGroupedByGap = groupByGap(consensusAlignments);
+
+                logFillingInfo!("findHits", "span", "consensus")(
+                        consensusGroupedByGap.spanningReadsByGap);
+            }
+        }
+
+        logJsonDiagnostic("state", "exit", "function", "djunctor.findHits");
+
+        return this;
+    }
+
+    protected Tuple!(PileUp[], "extendingReadsByContig", PileUp[], "spanningReadsByGap") groupByGap(
+            AlignmentContainer!(AlignmentChain[]) candidates)
+    {
         static bool orderByReferenceIds(T)(T a, T b) pure
         {
             return a[0].contigB.id < b[0].contigB.id && (!(a.length > 1
@@ -900,9 +969,8 @@ class DJunctor
             return a.contigA.id == b.contigA.id;
         }
 
-        logDiagnostic("BEGIN djunctor.findHits");
         // dfmt off
-        auto readsByNumFlanks = catCandidates
+        auto readsByNumFlanks = candidates
             .b2a
             .chunkBy!isSameRead
             .map!array
@@ -915,60 +983,36 @@ class DJunctor
                 .sort!orderByReferenceIds
                 .groupBy);
         // dfmt on
+        PileUp[] extendingReadsByContig;
+        PileUp[] spanningReadsByGap;
 
         if (!readsByNumFlanksByGap.empty && numContigsInvolved(readsByNumFlanksByGap) == 1)
         {
-            auto extendingReadsByGap = readsByNumFlanksByGap.front;
+            extendingReadsByContig = readsByNumFlanksByGap.front.map!array.array;
             readsByNumFlanksByGap.popFront();
-
-            logDiagnostic("extending %d contigs", extendingReadsByGap.save.walkLength);
-
-            // dfmt off
-            logDebug(
-                "extending size (raw averages): %s",
-                extendingReadsByGap
-                    .save
-                    .map!(readsByGap => readsByGap
-                        .map!(extendingAlignments => extensionSize(extendingAlignments[0]))
-                        .array
-                        .mean)
-            );
-            // dfmt on
         }
 
         if (!readsByNumFlanksByGap.empty && numContigsInvolved(readsByNumFlanksByGap) == 2)
         {
-            auto spanningReadsByGap = readsByNumFlanksByGap.front;
+            spanningReadsByGap = readsByNumFlanksByGap.front.map!array.array;
             readsByNumFlanksByGap.popFront();
-
-            logDiagnostic("spanning %d gaps", spanningReadsByGap.save.walkLength);
-
-            // dfmt off
-            logDebug(
-                "spanning size (raw averages): %s",
-                spanningReadsByGap
-                    .save
-                    .map!(readsByGap => readsByGap
-                        .map!(spanningAlignments => spanningGapSize(spanningAlignments[0], spanningAlignments[1]))
-                        .array
-                        .mean)
-            );
-            // dfmt on
-
-            /*
-                for each gap/pile up:
-                    1. determine the range of the reference that is
-                       covered by the pile up plus some margin
-                    2. get the corresponding subsequence of the reference
-                    3. get the list of read sequences
-                    4. dalign read sequences to the ref subsequence
-                    5. build consensus using daccord
-            */
         }
 
-        logDiagnostic("END djunctor.findHits");
+        return typeof(return)(extendingReadsByContig, spanningReadsByGap);
+    }
 
-        return this;
+    static protected long estimateSize(in MatchedAlignmentChains alignments) pure
+    {
+        switch (alignments.length)
+        {
+        case 1:
+            return extensionSize(alignments[0]);
+        case 2:
+            return spanningGapSize(alignments[0], alignments[1]);
+        default:
+            throw new Exception(
+                    format!"cannot estimate size for %d matched alignments"(alignments.length));
+        }
     }
 
     /**
@@ -1376,17 +1420,41 @@ class DJunctor
 
     protected DJunctor fillGaps()
     {
-        logDiagnostic("BEGIN djunctor.fillGaps");
-        logDiagnostic("END djunctor.fillGaps");
+        logJsonDiagnostic("state", "enter", "function", "djunctor.fillGaps");
+        logJsonDiagnostic("state", "exit", "function", "djunctor.fillGaps");
 
         return this;
     }
 
     protected DJunctor finish()
     {
-        logDiagnostic("BEGIN djunctor.finish");
-        logDiagnostic("END djunctor.finish");
+        logJsonDiagnostic("state", "enter", "function", "djunctor.finish");
+        logJsonDiagnostic("state", "exit", "function", "djunctor.finish");
 
         return this;
+    }
+
+    private void logFillingInfo(string step, string type, string readState)(in PileUp[] readsByContig)
+            if (type == "extension" || type == "span")
+    {
+        // dfmt off
+        logJsonDiagnostic(
+            "step", step,
+            "type", type,
+            "readState", readState,
+            "numGaps", readsByContig.length,
+            "estimateLengths", readsByContig
+                .map!(readsByGap => readsByGap
+                    .map!estimateSize
+                    .array
+                    .mean)
+                .map!Json
+                .array,
+            "numReads", readsByContig
+                .map!"a.length"
+                .map!Json
+                .array,
+        );
+        // dfmt on
     }
 }

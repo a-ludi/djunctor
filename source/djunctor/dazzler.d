@@ -25,11 +25,12 @@ import std.path : absolutePath, baseName, buildPath, dirName, relativePath,
 import std.process : Config, escapeShellCommand, kill, pipeProcess,
     ProcessPipes, Redirect, wait;
 import std.range : chain, drop, only;
-import std.range.primitives : ElementType, empty, isInputRange;
+import std.range.primitives : ElementType, empty, isForwardRange, isInputRange;
 import std.stdio : File, writeln;
 import std.string : lineSplitter, outdent;
 import std.traits : hasMember, isIntegral, isSomeChar, isSomeString, Unqual;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
+import vibe.data.json : Json;
 
 /// File suffixes of hidden DB files.
 private immutable hiddenDbFileSuffixes = [".bps", ".hdr", ".idx"];
@@ -419,8 +420,8 @@ auto getFastaEntries(Options, Range)(in string dbFile, Range recordNumbers, in O
             isIntegral) && hasOption!(Options, "workdir", isSomeString)
             && isInputRange!Range && is(ElementType!Range == size_t))
 {
-    return readDbDump(dbdump(dbFile, options.dbdumpOptions, options.workdir),
-            recordNumbers, options.fastaLineWidth);
+    return readDbDump(dbdump(dbFile, recordNumbers, options.dbdumpOptions,
+            options.workdir), recordNumbers, options.fastaLineWidth);
 }
 
 private auto readDbDump(S, Range)(S dbDump, Range recordNumbers, in size_t lineLength)
@@ -728,8 +729,6 @@ private
 
         dumpHeader.formattedRead!"+ P %d"(numParts);
 
-        logDebug("lasFile: %s, numParts: %d", lasFile, numParts);
-
         return numParts == 0;
     }
 
@@ -781,6 +780,16 @@ private
 
         immutable writeChunkSize = 1024 * 1024;
         auto outFileArg = outFile.relativeToWorkdir(workdir);
+        auto command = ["fasta2DAM", "-i", outFileArg];
+        //dfmt off
+        logJsonDebug(
+            "action", "execute",
+            "type", "pipe",
+            "command", command.map!Json.array,
+            "input", fastaRecords.map!Json.array,
+            "state", "pre",
+        );
+        //dfmt on
         auto process = pipeProcess(["fasta2DAM", "-i", outFileArg],
                 Redirect.stdin, null, // env
                 Config.none, workdir);
@@ -835,13 +844,16 @@ private
                 only(lasFile.relativeToWorkdir(workdir))), workdir);
     }
 
-    auto dbdump(in string dbFile, in string[] dbdumpOptions, in string workdir)
+    auto dbdump(Range)(in string dbFile, Range recordNumbers,
+            in string[] dbdumpOptions, in string workdir)
+            if (isForwardRange!Range && is(ElementType!Range == size_t))
     {
         static struct DBDump
         {
             static immutable lineTerminator = "\n";
 
             const string dbFile;
+            const Range recordNumbers;
             const string[] dbdumpOptions;
             const string workdir;
             ProcessPipes dbdump;
@@ -879,7 +891,15 @@ private
                     return;
 
                 auto command = chain(only("DBdump"), dbdumpOptions,
-                        only(dbFile.relativeToWorkdir(workdir)));
+                        only(dbFile.relativeToWorkdir(workdir)), recordNumbers.map!(to!string));
+                // dfmt off
+                logJsonDebug(
+                    "action", "execute",
+                    "type", "pipe",
+                    "command", command.map!Json.array,
+                    "state", "pre",
+                );
+                // dfmt on
                 dbdump = pipeProcess(command.array, Redirect.stdout, null, Config.none, workdir);
 
                 popFront();
@@ -926,7 +946,7 @@ private
             }
         }
 
-        return new DBDump(dbFile, dbdumpOptions, workdir);
+        return new DBDump(dbFile, recordNumbers, dbdumpOptions, workdir);
     }
 
     string dbshow(in string dbFile, in string contigId, in string workdir)
@@ -979,7 +999,6 @@ private
         string output = command.executeWrapper!("shell",
                 sCmd => executeShell(sCmd.joiner(" ").array.to!string, null, // env
                     Config.none, size_t.max, workdir));
-        logDiagnostic(output);
     }
 
     void executeScript(Range)(in Range command, in string workdir = null)
@@ -990,7 +1009,6 @@ private
         string output = command.executeWrapper!("script",
                 sCmd => executeShell(sCmd.buildScriptLine, null, // env
                     Config.none, size_t.max, workdir));
-        logDiagnostic(output);
     }
 
     string executeWrapper(string type, alias execCall, Range)(in Range command)
@@ -998,11 +1016,32 @@ private
     {
         import std.array : array;
         import std.algorithm : filter;
+        import std.string : lineSplitter;
 
         auto sanitizedCommand = command.filter!"a != null".array;
 
-        logDiagnostic("executing " ~ type ~ ": %s", sanitizedCommand);
+        // dfmt off
+        logJsonDebug(
+            "action", "execute",
+            "type", type,
+            "command", sanitizedCommand.map!Json.array,
+            "state", "pre",
+        );
+        // dfmt on
         auto result = execCall(sanitizedCommand);
+        // dfmt off
+        logJsonDebug(
+            "action", "execute",
+            "type", type,
+            "command", sanitizedCommand.map!Json.array,
+            "output", result
+                .output
+                .lineSplitter
+                .map!Json
+                .array,
+            "state", "post",
+        );
+        // dfmt on
         if (result.status > 0)
         {
             throw new DazzlerCommandException(

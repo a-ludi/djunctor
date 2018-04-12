@@ -17,6 +17,7 @@ import djunctor.util.log;
 import std.meta : Instantiate;
 import std.range.primitives : ElementType, isForwardRange;
 import std.traits : hasMember, isSomeString;
+import vibe.data.json : serializeToJsonString;
 
 /// Possible returns codes of the commandline execution.
 enum ReturnCode
@@ -52,7 +53,7 @@ ReturnCode runDjunctorCommandline(string[] args)
     }
 
     const Options finalOptions = options;
-    logInfo(finalOptions.to!string);
+    logInfo(finalOptions.serializeToJsonString());
 
     scope (exit)
     {
@@ -130,7 +131,7 @@ struct Options
     @Help("list of options to pass to `DBsplit`")
     string[] dbsplitOptions = [];
 
-    @Option("fastaLineWidth")
+    @Option("fasta-line-width")
     @Help("list of options to pass to `DBsplit`")
     size_t fastaLineWidth = 50;
 
@@ -273,7 +274,11 @@ private
 
         if (!options.damapperOptions || options.damapperOptions.length == 0)
         {
-            options.damapperOptions = options.dalignerOptions;
+            // dfmt off
+            options.damapperOptions = options.dalignerOptions ~ [
+                "-n.9", // get more hits
+            ];
+            // dfmt on
         }
     }
 
