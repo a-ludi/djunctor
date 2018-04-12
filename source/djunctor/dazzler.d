@@ -595,17 +595,24 @@ unittest
     Returns: list of consensus DBs.
 */
 string[] getConsensus(Options)(in string dbFile, in Options options)
-        if (hasOption!(Options, "daccordOptions", isOptionsList) && hasOption!(Options,
-            "dalignerOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
+        if (hasOption!(Options, "daccordOptions", isOptionsList)
+            && hasOption!(Options, "dalignerOptions",
+            isOptionsList) && hasOption!(Options, "dbsplitOptions",
+            isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
     dalign(dbFile, options.dalignerOptions, options.workdir);
 
     // dfmt off
-    return getLasFiles(dbFile)
+    auto consensusDbs = getLasFiles(dbFile, options.workdir)
         .a2b
+        .filter!(lasFile => !lasEmpty(lasFile, dbFile, null, options.workdir))
         .map!(lasFile => daccord(dbFile, lasFile, options.daccordOptions, options.workdir))
         .array;
     // dfmt on
+    foreach (consensusDb; consensusDbs)
+        dbsplit(consensusDb, options.dbsplitOptions, options.workdir);
+
+    return consensusDbs;
 }
 
 unittest
@@ -716,6 +723,18 @@ AlignmentContainer!(string[]) getLasFiles(in string dbA, in string dbB, in strin
 
 private
 {
+    bool lasEmpty(in string lasFile, in string dbA, in string dbB, in string workdir)
+    {
+        auto dumpHeader = ladump(lasFile, dbA, dbB, [], workdir);
+        size_t numParts;
+
+        dumpHeader.formattedRead!"+ P %d"(numParts);
+
+        logDebug("lasFile: %s, numParts: %d", lasFile, numParts);
+
+        return numParts == 0;
+    }
+
     void dalign(in string refDam, in string[] dalignerOpts, in string workdir)
     {
         dalign(refDam, null, dalignerOpts, workdir);
