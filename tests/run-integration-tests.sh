@@ -30,9 +30,12 @@ function init_script()
 
 function clean_up()
 {
-    cp "$OUTPUT_LOG" "$LOG_COPY"
-    echo
-    echo "output copied to $LOG_COPY"
+    if [[ -f "$OUTPUT_LOG" ]];
+    then
+        cp "$OUTPUT_LOG" "$LOG_COPY"
+        echo
+        echo "output copied to $LOG_COPY"
+    fi
 
     rm -rf "$WORKDIR"
 }
@@ -52,10 +55,15 @@ function provide_test_data()
 
 function run_djunctor()
 {
-    ./djunctor "${DJUNCTOR_OPTS[@]}" \
-               "$TEST_DATA_MODREF.dam" \
-               "$TEST_DATA_READS.dam" \
-               &> "$OUTPUT_LOG"
+    if ! ./djunctor "${DJUNCTOR_OPTS[@]}" \
+                    "$TEST_DATA_MODREF.dam" \
+                    "$TEST_DATA_READS.dam" \
+                    &> "$OUTPUT_LOG";
+    then
+        echo "Error while executing djunctor ($?); see log for details." >&2
+
+        exit 1
+    fi
 }
 
 function do_tests()
@@ -113,11 +121,13 @@ function expect_json()
 {
     local OBSERVED="$(grep '^{' "$OUTPUT_LOG" | jq --sort-keys --slurp "$JQ_DEFS map(select($1))")"
 
-    if ! jq --exit-status "$JQ_DEFS $2" &> /dev/null <<<"$OBSERVED"; then
+    if ! jq --exit-status "$JQ_DEFS $2" &> /dev/null <<<"$OBSERVED";
+    then
         echo "expected: $2"
         echo "observed: $OBSERVED"
 
-        if [[ -n "$3" ]]; then
+        if [[ -n "$3" ]];
+        then
             echo "debug: $(jq "$3" <<< "$OBSERVED")"
         fi
 
