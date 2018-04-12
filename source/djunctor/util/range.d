@@ -97,7 +97,7 @@ template chunks(size_t chunkSize)
         return tuple(tuple(args[0 .. chunkSize]), chunks(args[chunkSize .. $]).expand);
     }
 
-    auto chunks(T...)(T args) pure nothrow @safe
+    auto chunks(T...)(T args) pure nothrow @safe 
             if (0 < args.length && args.length < chunkSize)
     {
         return tuple(tuple(args[0 .. $]));

@@ -551,7 +551,6 @@ string buildDamFile(Range, Options)(Range fastaRecords, Options options)
 
     tempDb.file.close();
     remove(tempDb.name);
-    logDebug("fastaRecords: " ~ fastaRecords.to!string);
     fasta2dam(tempDb.name, fastaRecords, options.workdir);
     dbsplit(tempDb.name, options.dbsplitOptions, options.workdir);
 
@@ -646,7 +645,6 @@ unittest
     string dbName = buildDamFile(fastaRecords[], options);
     string[] consensusDbs = getConsensus(dbName, options);
     assert(consensusDbs.length >= 1);
-    setLogLevel(LogLevel.debug_);
     auto consensusFasta = getFastaEntries(consensusDbs[0], cast(size_t[])[], options);
     auto expectedSequence = fastaRecords[$ - 1].lineSplitter.drop(1).joiner.array;
     auto consensusSequence = consensusFasta.front.lineSplitter.drop(1).joiner.array;
