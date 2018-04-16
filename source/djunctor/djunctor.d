@@ -279,7 +279,7 @@ struct AlignmentChain
             }
     }
 
-    @property size_t totalLength()
+    @property size_t totalLength() const pure
     {
         return last.contigA.end - first.contigA.begin;
     }
@@ -296,7 +296,7 @@ struct AlignmentChain
             }
     }
 
-    @property size_t totalDiffs()
+    @property size_t totalDiffs() const pure
     {
         return localAlignments.map!"a.numDiffs".sum;
     }
@@ -313,7 +313,7 @@ struct AlignmentChain
             }
     }
 
-    @property size_t totalGapLength()
+    @property size_t totalGapLength() const pure
     {
         // dfmt off
         return localAlignments
@@ -335,7 +335,7 @@ struct AlignmentChain
             }
     }
 
-    @property size_t numMatchingBps()
+    @property size_t numMatchingBps() const pure
     {
         return totalLength - (totalDiffs + totalGapLength);
     }
@@ -352,7 +352,7 @@ struct AlignmentChain
             }
     }
 
-    @property size_t score()
+    @property size_t score() const pure
     {
         return numMatchingBps * maxScore / totalLength;
     }
@@ -755,7 +755,7 @@ class DJunctor
     protected DJunctor init()
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.init");
-        //selfAlignment = getLocalAlignments(options.refDb, options);
+        selfAlignment = getLocalAlignments(options.refDb, options);
         readsAlignment = getMappings(options.refDb, options.readsDb, options);
         catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup,
                 readsAlignment.b2a.dup);
