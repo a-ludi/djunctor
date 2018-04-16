@@ -8,6 +8,7 @@
 */
 module djunctor.util.range;
 
+import std.functional : unaryFun;
 import std.meta : AliasSeq;
 import std.range : ElementType, isInputRange;
 import std.typecons : tuple;
@@ -167,4 +168,92 @@ unittest
             static assert(is(type == int));
         }
     }
+}
+
+/*
+    Build a comparator according to `pred`.
+*/
+template Comparator(pred...) if (pred.length == 1)
+{
+    /// Return comparison value akin to `opCmp`.
+    int compare(S, T = S)(in S a, in T b)
+    {
+        alias _pred = unaryFun!pred;
+        auto _a = _pred(a);
+        auto _b = _pred(b);
+
+        if (_a < _b)
+            return -1;
+        else if (_a == _b)
+            return 0;
+        else
+            return 1;
+    }
+
+    /// Return `true` iff `a < b`.
+    bool lt(S, T = S)(in S a, in T b)
+    {
+        return compare!(S, T)(a, b) < 0;
+    }
+
+    /// Return `true` iff `a <= b`.
+    bool le(S, T = S)(in S a, in T b)
+    {
+        return compare!(S, T)(a, b) <= 0;
+    }
+
+    /// Return `true` iff `a == b`.
+    bool eq(S, T = S)(in S a, in T b)
+    {
+        return compare!(S, T)(a, b) == 0;
+    }
+
+    /// Return `true` iff `a >= b`.
+    bool ge(S, T = S)(in S a, in T b)
+    {
+        return compare!(S, T)(a, b) >= 0;
+    }
+
+    /// Return `true` iff `a > b`.
+    bool gt(S, T = S)(in S a, in T b)
+    {
+        return compare!(S, T)(a, b) > 0;
+    }
+}
+
+///
+unittest
+{
+    alias compareSquares = Comparator!"a ^^ 2".compare;
+
+    assert(compareSquares(1, 2) < 0);
+    assert(compareSquares(1, -2) < 0);
+    assert(compareSquares(-1, 1) == 0);
+    assert(compareSquares(-2.0, 1) > 0);
+
+    alias compareByLength = Comparator!"a.length".compare;
+
+    assert(compareByLength([], [1]) < 0);
+    assert(compareByLength([1, 2], [1]) > 0);
+    assert(compareByLength([1, 2], ["1", "2"]) == 0);
+
+    alias compareAbsInts = Comparator!("a > 0 ? a : -a").compare!(int);
+
+    assert(compareSquares(1, 2) < 0);
+    assert(compareSquares(1, -2) < 0);
+    assert(compareSquares(-1, 1) == 0);
+    assert(compareSquares(-2, 1) > 0);
+    static assert(!__traits(compiles, compareAbsInts(-2.0, 1.0)));
+
+    alias ltSquared = Comparator!("a ^^ 2").lt;
+
+    assert(ltSquared(1, 2));
+    assert(ltSquared(1, -2));
+    assert(!ltSquared(-2, -1));
+
+    alias eqSquared = Comparator!("a ^^ 2").eq;
+
+    assert(eqSquared(1, 1));
+    assert(eqSquared(1, -1));
+    assert(!eqSquared(1, 2));
 }
