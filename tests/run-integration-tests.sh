@@ -16,21 +16,68 @@ TEST_DATA_MODREF="integration-tests/reference_mod"
 DJUNCTOR_OPTS=(-v -v -v --input-provide-method copy)
 JQ_DEFS=''
 
+ARGV=("$@")
+RUN_DJUNCTOR=true
+RUN_GDB=false
+
 function init_script()
 {
-    # set -x  # echo commands
     set -e  # exit on failure
     trap clean_up EXIT
 
     TEST_ROOT="$(dirname "$(realpath "$0")")"
-    WORKDIR="$(mktemp --tmpdir -d djunctor-integration-tests.XXXXXX)"
-    OUTPUT_LOG="$WORKDIR/output.log"
     LOG_COPY="./integration-tests.log"
+
+    parse_opts
+
+    WORKDIR="$(mktemp --tmpdir -d djunctor-integration-tests.XXXXXX)"
+
+    if $RUN_DJUNCTOR;
+    then
+        OUTPUT_LOG="$WORKDIR/output.log"
+    else
+        OUTPUT_LOG="$LOG_COPY"
+    fi
+}
+
+function parse_opts()
+{
+    while getopts "hDg" OPTION "${ARGV[@]}"; do
+        case "$OPTION" in
+            D)
+                RUN_DJUNCTOR=false
+                ;;
+            g)
+                RUN_GDB=true
+                ;;
+            h)
+                usage "$@"
+                exit
+                ;;
+            *)
+                usage "$@"
+                exit 1
+                ;;
+        esac
+    done
+}
+
+function usage()
+{
+    echo "Usage: $0 [-Dgh]"
+    echo
+    echo "Run the integration test sutie for djunctor."
+    echo
+    echo "Optional arguments:"
+    echo " -D  Do not run djunctor; instead just run tests against the last log ($LOG_COPY)."
+    echo " -g  Open interactive gdb session and exit afterwards. Prints the "'`run`'" command"
+    echo "     to be used in gdb"
+    echo " -h  Prints this help."
 }
 
 function clean_up()
 {
-    if [[ -f "$OUTPUT_LOG" ]];
+    if $RUN_DJUNCTOR && [[ -f "$OUTPUT_LOG" ]];
     then
         cp "$OUTPUT_LOG" "$LOG_COPY"
         echo
@@ -55,14 +102,25 @@ function provide_test_data()
 
 function run_djunctor()
 {
-    if ! ./djunctor "${DJUNCTOR_OPTS[@]}" \
-                    "$TEST_DATA_MODREF.dam" \
-                    "$TEST_DATA_READS.dam" \
-                    &> "$OUTPUT_LOG";
+    if $RUN_GDB;
     then
-        echo "Error while executing djunctor ($?); see log for details." >&2
+        echo '------------------------'
+        echo run "${DJUNCTOR_OPTS[@]}" \
+                   "$TEST_DATA_MODREF.dam" \
+                   "$TEST_DATA_READS.dam"
+        echo '------------------------'
+        gdb djunctor
+        exit
+    else
+        if ! ./djunctor "${DJUNCTOR_OPTS[@]}" \
+                        "$TEST_DATA_MODREF.dam" \
+                        "$TEST_DATA_READS.dam" \
+                        &> "$OUTPUT_LOG";
+        then
+            echo "Error while executing djunctor ($?); see log for details." >&2
 
-        exit 1
+            exit 1
+        fi
     fi
 }
 
@@ -106,9 +164,12 @@ function list_test_cases()
 function main()
 {
     init_script
-    dub build
-    provide_test_data
-    run_djunctor
+    if $RUN_DJUNCTOR;
+    then
+        dub build
+        provide_test_data
+        run_djunctor
+    fi
     do_tests
 }
 
