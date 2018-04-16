@@ -76,7 +76,7 @@ function do_tests()
 
     for test_case in $(list_test_cases);
     do
-        if $test_case &> "$TEST_CASE_LOG";
+        if $test_case > "$TEST_CASE_LOG";
         then
             echo -n "."
         else
@@ -151,7 +151,7 @@ function test_gaps_found()
 {
     expect_json \
         '. | has("estimateLengths") and .type == "span" and .step == "findHits" and .readState == "raw" and .numGaps > 1' \
-        'length == 1 and .[0].estimateLengths == [4156, 8561, 5064] and .[0].numReads == [38, 6, 4]'
+        'length == 1 and .[0].estimateLengths == [4156, 8561, 5064] and .[0].numReads == [38, 6, 4]' && \
     expect_json \
         '. | has("estimateLengths") and .type == "span" and .step == "findHits" and .readState == "consensus" and .numGaps == 1' \
         '(map(.estimateLengths) | flatten == [4100, 8450, 5003]) and (map(.numReads) | flatten == [36, 6, 4])'
