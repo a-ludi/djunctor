@@ -180,7 +180,7 @@ function main()
 
 function expect_json()
 {
-    local OBSERVED="$(grep '^{' "$OUTPUT_LOG" | jq --sort-keys --slurp "$JQ_DEFS map(select($1))")"
+    local OBSERVED="$(json_log | jq --sort-keys --slurp "$JQ_DEFS map(select($1))")"
 
     if ! jq --exit-status "$JQ_DEFS $2" &> /dev/null <<<"$OBSERVED";
     then
@@ -196,6 +196,28 @@ function expect_json()
     fi
 }
 
+function json_log()
+{
+    grep '^{' "$OUTPUT_LOG"
+}
+
+function expect_transformed_coord()
+{
+    local COORD_TRANSFORM="$1"
+    local IN_CONTIG="$2"
+    local IN_IDX="$3"
+    local OUT_CONTIG="$4"
+    local OUT_IDX="$5"
+
+    local OBSERVED="$(python "$COORD_TRANSFORM" "$IN_CONTIG" "$IN_IDX")"
+    local EXPECTED="$OUT_CONTIG $OUT_IDX"
+
+    if [[ "$OBSERVED" != "$EXPECTED" ]]; then
+        echo "expected: $EXPECTED observed: $OBSERVED"
+
+        return 1
+    fi
+}
 
 #-----------------------------------------------------------------------------
 # Test Cases
@@ -218,12 +240,44 @@ function test_gaps_found()
         '(map(.estimateLengths) | flatten == [4100, 8450, 5003]) and (map(.numReads) | flatten == [36, 6, 4])'
 }
 
+function test_gaps_filled()
+{
+    expect_json \
+        '. | .type == "span" and .step == "insertHits"' \
+        'length == 3 and map(.readId) == [1, 1, 1] and map(.contigIds) == [[1, 2], [2, 3], [3, 4]]' \
+        '{ readIds: map(.readId), contigIds: map(.contigIds) }'
+}
+
 function test_number_of_iterations()
 {
     expect_json \
         '. | has("iteration")' \
         '. | max_by(.iteration).iteration == 0'
 }
+
+function test_coordinate_transform()
+{
+    local COORD_TRANSFORM="$WORKDIR/coord_transform.py"
+
+    json_log | jq --raw-output 'select(has("coordTransformPython")) | .coordTransformPython' > "$COORD_TRANSFORM" && \
+
+    expect_transformed_coord "$COORD_TRANSFORM" \
+        1 42 \
+        1 $((42)) && \
+    expect_transformed_coord "$COORD_TRANSFORM" \
+        2 42 \
+        1 $((42 - 0 + 4100 + 8300)) && \
+    expect_transformed_coord "$COORD_TRANSFORM" \
+        3 42 \
+        1 $((42 - 0 + 8450 + 125700 - 0 + 4100 + 8300)) && \
+    expect_transformed_coord "$COORD_TRANSFORM" \
+        4 42 \
+        1 $((42 - 0 + 5004 + 125700 - 0 + 8450 + 125700 - 0 + 4100 + 8300)) && \
+    expect_transformed_coord "$COORD_TRANSFORM" \
+        1337 42 \
+        1337 42
+}
+
 
 
 #-----------------------------------------------------------------------------
