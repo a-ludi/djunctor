@@ -1477,7 +1477,7 @@ class DJunctor
         // dfmt off
         logJsonDiagnostic(
             "step", "djunctor.insertHits",
-            "coordTransformInsertions", coordTransform.insertions[].map!(serializeToJson!(CoordinateTransform.Insertion)).array,
+            "coordTransform", coordTransform.serializeToJson,
             "coordTransformPython", coordTransform.toString(),
         );
         // dfmt off
