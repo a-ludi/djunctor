@@ -14,11 +14,15 @@ TEST_DATA_READS="integration-tests/reads"
 TEST_DATA_REF="integration-tests/reference"
 TEST_DATA_MODREF="integration-tests/reference_mod"
 DJUNCTOR_OPTS=(-v -v -v --input-provide-method copy)
+BUILD_OPTS=()
 JQ_DEFS=''
 
 ARGV=("$@")
 RUN_DJUNCTOR=true
 RUN_GDB=false
+SHOW_COVERAGE=false
+SHOW_UNCOVERED_LINES=false
+UNCOVERED_LINES_CONTEXT=2
 
 function init_script()
 {
@@ -42,8 +46,12 @@ function init_script()
 
 function parse_opts()
 {
-    while getopts "hDg" OPTION "${ARGV[@]}"; do
+    while getopts "chDgu" OPTION "${ARGV[@]}"; do
         case "$OPTION" in
+            c)
+                BUILD_OPTS[${#BUILD_OPTS[*]}]='--build=cov'
+                SHOW_COVERAGE=true
+                ;;
             D)
                 RUN_DJUNCTOR=false
                 ;;
@@ -51,11 +59,14 @@ function parse_opts()
                 RUN_GDB=true
                 ;;
             h)
-                usage "$@"
+                usage
                 exit
                 ;;
+            u)
+                SHOW_UNCOVERED_LINES=true
+                ;;
             *)
-                usage "$@"
+                usage
                 exit 1
                 ;;
         esac
@@ -64,15 +75,19 @@ function parse_opts()
 
 function usage()
 {
-    echo "Usage: $0 [-Dgh]"
+    echo "Usage: ${ARGS[0]} [-cDghu]"
     echo
-    echo "Run the integration test sutie for djunctor."
+    echo "Run the integration test suite for djunctor."
     echo
     echo "Optional arguments:"
-    echo " -D  Do not run djunctor; instead just run tests against the last log ($LOG_COPY)."
-    echo " -g  Open interactive gdb session and exit afterwards. Prints the "'`run`'" command"
-    echo "     to be used in gdb"
-    echo " -h  Prints this help."
+    echo " -c        Enables code coverage statistics to be generated; show coverage"
+    echo "           summary after tests."
+    echo " -D        Do not run djunctor; instead just run tests against the last log ($LOG_COPY)."
+    echo " -g        Open interactive gdb session and exit afterwards. Prints the "'`run`'" command"
+    echo "           to be used in gdb"
+    echo " -h        Prints this help."
+    echo " -u[=NUM]  If -c is given report uncovered lines in coverage summary. If given print NUM"
+    echo "           lines of context (default: 2)"
 }
 
 function clean_up()
@@ -83,6 +98,9 @@ function clean_up()
         echo
         echo "output copied to $LOG_COPY"
     fi
+
+    # remove coverage statistics of libraries
+    rm -f -- -*.lst
 
     rm -rf "$WORKDIR"
 }
@@ -161,16 +179,40 @@ function list_test_cases()
     declare -F | grep -oP "(?<=^declare -f )test_.*$"
 }
 
+function show_coverage_summary()
+{
+    echo "Coverage percentages per file:"
+    grep -hoP '^.*is \d+% covered$' *.lst | indent
+
+    if $SHOW_UNCOVERED_LINES;
+    then
+        echo
+        echo "Uncovered lines:"
+        grep --context=$UNCOVERED_LINES_CONTEXT -P '^0000000\|' *.lst | indent
+        echo $UNCOVERED_LINES_CONTEXT
+    fi
+}
+
+function indent()
+{
+    sed 's/^/  /'
+}
+
 function main()
 {
     init_script
     if $RUN_DJUNCTOR;
     then
-        dub build
+        dub build "${BUILD_OPTS[@]}"
         provide_test_data
         run_djunctor
     fi
     do_tests
+
+    if $SHOW_COVERAGE;
+    then
+        show_coverage_summary
+    fi
 }
 
 
