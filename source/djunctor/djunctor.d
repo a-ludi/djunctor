@@ -9,8 +9,11 @@
 module djunctor.djunctor;
 
 import djunctor.commandline : Options;
+import djunctor.util.fasta : buildFastaRecord, parseFasta, parseFastaRecord,
+    reverseComplement;
 import djunctor.util.log;
 import djunctor.util.math : mean, median;
+import djunctor.util.range : Comparator;
 import djunctor.util.string : indent;
 import core.exception : AssertError;
 import std.algorithm : all, any, canFind, chunkBy, each, equal, filter, find,
@@ -19,14 +22,14 @@ import std.array : appender, Appender, array;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
 import std.exception : assertNotThrown, assertThrown;
-import std.format : format;
-import std.math : sgn;
+import std.format : format, formattedWrite;
+import std.math : abs, sgn;
 import std.range : assumeSorted, chunks, ElementType, enumerate, isForwardRange,
     only, retro, slide, SortedRange, walkLength;
 import std.stdio : writeln;
 import std.string : outdent;
 import std.typecons : tuple, Tuple;
-import vibe.data.json : Json;
+import vibe.data.json : Json, serializeToJson;
 
 version (unittest)
 {
@@ -641,7 +644,7 @@ unittest
 /**
     Returns true iff ac1 begins befor ac2 taking complementary alignment into account.
 */
-bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure 
+bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
         if (contig == "contigA" || contig == "contigB")
 {
     assert(__traits(getMember, ac1, contig) == __traits(getMember, ac2, contig),
@@ -718,6 +721,10 @@ class DJunctor
     static immutable maxAbsoluteDiff = AlignmentChain.maxScore / 100; // 1% wrt. score
     alias numEstimateUseless = (numCatUnsure, iteration) => (numCatUnsure - numCatUnsure / 20) / (
             iteration + 1);
+    alias MatchedAlignmentChains = AlignmentChain[];
+    alias PileUp = MatchedAlignmentChains[];
+    alias Hit = Tuple!(MatchedAlignmentChains, "alignments", string, "dbFile");
+
     AlignmentContainer!(AlignmentChain[]) selfAlignment;
     AlignmentContainer!(AlignmentChain[]) readsAlignment;
     const Options options;
@@ -726,17 +733,15 @@ class DJunctor
     /// Set of alignments to be considered in further processing.
     AlignmentContainer!(AlignmentChain[]) catCandidates;
     /// Set of alignments to be used for gap filling.
-    BinaryHeap!(AlignmentChain[]) catHits;
+    Hit[] catHits;
+    CoordinateTransform coordTransform;
     size_t iteration;
-
-    alias MatchedAlignmentChains = AlignmentChain[];
-    alias PileUp = MatchedAlignmentChains[];
 
     this(in ref Options options)
     {
         this.options = options;
         this.catUseless = [];
-        this.catHits = make!(typeof(this.catHits))();
+        this.catHits = [];
         this.iteration = 0;
     }
 
@@ -801,7 +806,7 @@ class DJunctor
 
             if (catHits.length > 0)
             {
-                fillGaps();
+                insertHits();
             }
 
             ++iteration;
@@ -917,11 +922,13 @@ class DJunctor
         logFillingInfo!("findHits", "extension", "raw")(extendingReadsByContig);
         logFillingInfo!("findHits", "span", "raw")(spanningReadsByGap);
 
+        alias getReadId = (reads) => reads[0].contigA.id;
+
         foreach (gap; spanningReadsByGap)
         {
             size_t refContig1Id = gap[0][0].contigB.id;
             size_t refContig2Id = gap[0][1].contigB.id;
-            size_t[] readIds = gap.map!(reads => reads[0].contigA.id).array;
+            size_t[] readIds = gap.map!getReadId.array;
             string[] fastaEntries = getFastaEntries(options.readsDb, readIds, options).array;
             string pileupDb = buildDamFile(fastaEntries, options);
             string[] consensusDbs = getConsensus(pileupDb, options);
@@ -937,9 +944,29 @@ class DJunctor
             {
                 auto consensusAlignments = getMappings(options.refDb, consensusDb, options);
                 auto consensusGroupedByGap = groupByGap(consensusAlignments);
+                PileUp consensusPileUp = consensusGroupedByGap.spanningReadsByGap[0];
+                consensusPileUp.sort!(Comparator!gapScore.gt);
 
-                logFillingInfo!("findHits", "span", "consensus")(
-                        consensusGroupedByGap.spanningReadsByGap);
+                logFillingInfo!("findHits", "span", "consensus")([consensusPileUp]);
+                // dfmt off
+                logJsonDebug(
+                    "contigIds", [Json(refContig1Id), Json(refContig2Id)],
+                    "pileUp", consensusPileUp
+                        .map!(spanningReads => Json([
+                            "estimateSize": Json(estimateSize(spanningReads)),
+                            "gapScore": Json(gapScore(spanningReads)),
+                            "alignmentScores": Json([
+                                Json(spanningReads[0].score),
+                                Json(spanningReads[1].score),
+                            ]),
+                            "readId": Json(spanningReads[0].contigA.id),
+                        ]))
+                        .array,
+                );
+                // dfmt on
+
+                // Mark best scoring read for later sequence insertion.
+                catHits ~= Hit(consensusPileUp[0], consensusDb);
             }
         }
 
@@ -1420,12 +1447,128 @@ class DJunctor
                 }
     }
 
-    protected DJunctor fillGaps()
+    static protected size_t gapScore(in MatchedAlignmentChains alignments) pure
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.fillGaps");
-        logJsonDiagnostic("state", "exit", "function", "djunctor.fillGaps");
+        assert(alignments.length == 2);
+        auto score1 = alignments[0].score.to!long;
+        auto score2 = alignments[1].score.to!long;
+
+        return (score1 + score2) / 2 - abs(score1 - score2);
+    }
+
+    protected DJunctor insertHits()
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.insertHits");
+        foreach (hit; catHits)
+        {
+            switch (hit.length)
+            {
+            case 1:
+                extendContig(hit);
+                break;
+            case 2:
+                fillGap(hit);
+                break;
+            default:
+                throw new Exception(format!"cannot fill gap for %d alignment chains"(hit.length));
+            }
+        }
+        // Clear `catHits` for next iteration.
+        // dfmt off
+        logJsonDiagnostic(
+            "step", "djunctor.insertHits",
+            "coordTransformInsertions", coordTransform.insertions[].map!(serializeToJson!(CoordinateTransform.Insertion)).array,
+            "coordTransformPython", coordTransform.toString(),
+        );
+        // dfmt off
+        catHits.length = 0;
+        logJsonDiagnostic("state", "exit", "function", "djunctor.insertHits");
 
         return this;
+    }
+
+    protected DJunctor extendContig(in Hit hit)
+    {
+        assert(0, "unimplemented");
+        //logJsonDiagnostic("state", "enter", "function", "djunctor.extendContig");
+        //logJsonDiagnostic("state", "exit", "function", "djunctor.extendContig");
+
+        //return this;
+    }
+
+    protected DJunctor fillGap(in Hit hit)
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.fillGap");
+        size_t refContig1Id = hit.alignments[0].contigB.id;
+        size_t refContig2Id = hit.alignments[1].contigB.id;
+        auto complement = hit.alignments[0].complement;
+        size_t readId = hit.alignments[0].contigA.id;
+        auto read = getFastaEntries(hit.dbFile, [readId], options).front.parseFastaRecord;
+        auto gapSequenceSlice = getGapSequenceSlice(hit);
+        // dfmt off
+        auto fastaSequence = complement
+            ? read.reverseComplement[gapSequenceSlice]
+            : read[gapSequenceSlice];
+        // dfmt on
+        // dfmt off
+        logJsonDebug(
+            "step", "insertHits",
+            "type", "span",
+            "contigIds", [Json(refContig1Id), Json(refContig2Id)],
+            "readId", readId,
+            "complement", complement.to!bool,
+            "fastaSequence", fastaSequence.array.to!string,
+        );
+        // dfmt on
+        with (CoordinateTransform)
+        {
+            size_t gapRefBegin;
+            size_t gapRefEnd;
+
+            if (hit.alignments[0].isBefore!"contigA"(hit.alignments[1]))
+            {
+                gapRefBegin = hit.alignments[0].last.contigB.end;
+                gapRefEnd = hit.alignments[1].first.contigB.begin;
+            }
+            else
+            {
+                gapRefBegin = hit.alignments[1].last.contigB.end;
+                gapRefEnd = hit.alignments[0].first.contigB.begin;
+            }
+
+            // dfmt off
+            coordTransform.add(
+                Coordinate(refContig1Id, gapRefBegin),
+                Coordinate(refContig2Id, gapRefEnd),
+                gapSequenceSlice[1] - gapSequenceSlice[0],
+            );
+            // dfmt on
+        }
+
+        logJsonDiagnostic("state", "exit", "function", "djunctor.fillGap");
+
+        return this;
+    }
+
+    protected static Tuple!(int, int) getGapSequenceSlice(in Hit hit) pure
+    {
+        auto alignment1 = hit.alignments[0];
+        auto alignment2 = hit.alignments[1];
+        size_t begin;
+        size_t end;
+
+        if (alignment1.isBefore!"contigA"(alignment2))
+        {
+            begin = alignment1.last.contigA.end;
+            end = alignment2.first.contigA.begin;
+        }
+        else
+        {
+            begin = alignment2.last.contigA.end;
+            end = alignment1.first.contigA.begin;
+        }
+
+        return typeof(return)(begin.to!int, end.to!int);
     }
 
     protected DJunctor finish()
@@ -1890,7 +2033,7 @@ struct CoordinateTransform
             // Case 2*: newInsertion extends an existing insertion chain in the front
             newInsertion.end.contigId == insertions[0].begin.contigId
         )
-                                                                    // dfmt on
+        // dfmt on
         {
             return 0;
         }
