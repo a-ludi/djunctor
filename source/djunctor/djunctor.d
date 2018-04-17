@@ -1473,7 +1473,6 @@ class DJunctor
                 throw new Exception(format!"cannot fill gap for %d alignment chains"(hit.length));
             }
         }
-        // Clear `catHits` for next iteration.
         // dfmt off
         logJsonDiagnostic(
             "step", "djunctor.insertHits",
@@ -1481,6 +1480,7 @@ class DJunctor
             "coordTransformPython", coordTransform.toString(),
         );
         // dfmt off
+        // Clear `catHits` for next iteration.
         catHits.length = 0;
         logJsonDiagnostic("state", "exit", "function", "djunctor.insertHits");
 
