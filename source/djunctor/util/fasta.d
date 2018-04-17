@@ -188,7 +188,7 @@ template FastaRecord(T) if (isSomeString!T)
             return this[].walkLength;
         }
 
-        @property int opDollar(size_t dim : 0)()
+        @property size_t opDollar(size_t dim : 0)()
         {
             return length;
         }
