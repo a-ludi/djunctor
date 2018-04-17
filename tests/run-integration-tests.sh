@@ -13,7 +13,7 @@ TEST_DATA_ARCHIVE="integration-tests.tar.gz"
 TEST_DATA_READS="integration-tests/reads"
 TEST_DATA_REF="integration-tests/reference"
 TEST_DATA_MODREF="integration-tests/reference_mod"
-DJUNCTOR_OPTS=(-v -v -v --input-provide-method copy)
+DJUNCTOR_OPTS=(-v -v -v --input-provide-method symlink)
 BUILD_OPTS=()
 JQ_DEFS=''
 
@@ -108,8 +108,10 @@ function clean_up()
     # remove coverage statistics of libraries
     rm -f -- -*.lst
 
-    if ! $KEEP_TEMP;
+    if $KEEP_TEMP;
     then
+        echo "keeping workdir '$WORKDIR'; please remove after inspection"
+    else
         rm -rf "$WORKDIR"
     fi
 }
@@ -233,7 +235,7 @@ function expect_json()
 {
     local OBSERVED="$(json_log | jq --sort-keys --slurp "$JQ_DEFS map(select($1))")"
 
-    if ! jq --exit-status "$JQ_DEFS $2" &> /dev/null <<<"$OBSERVED";
+    if ! jq --exit-status "$JQ_DEFS $2" > /dev/null <<<"$OBSERVED";
     then
         echo "expected: $2"
         echo "observed: $OBSERVED"
