@@ -2243,3 +2243,71 @@ EOF".outdent.indent(4);
         builder ~= epilogue;
     }
 }
+
+/// Access contigs distributed over various DBs by ID.
+struct DBUnion
+{
+    alias DBReference = Tuple!(string, "dbFile", size_t, "contigId");
+
+    string baseDb;
+    DBReference[size_t] overlayDbs;
+
+    /// Return the `dbFile` for `contigId`.
+    DBReference opIndex(in size_t contigId) pure const
+    {
+        return overlayDbs.get(contigId, DBReference(baseDb, contigId));
+    }
+
+    unittest
+    {
+        auto dbQuery = DBUnion("baseDb");
+        dbQuery.overlayDbs[42] = DBReference("overlayDb42", 1);
+
+        assert(dbQuery[0] == DBReference("baseDb", 0));
+        assert(dbQuery[7] == DBReference("baseDb", 7));
+        assert(dbQuery[42] == DBReference("overlayDb42", 1));
+    }
+
+    /// Set the source for `contigId`.
+    void addAlias(in size_t contigId, in string dbFile, in size_t newContigId) pure
+    {
+        addAlias(contigId, DBReference(dbFile, newContigId));
+    }
+
+    /// ditto
+    void addAlias(in size_t contigId, in DBReference dbRef) pure
+    {
+        overlayDbs[contigId] = dbRef;
+    }
+
+    unittest
+    {
+        auto dbQuery = DBUnion("baseDb");
+
+        assert(dbQuery[42] == DBReference("baseDb", 42));
+
+        dbQuery.addAlias(42, DBReference("overlayDb42", 1));
+
+        assert(dbQuery[42] == DBReference("overlayDb42", 1));
+    }
+}
+
+///
+unittest
+{
+    auto dbQuery = DBUnion("baseDb");
+
+    dbQuery.addAlias(42, "overlayDb42", 1);
+
+    assert(dbQuery[0].dbFile == "baseDb");
+    assert(dbQuery[0].contigId == 0);
+    assert(dbQuery[7].dbFile == "baseDb");
+    assert(dbQuery[7].contigId == 7);
+    assert(dbQuery[42].dbFile == "overlayDb42");
+    assert(dbQuery[42].contigId == 1);
+
+    dbQuery.addAlias(7, "overlayDb7", 1);
+
+    assert(dbQuery[7].dbFile == "overlayDb7");
+    assert(dbQuery[7].contigId == 1);
+}
