@@ -18,6 +18,7 @@ BUILD_OPTS=()
 JQ_DEFS=''
 
 ARGV=("$@")
+KEEP_TEMP=false
 RUN_DJUNCTOR=true
 RUN_GDB=false
 SHOW_COVERAGE=false
@@ -46,7 +47,7 @@ function init_script()
 
 function parse_opts()
 {
-    while getopts "chDgu" OPTION "${ARGV[@]}"; do
+    while getopts "chDgTu" OPTION "${ARGV[@]}"; do
         case "$OPTION" in
             c)
                 BUILD_OPTS[${#BUILD_OPTS[*]}]='--build=cov'
@@ -61,6 +62,10 @@ function parse_opts()
             h)
                 usage
                 exit
+                ;;
+            T)
+                KEEP_TEMP=true
+                DJUNCTOR_OPTS[${#DJUNCTOR_OPTS[*]}]='-T'
                 ;;
             u)
                 SHOW_UNCOVERED_LINES=true
@@ -86,6 +91,7 @@ function usage()
     echo " -g        Open interactive gdb session and exit afterwards. Prints the "'`run`'" command"
     echo "           to be used in gdb"
     echo " -h        Prints this help."
+    echo " -T        Keep temporary files; this is forwarded to djunctor."
     echo " -u[=NUM]  If -c is given report uncovered lines in coverage summary. If given print NUM"
     echo "           lines of context (default: 2)"
 }
@@ -102,7 +108,10 @@ function clean_up()
     # remove coverage statistics of libraries
     rm -f -- -*.lst
 
-    rm -rf "$WORKDIR"
+    if ! $KEEP_TEMP;
+    then
+        rm -rf "$WORKDIR"
+    fi
 }
 
 function provide_test_data()
