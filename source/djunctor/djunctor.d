@@ -1702,6 +1702,9 @@ struct CoordinateTransform
         return result;
     }
 
+    /// ditto
+    alias opCall = transform;
+
     ///
     unittest
     {
@@ -1732,6 +1735,7 @@ struct CoordinateTransform
         );
         // dfmt on
         assert(coordTransform.transform(inputCoord) == transformedCoord);
+        assert(coordTransform(inputCoord) == transformedCoord);
     }
 
     unittest
@@ -1866,20 +1870,20 @@ struct CoordinateTransform
         See_Also: `CoordinateTransform.transform`.
     */
     CoordinateTransform add(in size_t beginContigId, in size_t beginIdx,
-            in size_t endContigId, in size_t endIdx, size_t insertionLength)
+            in size_t endContigId, in size_t endIdx, size_t insertionLength) pure
     {
         return add(Coordinate(beginContigId, beginIdx), Coordinate(endContigId,
                 endIdx), insertionLength);
     }
 
     /// ditto
-    CoordinateTransform add(in Coordinate begin, in Coordinate end, size_t insertionLength)
+    CoordinateTransform add(in Coordinate begin, in Coordinate end, size_t insertionLength) pure
     {
         return add(Insertion(begin, end, insertionLength));
     }
 
     /// ditto
-    CoordinateTransform add(in Insertion newInsertion)
+    CoordinateTransform add(in Insertion newInsertion) pure
     {
         size_t idx = getInsertionIndex(newInsertion);
 
@@ -1897,6 +1901,12 @@ struct CoordinateTransform
         }
 
         return this;
+    }
+
+    /// ditto
+    void opOpAssign(string op)(in Insertion newInsertion) pure if (op == "~")
+    {
+        this.add(newInsertion);
     }
 
     unittest
@@ -2021,6 +2031,13 @@ struct CoordinateTransform
             // Case 4*: open new insertion chain
             assert(emptyCoordTransform.add(getDummyInsertion(1337, 42))
                     .insertions == [getDummyInsertion(1337, 42)]);
+        }
+        {
+            CoordinateTransform emptyCoordTransform;
+
+            // Operator Style
+            emptyCoordTransform ~= getDummyInsertion(1337, 42);
+            assert(emptyCoordTransform.insertions == [getDummyInsertion(1337, 42)]);
         }
     }
 
