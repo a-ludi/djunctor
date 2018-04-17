@@ -9,23 +9,23 @@
 module djunctor.djunctor;
 
 import djunctor.commandline : Options;
-import djunctor.util.fasta : buildFastaRecord, parseFasta, parseFastaRecord,
-    reverseComplement;
+import djunctor.util.fasta : buildFastaRecord, PacBioHeader, parseFasta,
+    parseFastaRecord, reverseComplement;
 import djunctor.util.log;
 import djunctor.util.math : mean, median;
 import djunctor.util.range : Comparator;
 import djunctor.util.string : indent;
 import core.exception : AssertError;
 import std.algorithm : all, any, canFind, chunkBy, each, equal, filter, find,
-    group, isSorted, map, max, sort, sum, swap;
+    group, isSorted, joiner, map, max, sort, sum, swap;
 import std.array : appender, Appender, array;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
 import std.exception : assertNotThrown, assertThrown;
 import std.format : format, formattedWrite;
 import std.math : abs, sgn;
-import std.range : assumeSorted, chunks, ElementType, enumerate, isForwardRange,
-    only, retro, slide, SortedRange, walkLength;
+import std.range : assumeSorted, chain, chunks, ElementType, enumerate,
+    isForwardRange, only, retro, slide, SortedRange, walkLength;
 import std.stdio : writeln;
 import std.string : outdent;
 import std.typecons : tuple, Tuple;
@@ -642,9 +642,11 @@ unittest
 }
 
 /**
-    Returns true iff ac1 begins befor ac2 taking complementary alignment into account.
+    Returns true iff ac1 begins before ac2.
+
+    **Note:** the order is relative to the orientation of the opposite contig.
 */
-bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
+bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure 
         if (contig == "contigA" || contig == "contigB")
 {
     assert(__traits(getMember, ac1, contig) == __traits(getMember, ac2, contig),
@@ -734,7 +736,11 @@ class DJunctor
     AlignmentContainer!(AlignmentChain[]) catCandidates;
     /// Set of alignments to be used for gap filling.
     Hit[] catHits;
+    /// Access contigs distributed over several DBs by ID.
+    DBUnion referenceDb;
+    /// Transform coordinates before insertions to coordinates after them.
     CoordinateTransform coordTransform;
+    alias T = coordTransform;
     size_t iteration;
 
     this(in ref Options options)
@@ -743,6 +749,7 @@ class DJunctor
         this.catUseless = [];
         this.catHits = [];
         this.iteration = 0;
+        this.referenceDb.baseDb = options.refDb;
     }
 
     DJunctor run()
@@ -1025,9 +1032,23 @@ class DJunctor
         {
             spanningReadsByGap = readsByNumFlanksByGap.front.map!array.array;
             readsByNumFlanksByGap.popFront();
+            sortSpanninReadAlignments(spanningReadsByGap);
         }
 
         return typeof(return)(extendingReadsByContig, spanningReadsByGap);
+    }
+
+    static protected void sortSpanninReadAlignments(ref PileUp[] spanningReadsByGap) pure nothrow
+    {
+        foreach (spanningReadByGap; spanningReadsByGap)
+            foreach (spanningReads; spanningReadByGap)
+            {
+                auto isBefore = spanningReads[0].isBefore!"contigA"(spanningReads[1]);
+                auto isComplement = spanningReads[0].complement;
+
+                if (isComplement == isBefore)
+                    swap(spanningReads[0], spanningReads[1]);
+            }
     }
 
     static protected long estimateSize(in MatchedAlignmentChains alignments) pure
@@ -1498,52 +1519,67 @@ class DJunctor
 
     protected DJunctor fillGap(in Hit hit)
     {
+        assert(hit.alignments.length == 2);
+        //assert(hit.alignments[0].isBefore!"contigA"(hit.alignments[1]));
+
         logJsonDiagnostic("state", "enter", "function", "djunctor.fillGap");
-        size_t refContig1Id = hit.alignments[0].contigB.id;
-        size_t refContig2Id = hit.alignments[1].contigB.id;
+        const(size_t)[] refContigIds = hit.alignments.map!"a.contigB.id".array;
         auto complement = hit.alignments[0].complement;
         size_t readId = hit.alignments[0].contigA.id;
         auto read = getFastaEntries(hit.dbFile, [readId], options).front.parseFastaRecord;
         auto gapSequenceSlice = getGapSequenceSlice(hit);
         // dfmt off
-        auto fastaSequence = complement
+        auto insertSequence = complement
             ? read.reverseComplement[gapSequenceSlice]
             : read[gapSequenceSlice];
         // dfmt on
+        auto insertionInfo = getInsertionInfo(hit);
+        auto trInsertionInfo = insertionInfo;
+        trInsertionInfo.begin = T(insertionInfo.begin);
+        trInsertionInfo.end = T(insertionInfo.end);
+        auto refContigFastaEntries = refContigIds.map!(
+                contigId => getReferenceFastaEntry(contigId)).array;
+        string newHeader = refContigFastaEntries[0].header;
+        size_t newContigLength = trInsertionInfo.begin.idx + insertSequence.save.walkLength
+            + refContigFastaEntries[1].length - trInsertionInfo.end.idx;
+        // dfmt off
+        auto joinedSequence = chain(
+            refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx],
+            insertSequence,
+            refContigFastaEntries[1][trInsertionInfo.end.idx .. $],
+        );
+        // dfmt on
+        immutable lineSep = typeof(refContigFastaEntries[0]).lineSep;
+        auto fastaBuilder = appender!string;
+        auto expectedFastaLength = newHeader.length + newContigLength
+            + newContigLength / options.fastaLineWidth + 2;
+        fastaBuilder.reserve(expectedFastaLength);
+
+        fastaBuilder ~= newHeader;
+        fastaBuilder ~= lineSep;
+        fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth).joiner(lineSep);
+        fastaBuilder ~= lineSep;
+
+        debug assert(expectedFastaLength >= fastaBuilder.data.length, "avoid reallocation");
+        auto overlayDb = buildDamFile([fastaBuilder.data], options);
+
+        referenceDb.addAlias(insertionInfo.begin.contigId, overlayDb, 1);
+        referenceDb.addAlias(insertionInfo.end.contigId, overlayDb, 1);
+        T ~= insertionInfo;
+
         // dfmt off
         logJsonDebug(
             "step", "insertHits",
             "type", "span",
-            "contigIds", [Json(refContig1Id), Json(refContig2Id)],
+            "contigIds", refContigIds.map!Json.array,
             "readId", readId,
             "complement", complement.to!bool,
-            "fastaSequence", fastaSequence.array.to!string,
+            "insertSequence", insertSequence.array.to!string,
+            "insertionInfo", insertionInfo.serializeToJson(),
+            "transformedInsertionInfo", trInsertionInfo.serializeToJson(),
+            "overlayDb", overlayDb,
         );
         // dfmt on
-        with (CoordinateTransform)
-        {
-            size_t gapRefBegin;
-            size_t gapRefEnd;
-
-            if (hit.alignments[0].isBefore!"contigA"(hit.alignments[1]))
-            {
-                gapRefBegin = hit.alignments[0].last.contigB.end;
-                gapRefEnd = hit.alignments[1].first.contigB.begin;
-            }
-            else
-            {
-                gapRefBegin = hit.alignments[1].last.contigB.end;
-                gapRefEnd = hit.alignments[0].first.contigB.begin;
-            }
-
-            // dfmt off
-            coordTransform.add(
-                Coordinate(refContig1Id, gapRefBegin),
-                Coordinate(refContig2Id, gapRefEnd),
-                gapSequenceSlice[1] - gapSequenceSlice[0],
-            );
-            // dfmt on
-        }
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.fillGap");
 
@@ -1569,6 +1605,45 @@ class DJunctor
         }
 
         return typeof(return)(begin.to!int, end.to!int);
+    }
+
+    protected CoordinateTransform.Insertion getInsertionInfo(in Hit hit) pure
+    {
+        size_t refContig1Id = hit.alignments[0].contigB.id;
+        size_t refContig2Id = hit.alignments[1].contigB.id;
+
+        size_t gapRefBegin;
+        size_t gapRefEnd;
+
+        if (hit.alignments[0].complement)
+        {
+            gapRefBegin = hit.alignments[0].contigB.length - hit.alignments[0].first.contigB.begin;
+            gapRefEnd = hit.alignments[1].contigB.length - hit.alignments[1].last.contigB.end;
+        }
+        else
+        {
+            gapRefBegin = hit.alignments[0].last.contigB.end;
+            gapRefEnd = hit.alignments[1].first.contigB.begin;
+        }
+
+        auto gapSequenceSlice = getGapSequenceSlice(hit);
+
+        // dfmt off
+        auto newInsertion = typeof(return)(
+            CoordinateTransform.Coordinate(refContig1Id, gapRefBegin),
+            CoordinateTransform.Coordinate(refContig2Id, gapRefEnd),
+            gapSequenceSlice[1] - gapSequenceSlice[0],
+        );
+        // dfmt on
+
+        return newInsertion;
+    }
+
+    protected auto getReferenceFastaEntry(in size_t readId) const
+    {
+        auto dbRef = referenceDb[readId];
+
+        return parseFastaRecord(getFastaEntries(dbRef.dbFile, [dbRef.contigId], options).front);
     }
 
     protected DJunctor finish()

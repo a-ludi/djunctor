@@ -272,6 +272,36 @@ function expect_transformed_coord()
     fi
 }
 
+function expect_insert_sequence_ends()
+{
+    local BEGIN_CONTIG="$1"
+    local END_CONTIG="$2"
+    local EXPECTED_HEAD="$3"
+    local EXPECTED_TAIL="$4"
+
+    local INSERTION_SEQUENCE="$(json_log | jq --raw-output 'select(has("insertSequence") and .contigIds == ['"$BEGIN_CONTIG"', '"$END_CONTIG"']) | .insertSequence')"
+    local INSERTION_HEAD="$(head -c${#EXPECTED_HEAD} <<<"$INSERTION_SEQUENCE")"
+    local INSERTION_TAIL="$(head -c-1 <<<"$INSERTION_SEQUENCE" | tail -c${#EXPECTED_TAIL})"
+
+    if [[ "$INSERTION_HEAD" != "$EXPECTED_HEAD" ]];
+    then
+        echo "insertion head mismatch:"
+        echo "  expected: $EXPECTED_HEAD"
+        echo "       got: $INSERTION_HEAD"
+
+        return 1
+    fi
+
+    if [[ "$INSERTION_TAIL" != "$EXPECTED_TAIL" ]];
+    then
+        echo "insertion tail mismatch:"
+        echo "  expected: $EXPECTED_TAIL"
+        echo "       got: $INSERTION_TAIL"
+
+        return 1
+    fi
+}
+
 #-----------------------------------------------------------------------------
 # Test Cases
 #-----------------------------------------------------------------------------
@@ -296,9 +326,48 @@ function test_gaps_found()
 function test_gaps_filled()
 {
     expect_json \
-        '. | .type == "span" and .step == "insertHits"' \
+        '. | .type == "span" and .step == "insertHits" and has("readId")' \
         'length == 3 and map(.readId) == [1, 1, 1] and map(.contigIds) == [[1, 2], [2, 3], [3, 4]]' \
         '{ readIds: map(.readId), contigIds: map(.contigIds) }'
+}
+
+function test_gap_1_2_nicely_filled()
+{
+    expect_json \
+        '.contigIds == [1, 2] and has("transformedInsertionInfo")' \
+        '.[0] | ((.transformedInsertionInfo | (.begin.idx == 8300 and .end.idx == 0)) and .transformedInsertionInfo.length == (.insertSequence | length))' \
+        '.[0] | {".begin.idx": .transformedInsertionInfo.begin.idx, ".end.idx": .transformedInsertionInfo.end.idx, ".length": .transformedInsertionInfo.length, "length": (.insertSequence | length)}' && \
+    expect_insert_sequence_ends \
+        1 2 \
+        'ggttgtaaattgactgttgtctgctgccaatctactggtgggggagagat' \
+        'gaatgaatcttgcatctatgttgctaagtaaagggtggcagtatgaagat'
+    # this is the true sequence
+}
+
+function test_gap_2_3_nicely_filled()
+{
+    expect_json \
+        '.contigIds == [2, 3] and has("transformedInsertionInfo")' \
+        '.[0].transformedInsertionInfo | (.begin.idx == 20750 and .end.idx == 0 and .length == 8450)' \
+        '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' && \
+    expect_insert_sequence_ends \
+        2 3 \
+        'actccgcttaaatttattttacctaaaatccttttaacagacaaagtcca' \
+        'ctaaaagtatactggcttaaatgctaatttcatctgaaaaataccacaga'
+    # this is the expected consensus
+}
+
+function test_gap_3_4_nicely_filled()
+{
+    expect_json \
+        '.contigIds == [3, 4] and has("transformedInsertionInfo")' \
+        '.[0].transformedInsertionInfo | (.begin.idx == 154900 and .end.idx == 0 and .length == 5004)' \
+        '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' && \
+    expect_insert_sequence_ends \
+        3 4 \
+        'cctcaggccggtttgaagaccagcacagcccatgtgagcagggcacaggg' \
+        'ttctccagcatcatcttgggagaatgttgacgtcactgatcttggtttct'
+    # this is the true sequence
 }
 
 function test_number_of_iterations()
@@ -322,10 +391,10 @@ function test_coordinate_transform()
         1 $((42 - 0 + 4100 + 8300)) && \
     expect_transformed_coord "$COORD_TRANSFORM" \
         3 42 \
-        1 $((42 - 0 + 8450 + 125700 - 0 + 4100 + 8300)) && \
+        1 $((42 - 0 + 8450 + 8350 - 0 + 4100 + 8300)) && \
     expect_transformed_coord "$COORD_TRANSFORM" \
         4 42 \
-        1 $((42 - 0 + 5004 + 125700 - 0 + 8450 + 125700 - 0 + 4100 + 8300)) && \
+        1 $((42 - 0 + 5004 + 125700 - 0 + 8450 + 8350 - 0 + 4100 + 8300)) && \
     expect_transformed_coord "$COORD_TRANSFORM" \
         1337 42 \
         1337 42
