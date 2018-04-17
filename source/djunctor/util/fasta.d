@@ -203,7 +203,8 @@ template FastaRecord(T) if (isSomeString!T)
         auto opIndex(int i) pure const
         {
             i = normalizeIndex(i);
-            assert(0 <= i && i < length, "index out of bounds");
+            assert(0 <= i && i < length,
+                    format!"index out of bounds: %d not in [-%d, %d)"(i, length, length));
 
             return this[].drop(i).front;
         }
@@ -212,7 +213,8 @@ template FastaRecord(T) if (isSomeString!T)
         {
             auto i = normalizeIndex(slice[0]);
             auto j = normalizeIndex(slice[1]);
-            assert(0 <= i && i <= j && j < length, format!"index out of bounds: %s"(slice));
+            assert(0 <= i && i <= j && j <= length,
+                    format!"index out of bounds: [%d, %d) not in [-%d, %d)"(i, j, length, length));
 
             return this[].drop(i).take(j - i);
         }
