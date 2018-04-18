@@ -1533,7 +1533,7 @@ class DJunctor
             ? read.reverseComplement[gapSequenceSlice]
             : read[gapSequenceSlice];
         // dfmt on
-        auto insertionInfo = getInsertionInfo(hit);
+        auto insertionInfo = getInsertionInfoForGap(hit);
         auto trInsertionInfo = insertionInfo;
         trInsertionInfo.begin = T(insertionInfo.begin);
         trInsertionInfo.end = T(insertionInfo.end);
@@ -1607,7 +1607,7 @@ class DJunctor
         return typeof(return)(begin.to!int, end.to!int);
     }
 
-    protected CoordinateTransform.Insertion getInsertionInfo(in Hit hit) pure
+    protected auto getInsertionInfoForGap(in Hit hit) pure
     {
         size_t refContig1Id = hit.alignments[0].contigB.id;
         size_t refContig2Id = hit.alignments[1].contigB.id;
@@ -1628,15 +1628,16 @@ class DJunctor
 
         auto gapSequenceSlice = getGapSequenceSlice(hit);
 
-        // dfmt off
-        auto newInsertion = typeof(return)(
-            CoordinateTransform.Coordinate(refContig1Id, gapRefBegin),
-            CoordinateTransform.Coordinate(refContig2Id, gapRefEnd),
-            gapSequenceSlice[1] - gapSequenceSlice[0],
-        );
-        // dfmt on
-
-        return newInsertion;
+        with (CoordinateTransform)
+        {
+            // dfmt off
+            return Insertion.make!(Insertion.Type.gap)(
+                Coordinate(refContig1Id, gapRefBegin),
+                Coordinate(refContig2Id, gapRefEnd),
+                gapSequenceSlice[1] - gapSequenceSlice[0],
+            );
+            // dfmt on
+        }
     }
 
     protected auto getReferenceFastaEntry(in size_t readId) const
@@ -1696,7 +1697,88 @@ struct CoordinateTransform
         size_t idx;
     }
 
-    alias Insertion = Tuple!(Coordinate, "begin", Coordinate, "end", size_t, "length");
+    static struct Insertion
+    {
+        static enum Type
+        {
+            gap,
+            front,
+            back,
+        }
+
+        Coordinate begin;
+        Coordinate end;
+        size_t length;
+
+        @disable this(Coordinate);
+        @disable this(Coordinate, Coordinate);
+        private this(Coordinate begin, Coordinate end, size_t length) pure nothrow
+        {
+            this.begin = begin;
+            this.end = end;
+            this.length = length;
+        }
+
+        static typeof(this) make(Type insertionType)(Coordinate begin, Coordinate end, size_t length) pure nothrow
+        {
+            static if (insertionType == Type.front)
+            {
+                begin.idx = 0;
+            }
+            else static if (insertionType == Type.back)
+            {
+                end.idx = begin.idx + length;
+            }
+
+            return typeof(this)(begin, end, length);
+        }
+
+        invariant
+        {
+            bool isExtension = begin.contigId == end.contigId;
+            bool isFrontExtension = isExtension && (begin.idx == 0 && end.idx < begin.idx + length);
+            bool isBackExtension = isExtension && (begin.idx > 0 && end.idx == begin.idx + length);
+            bool isGap = !isExtension;
+
+            assert(isGap ^ isFrontExtension ^ isBackExtension, "ambiguous insertion type");
+        }
+
+        @property isExtension() pure const nothrow
+        {
+            return begin.contigId == end.contigId;
+        }
+
+        @property isFrontExtension() pure const nothrow
+        {
+            return isExtension && (begin.idx == 0 && end.idx < begin.idx + length);
+        }
+
+        @property isBackExtension() pure const nothrow
+        {
+            return isExtension && (begin.idx > 0 && end.idx == begin.idx + length);
+        }
+
+        @property isGap() pure const nothrow
+        {
+            return !isExtension;
+        }
+
+        @property type() pure const nothrow
+        {
+            if (isGap)
+            {
+                return Type.gap;
+            }
+            else if (isFrontExtension)
+            {
+                return Type.front;
+            }
+            else
+            {
+                return Type.back;
+            }
+        }
+    }
 
     static enum ExportLanguage
     {
@@ -1722,20 +1804,53 @@ struct CoordinateTransform
         coordinate `T(x)` is calculated as follows:
 
         ---
-          begin contig       end contig
+        Case 1:  begin contig == end contig
+            Case 1.1:  extend begin of contig
 
-        0         ib  lb 0  ie  x      le
-        |----------+---| |---+--+-------|
-                   |         |
-                   |---------|
-                   0        li
+                   begin/end contig
 
-                    insertion
+                  0  ie  x
+                  |---+--+-------|
+                 /    |
+                |-----|
+                0    li
 
-        T(x) = x
-             - ie  // (1) make relative to insertion point of end contig
-             + li  // (2) make relative to begin of insertion
-             + ib  // (3) make relative to begin of begin contig
+                T(x) = x
+                     - ie  // (1) make relative to insertion point of end contig
+                     + li  // (2) make relative to begin of insertion
+                // choose ib = 0
+                     = x - ie + li + ib
+
+            Case 1.2:  extend end of contig
+
+                        begin/end contig
+
+                0       x ib        ie
+                |-------+--+---| - - +
+                           |         |
+                           |---------|
+                           0        li
+
+                T(x) = x
+                // choose ie = li + ib
+                     = x - ie + li + ib
+
+        Case 2:  begin contig != end contig
+
+              begin contig       end contig
+
+            0         ib     0  ie  x
+            |----------+---| |---+--+-------|
+                       |         |
+                       |---------|
+                       0        li
+
+                        insertion
+
+            T(x) = x
+                 - ie  // (1) make relative to insertion point of end contig
+                 + li  // (2) make relative to begin of insertion
+                 + ib  // (3) make relative to begin of begin contig
         ---
 
         Returns: transformed coordinate.
@@ -1790,11 +1905,11 @@ struct CoordinateTransform
         // insert               |---------|
         //                      0       100
         // dfmt off
-        coordTransform.add(
+        coordTransform.add(Insertion.make!(Insertion.Type.gap)(
             Coordinate(1, 495),
             Coordinate(2, 5),
             100,
-        );
+        ));
         // dfmt on
 
         auto inputCoord = Coordinate(2, 100);
@@ -1815,126 +1930,269 @@ struct CoordinateTransform
 
     unittest
     {
-        CoordinateTransform coordTransform;
-        // dfmt off
-        coordTransform.add(
-            Coordinate(100, 0),
-            Coordinate(101, 0),
-            0,
-        );
-        coordTransform.add(
-            Coordinate(1, 495),
-            Coordinate(2, 5),
-            100,
-        );
-        coordTransform.add(
-            Coordinate(2, 490),
-            Coordinate(5, 10),
-            150,
-        );
-        coordTransform.add(
-            Coordinate(5, 480),
-            Coordinate(3, 20),
-            200,
-        );
-        coordTransform.add(
-            Coordinate(102, 0),
-            Coordinate(103, 0),
-            0,
-        );
-        // dfmt on
-
+        with (Insertion.Type)
         {
-            // Case: contig not present in insertions
-            auto inputCoord = Coordinate(1337, 42);
-            assert(coordTransform.transform(inputCoord) == inputCoord);
-        }
-        {
-            // Case: contig is never end of an insertions
-            auto inputCoord = Coordinate(1, 64);
-            assert(coordTransform.transform(inputCoord) == inputCoord);
-        }
-        {
-            // Case: contig is end of the last insertions of a reverse chain.
-            auto inputCoord = Coordinate(2, 64);
+            CoordinateTransform coordTransform;
             // dfmt off
-            auto transformedCoord = Coordinate(
-                1,
-                (
-                      64   // last and only insertion in chain
-                    - 5    // (1)
-                    + 100  // (2)
-                    + 495  // (3)
-                )
-            );
+            coordTransform.add(Insertion.make!gap(
+                Coordinate(100, 0),
+                Coordinate(101, 0),
+                0,
+            ));
+            coordTransform.add(Insertion.make!gap(
+                Coordinate(1, 495),
+                Coordinate(2, 5),
+                100,
+            ));
+            coordTransform.add(Insertion.make!gap(
+                Coordinate(2, 490),
+                Coordinate(5, 10),
+                150,
+            ));
+            coordTransform.add(Insertion.make!gap(
+                Coordinate(5, 480),
+                Coordinate(3, 20),
+                200,
+            ));
+            coordTransform.add(Insertion.make!gap(
+                Coordinate(102, 0),
+                Coordinate(103, 0),
+                0,
+            ));
+            coordTransform.add(Insertion.make!front(
+                Coordinate(200),
+                Coordinate(200, 5),
+                10,
+            ));
+            coordTransform.add(Insertion.make!back(
+                Coordinate(201, 90),
+                Coordinate(201),
+                20,
+            ));
+            coordTransform.add(Insertion.make!front(
+                Coordinate(202),
+                Coordinate(202, 15),
+                30,
+            ));
+            coordTransform.add(Insertion.make!front(
+                Coordinate(202),
+                Coordinate(202, 20),
+                40,
+            ));
+            coordTransform.add(Insertion.make!back(
+                Coordinate(203, 65),
+                Coordinate(203),
+                50,
+            ));
+            coordTransform.add(Insertion.make!back(
+                Coordinate(203, 60),
+                Coordinate(203),
+                60,
+            ));
             // dfmt on
-            assert(coordTransform.transform(inputCoord) == transformedCoord);
-        }
-        {
-            // Case: contig is end of an inner insertions, ie. there are
-            //       insertions before and after in the chain.
-            auto inputCoord = Coordinate(5, 64);
-            // dfmt off
-            auto transformedCoord = Coordinate(
-                1,
-                (
+
+            {
+                // Case: contig not present in insertions
+                auto inputCoord = Coordinate(1337, 42);
+                assert(coordTransform.transform(inputCoord) == inputCoord);
+            }
+            {
+                // Case: contig is never end of an insertions
+                auto inputCoord = Coordinate(1, 64);
+                assert(coordTransform.transform(inputCoord) == inputCoord);
+            }
+            {
+                // Case: contig is end of the last insertions of a reverse chain.
+                auto inputCoord = Coordinate(2, 64);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    1,
                     (
-                          64   // last insertion in chain
+                          64   // last and only insertion in chain
                         - 5    // (1)
                         + 100  // (2)
                         + 495  // (3)
-                    )      // first insertion in chain
-                    - 10    // (1)
-                    + 150  // (2)
-                    + 490  // (3)
-                )
-
-            );
-            // dfmt on
-            assert(coordTransform.transform(inputCoord) == transformedCoord);
-        }
-        {
-            // Case: contig is end of the first insertions of a reverse chain.
-            auto inputCoord = Coordinate(3, 64);
-            // dfmt off
-            auto transformedCoord = Coordinate(
-                1,
-                (
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+            {
+                // Case: contig is end of an inner insertions, ie. there are
+                //       insertions before and after in the chain.
+                auto inputCoord = Coordinate(5, 64);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    1,
                     (
                         (
                               64   // last insertion in chain
                             - 5    // (1)
                             + 100  // (2)
                             + 495  // (3)
-                        )      // second insertion in chain
+                        )      // first insertion in chain
                         - 10    // (1)
                         + 150  // (2)
                         + 490  // (3)
-                    )      // first insertion in chain
-                    - 20    // (1)
-                    + 200  // (2)
-                    + 480  // (3)
-                )
+                    )
 
-            );
-            // dfmt on
-            assert(coordTransform.transform(inputCoord) == transformedCoord);
-        }
-        {
-            // Case: coordinate on rejected part of end contig, ie. `x < ie`.
-            auto inputCoord = Coordinate(2, 3);
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+            {
+                // Case: contig is end of the first insertions of a reverse chain.
+                auto inputCoord = Coordinate(3, 64);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    1,
+                    (
+                        (
+                            (
+                                  64   // last insertion in chain
+                                - 5    // (1)
+                                + 100  // (2)
+                                + 495  // (3)
+                            )      // second insertion in chain
+                            - 10    // (1)
+                            + 150  // (2)
+                            + 490  // (3)
+                        )      // first insertion in chain
+                        - 20    // (1)
+                        + 200  // (2)
+                        + 480  // (3)
+                    )
+
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+            {
+                // Case: coordinate on rejected part of end contig, ie. `x < ie`.
+                auto inputCoord = Coordinate(2, 3);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    1,
+                    (
+                          3    // last and only insertion in chain
+                        - 5    // (1)
+                        + 100  // (2)
+                        + 495  // (3)
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+
+            {
+                // Case: simple front extension
+                auto inputCoord = Coordinate(200, 3);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    200,
+                    (
+                          3    // only extension (in chain)
+                        - 5    // (1)
+                        + 10   // (2)
+                        + 0    // (3)
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+            {
+                // Case: simple back extension
+                auto inputCoord = Coordinate(201, 3);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    201,
+                    (
+                          3    // only extension (in chain)
+                        - 110  // (1)
+                        + 20   // (2)
+                        + 90   // (3)
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+            {
+                // Case: double front extension
+                auto inputCoord = Coordinate(202, 3);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    202,
+                    (
+                        (
+                              3    // last extension (in chain)
+                            - 15   // (1)
+                            + 30   // (2)
+                            +  0   // (3)
+                        )     // first extension (in chain)
+                        - 20  // (1)
+                        + 40  // (2)
+                        +  0  // (3)
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+            {
+                // Case: double back extension
+                auto inputCoord = Coordinate(203, 3);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    203,
+                    (
+                        (
+                              3    // last extension (in chain)
+                            - 115  // (1)
+                            + 50   // (2)
+                            + 65   // (3)
+                        )      // first extension (in chain)
+                        - 120  // (1)
+                        + 60   // (2)
+                        + 60   // (3)
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+
             // dfmt off
-            auto transformedCoord = Coordinate(
-                1,
-                (
-                      3    // last and only insertion in chain
-                    - 5    // (1)
-                    + 100  // (2)
-                    + 495  // (3)
-                )
-            );
+            coordTransform.add(Insertion.make!gap(
+                Coordinate(203, 115),
+                Coordinate(202, 5),
+                50,
+            ));
             // dfmt on
-            assert(coordTransform.transform(inputCoord) == transformedCoord);
+
+            {
+                // Case: double front extension + double back extension + gap spanned
+                auto inputCoord = Coordinate(202, 3);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    203,
+                    (
+                        (
+                            (
+                                  3    // last front extension (in chain)
+                                - 15   // (1)
+                                + 30   // (2)
+                                +  0   // (3)
+                            )     // first front extension (in chain)
+                            - 20  // (1)
+                            + 40  // (2)
+                            +  0  // (3)
+                        )      // only gap (in chain)
+                        -   5  // (1)
+                        +  50  // (2)
+                        + 115  // (3)
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
         }
     }
 
@@ -1944,20 +2202,6 @@ struct CoordinateTransform
         Returns: this tranform.
         See_Also: `CoordinateTransform.transform`.
     */
-    CoordinateTransform add(in size_t beginContigId, in size_t beginIdx,
-            in size_t endContigId, in size_t endIdx, size_t insertionLength) pure
-    {
-        return add(Coordinate(beginContigId, beginIdx), Coordinate(endContigId,
-                endIdx), insertionLength);
-    }
-
-    /// ditto
-    CoordinateTransform add(in Coordinate begin, in Coordinate end, size_t insertionLength) pure
-    {
-        return add(Insertion(begin, end, insertionLength));
-    }
-
-    /// ditto
     CoordinateTransform add(in Insertion newInsertion) pure
     {
         size_t idx = getInsertionIndex(newInsertion);
@@ -1986,133 +2230,259 @@ struct CoordinateTransform
 
     unittest
     {
-        Insertion getDummyInsertion(in size_t beginContigId, in size_t endContigId)
+        with (Insertion.Type)
         {
-            return Insertion(Coordinate(beginContigId, 0), Coordinate(endContigId, 0), 0);
-        }
+            Insertion getDummyInsertion(Insertion.Type insertionType = gap)(in size_t beginContigId,
+                    in size_t endContigId)
+            {
+                static immutable dummyLength = 42;
 
-        CoordinateTransform getDummyTransform()
-        {
-            CoordinateTransform coordTransform;
+                return Insertion.make!insertionType(Coordinate(beginContigId,
+                        dummyLength / 2), Coordinate(endContigId, dummyLength / 2), dummyLength);
+            }
 
-            // dfmt off
-            coordTransform.insertions = [
-                getDummyInsertion(1, 2),
-                getDummyInsertion(3, 4),
-                getDummyInsertion(9, 8),
-                getDummyInsertion(6, 5),
-            ];
-            // dfmt on
+            CoordinateTransform getDummyTransform()
+            {
+                CoordinateTransform coordTransform;
 
-            return coordTransform;
-        }
+                // dfmt off
+                coordTransform.insertions = [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ];
+                // dfmt on
 
-        {
-            auto coordTransform = getDummyTransform();
-            // Case 1: newInsertion fits between too existing insertions
-            // dfmt off
-            coordTransform.add(getDummyInsertion(2, 3));
-            assert(coordTransform.insertions == [
-                getDummyInsertion(1, 2),
-                getDummyInsertion(2, 3),
-                getDummyInsertion(3, 4),
-                getDummyInsertion(9, 8),
-                getDummyInsertion(6, 5),
-            ]);
-            coordTransform.add(getDummyInsertion(8, 6));
-            assert(coordTransform.insertions == [
-                getDummyInsertion(1, 2),
-                getDummyInsertion(2, 3),
-                getDummyInsertion(3, 4),
-                getDummyInsertion(9, 8),
-                getDummyInsertion(8, 6),
-                getDummyInsertion(6, 5),
-            ]);
-            // dfmt on
-        }
-        {
-            auto coordTransform = getDummyTransform();
-            // Case 2*: newInsertion extends an existing insertion chain in the front
-            // dfmt off
-            coordTransform.add(getDummyInsertion(42, 1));
-            assert(coordTransform.insertions == [
-                getDummyInsertion(42, 1),
-                getDummyInsertion(1, 2),
-                getDummyInsertion(3, 4),
-                getDummyInsertion(9, 8),
-                getDummyInsertion(6, 5),
-            ]);
-            // Case 2: newInsertion extends an existing insertion chain in the front
-            coordTransform.add(getDummyInsertion(42, 9));
-            assert(coordTransform.insertions == [
-                getDummyInsertion(42, 1),
-                getDummyInsertion(1, 2),
-                getDummyInsertion(3, 4),
-                getDummyInsertion(42, 9),
-                getDummyInsertion(9, 8),
-                getDummyInsertion(6, 5),
-            ]);
-            // dfmt on
-        }
-        {
-            auto coordTransform = getDummyTransform();
-            // Case 3: newInsertion extends an existing insertion chain in the front
-            // dfmt off
-            coordTransform.add(getDummyInsertion(4, 42));
-            assert(coordTransform.insertions == [
-                getDummyInsertion(1, 2),
-                getDummyInsertion(3, 4),
-                getDummyInsertion(4, 42),
-                getDummyInsertion(9, 8),
-                getDummyInsertion(6, 5),
-            ]);
-            coordTransform.add(getDummyInsertion(5, 42));
-            assert(coordTransform.insertions == [
-                getDummyInsertion(1, 2),
-                getDummyInsertion(3, 4),
-                getDummyInsertion(4, 42),
-                getDummyInsertion(9, 8),
-                getDummyInsertion(6, 5),
-                getDummyInsertion(5, 42),
-            ]);
-            // dfmt on
-        }
-        {
-            auto coordTransform = getDummyTransform();
-            // Case 4: open new insertion chain
-            // dfmt off
-            coordTransform.add(getDummyInsertion(1337, 42));
-            assert(coordTransform.insertions == [
-                getDummyInsertion(1, 2),
-                getDummyInsertion(3, 4),
-                getDummyInsertion(9, 8),
-                getDummyInsertion(6, 5),
-                getDummyInsertion(1337, 42),
-            ]);
-            coordTransform.add(getDummyInsertion(1337, 42));
-            assert(coordTransform.insertions == [
-                getDummyInsertion(1, 2),
-                getDummyInsertion(3, 4),
-                getDummyInsertion(9, 8),
-                getDummyInsertion(6, 5),
-                getDummyInsertion(1337, 42),
-                getDummyInsertion(1337, 42),
-            ]);
-            // dfmt on
-        }
-        {
-            CoordinateTransform emptyCoordTransform;
+                return coordTransform;
+            }
 
-            // Case 4*: open new insertion chain
-            assert(emptyCoordTransform.add(getDummyInsertion(1337, 42))
-                    .insertions == [getDummyInsertion(1337, 42)]);
-        }
-        {
-            CoordinateTransform emptyCoordTransform;
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 1 (Gap): newInsertion fits between two existing insertions
+                // dfmt off
+                coordTransform.add(getDummyInsertion(2, 3));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(2, 3),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                coordTransform.add(getDummyInsertion(8, 6));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(2, 3),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(8, 6),
+                    getDummyInsertion(6, 5),
+                ]);
+                // dfmt on
+            }
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 2* (Gap): newInsertion extends an existing insertion chain in the front
+                // dfmt off
+                coordTransform.add(getDummyInsertion(42, 1));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(42, 1),
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                // Case 2 (Gap): newInsertion extends an existing insertion chain in the front
+                coordTransform.add(getDummyInsertion(42, 9));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(42, 1),
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(42, 9),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                // dfmt on
+            }
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 2* (Extension): newInsertion extends an existing insertion chain in the front
+                // dfmt off
+                coordTransform.add(getDummyInsertion!front(1, 1));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion!front(1, 1),
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                coordTransform.add(getDummyInsertion!front(1, 1));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion!front(1, 1),
+                    getDummyInsertion!front(1, 1),
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                // Case 2 (Extension): newInsertion extends an existing insertion chain in the front
+                coordTransform.add(getDummyInsertion!front(9, 9));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion!front(1, 1),
+                    getDummyInsertion!front(1, 1),
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion!front(9, 9),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                coordTransform.add(getDummyInsertion!front(9, 9));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion!front(1, 1),
+                    getDummyInsertion!front(1, 1),
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion!front(9, 9),
+                    getDummyInsertion!front(9, 9),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                // dfmt on
+            }
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 3 (Gap): newInsertion extends an existing insertion chain in the back
+                // dfmt off
+                coordTransform.add(getDummyInsertion(4, 42));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(4, 42),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                coordTransform.add(getDummyInsertion(5, 42));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(4, 42),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion(5, 42),
+                ]);
+                // dfmt on
+            }
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 3 (Extension): newInsertion extends an existing insertion chain in the back
+                // dfmt off
+                coordTransform.add(getDummyInsertion!back(4, 4));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion!back(4, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                coordTransform.add(getDummyInsertion!back(4, 4));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion!back(4, 4),
+                    getDummyInsertion!back(4, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                coordTransform.add(getDummyInsertion!back(5, 5));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion!back(4, 4),
+                    getDummyInsertion!back(4, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion!back(5, 5),
+                ]);
+                coordTransform.add(getDummyInsertion!back(5, 5));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion!back(4, 4),
+                    getDummyInsertion!back(4, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion!back(5, 5),
+                    getDummyInsertion!back(5, 5),
+                ]);
+                // dfmt on
+            }
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 4 (Gap): open new insertion chain
+                // dfmt off
+                coordTransform.add(getDummyInsertion(1337, 42));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion(1337, 42),
+                ]);
+                coordTransform.add(getDummyInsertion(1337, 42));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion(1337, 42),
+                    getDummyInsertion(1337, 42),
+                ]);
+                // dfmt on
+            }
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 4 (Extension): open new insertion chain
+                // dfmt off
+                coordTransform.add(getDummyInsertion!front(1337, 1337));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion!front(1337, 1337),
+                ]);
+                coordTransform.add(getDummyInsertion!back(42, 42));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion!front(1337, 1337),
+                    getDummyInsertion!back(42, 42),
+                ]);
+                // dfmt on
+            }
+            {
+                CoordinateTransform emptyCoordTransform;
 
-            // Operator Style
-            emptyCoordTransform ~= getDummyInsertion(1337, 42);
-            assert(emptyCoordTransform.insertions == [getDummyInsertion(1337, 42)]);
+                // Case 4* (Gap): open new insertion chain
+                assert(emptyCoordTransform.add(getDummyInsertion(1337, 42))
+                        .insertions == [getDummyInsertion(1337, 42)]);
+            }
+            {
+                CoordinateTransform emptyCoordTransform;
+
+                // Case 4* (Extension): open new insertion chain
+                assert(emptyCoordTransform.add(getDummyInsertion!front(1337,
+                        1337)).insertions == [getDummyInsertion!front(1337, 1337)]);
+            }
+            {
+                CoordinateTransform emptyCoordTransform;
+
+                // Operator Style
+                emptyCoordTransform ~= getDummyInsertion(1337, 42);
+                assert(emptyCoordTransform.insertions == [getDummyInsertion(1337, 42)]);
+            }
         }
     }
 
@@ -2145,7 +2515,7 @@ struct CoordinateTransform
 
             // dfmt off
             if (any(only(
-                // Case 1: newInsertion fits between too existing insertions
+                // Case 1: newInsertion fits between two existing insertions
                 newInsertion.begin.contigId == insA.end.contigId && newInsertion.end.contigId == insB.begin.contigId,
                 // Case 2: newInsertion extends an existing insertion chain in the front
                 newInsertion.begin.contigId != insA.end.contigId && newInsertion.end.contigId == insB.begin.contigId,
@@ -2180,7 +2550,7 @@ struct CoordinateTransform
         ];
         // dfmt on
         {
-            // Case 1: newInsertion fits between too existing insertions
+            // Case 1: newInsertion fits between two existing insertions
             assert(coordTransform.getInsertionIndex(getDummyInsertion(2, 3)) == 1);
             assert(coordTransform.getInsertionIndex(getDummyInsertion(8, 6)) == 3);
         }
