@@ -16,8 +16,8 @@ import djunctor.util.math : mean, median;
 import djunctor.util.range : Comparator;
 import djunctor.util.string : indent;
 import core.exception : AssertError;
-import std.algorithm : all, any, canFind, chunkBy, each, equal, filter, find,
-    group, isSorted, joiner, map, max, sort, sum, swap;
+import std.algorithm : all, any, canFind, chunkBy, each, equal, filter, find, fold,
+    group, isSorted, joiner, map, max, maxElement, min, sort, sum, swap;
 import std.array : appender, Appender, array;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
@@ -28,7 +28,7 @@ import std.range : assumeSorted, chain, chunks, ElementType, enumerate,
     isForwardRange, only, retro, slide, SortedRange, walkLength;
 import std.stdio : writeln;
 import std.string : outdent;
-import std.typecons : tuple, Tuple;
+import std.typecons : Flag, No, tuple, Tuple, Yes;
 import vibe.data.json : Json, serializeToJson;
 
 version (unittest)
@@ -118,8 +118,8 @@ struct AlignmentChain
 
     static enum Complement
     {
-        no,
-        yes,
+        no = false,
+        yes = true,
     }
 
     static immutable maxScore = 2 ^^ 16;
@@ -133,12 +133,13 @@ struct AlignmentChain
     invariant
     {
         assert(localAlignments.length >= 1, "empty chain is forbidden");
-        assert(localAlignments.all!(la => 0 <= la.contigA.begin
-                && la.contigA.begin < la.contigA.end && la.contigA.end <= contigA.length),
-                "non-sense alignment of contigA");
-        assert(localAlignments.all!(la => 0 <= la.contigB.begin
-                && la.contigB.begin < la.contigB.end && la.contigB.end <= contigB.length),
-                "non-sense alignment of contigB");
+        foreach (la; localAlignments)
+        {
+            assert(0 <= la.contigA.begin && la.contigA.begin < la.contigA.end
+                    && la.contigA.end <= contigA.length, "non-sense alignment of contigA");
+            assert(0 <= la.contigB.begin && la.contigB.begin < la.contigB.end
+                    && la.contigB.end <= contigB.length, "non-sense alignment of contigB");
+        }
     }
 
     unittest
@@ -646,7 +647,7 @@ unittest
 
     **Note:** the order is relative to the orientation of the opposite contig.
 */
-bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure 
+bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
         if (contig == "contigA" || contig == "contigB")
 {
     assert(__traits(getMember, ac1, contig) == __traits(getMember, ac2, contig),
@@ -685,17 +686,1438 @@ unittest
             }
 }
 
+/**
+    If readAlignment is a gap return true iff the first alignment begins
+    before the second alignment on the reference (contigB); otherwise
+    returns true.
+*/
+bool isInReferenceOrder(in ReadAlignment readAlignment) pure nothrow
+{
+    return !readAlignment.isGap || isBefore!"contigA"(readAlignment[0],
+            readAlignment[1]) != readAlignment[0].complement;
+}
+
 /// Start the `djunctor` alorithm with preprocessed options.
 void runWithOptions(in ref Options options)
 {
     new DJunctor(options).run();
 }
 
-class DJunctor
+/**
+    Alignment of a read against the reference. This is either one or two
+    alignment chains which belong to the same read and one or two reference
+    contig(s).
+*/
+alias ReadAlignment = AlignmentChain[];
+
+/// Type of the read alignment.
+static enum ReadAlignmentType
 {
-    /// Stop after maxLoops `mainLoop`s at the latest.
-    static immutable maxLoops = 1;
-    /**
+    front = 0,
+    gap = 1,
+    back = 2,
+}
+
+/**
+    Returns true iff the read alignment is valid, ie. it is either an
+    extension or gap.
+*/
+bool isValid(in ReadAlignment readAlignment) pure nothrow
+{
+    return readAlignment.isExtension ^ readAlignment.isGap;
+}
+
+/**
+    Get the type of the read alignment.
+
+    See_Also: `isFrontExtension`, `isBackExtension`, `isGap`
+*/
+ReadAlignmentType getType(in ReadAlignment readAlignment) pure nothrow
+{
+    assert(readAlignment.isValid, "invalid read alignment");
+
+    if (readAlignment.isGap)
+    {
+        return ReadAlignmentType.gap;
+    }
+    else if (readAlignment.isFrontExtension)
+    {
+        return ReadAlignmentType.front;
+    }
+    else
+    {
+        return ReadAlignmentType.back;
+    }
+}
+
+/**
+    Returns true iff the read alignment is an extension, ie. it is a front or
+    back extension.
+
+    See_Also: `isFrontExtension`, `isBackExtension`
+*/
+bool isExtension(in ReadAlignment readAlignment) pure nothrow
+{
+    return readAlignment.isFrontExtension ^ readAlignment.isBackExtension;
+}
+
+/**
+    Returns true iff the read alignment is an front extension, ie. it is an
+    extension and reaches over the front of the reference contig.
+
+    ---
+    Case 1 (complement alignment):
+
+                      0  rx
+        ref           |--+-<-+-<--<--<--|
+                         | | |
+        read  |-->-->-->-+->-+--|
+              0          ax
+
+    Case 1 (complement alignment):
+
+                      0  rx
+        ref           |--+->-+->-->-->--|
+                         | | |
+        read  |-->-->-->-+->-+--|
+              0          ax
+    ---
+*/
+bool isFrontExtension(in ReadAlignment readAlignment) pure nothrow
+{
+    if (readAlignment.length != 1)
+    {
+        return false;
+    }
+
+    auto alignment = readAlignment[0];
+
+    if (alignment.complement)
+    {
+        auto readExtensionLength = alignment.contigA.length - alignment.last.contigA.end;
+        auto referenceExtensionLength = alignment.contigB.length - alignment.last.contigB.end;
+
+        return readExtensionLength > referenceExtensionLength;
+    }
+    else
+    {
+        auto readExtensionLength = alignment.first.contigA.begin;
+        auto referenceExtensionLength = alignment.first.contigB.begin;
+
+        return readExtensionLength > referenceExtensionLength;
+    }
+}
+
+/**
+    Returns true iff the read alignment is an back extension, ie. it is an
+    extension and reaches over the back of the reference contig.
+
+    ---
+    Case 1 (complement alignment):
+
+              0             ry lr
+        ref   |--<--<--<-+-<-+--|
+                         | | |
+        read          |--+->-+->-->-->--|
+                      0     ay         la
+
+    Case 1 (complement alignment):
+
+              0             ry lr
+        ref   |-->-->-->-+->-+--|
+                         | | |
+        read          |--+->-+->-->-->--|
+                      0     ay         la
+    ---
+*/
+bool isBackExtension(in ReadAlignment readAlignment) pure nothrow
+{
+    if (readAlignment.length != 1)
+    {
+        return false;
+    }
+
+    auto alignment = readAlignment[0];
+
+    if (alignment.complement)
+    {
+        auto readExtensionLength = alignment.first.contigA.begin;
+        auto referenceExtensionLength = alignment.first.contigB.begin;
+
+        return readExtensionLength > referenceExtensionLength;
+    }
+    else
+    {
+        auto readExtensionLength = alignment.contigA.length - alignment.last.contigA.end;
+        auto referenceExtensionLength = alignment.contigB.length - alignment.last.contigB.end;
+
+        return readExtensionLength > referenceExtensionLength;
+    }
+}
+
+/**
+    Returns true iff the read alignment spans a gap, ie. two alignments on
+    different reference contigs with different indivdual extension type are
+    involved.
+
+    ---
+    Case 1 (complement alignment):
+
+              0             ry lr   0             ry lr
+        ref   |--<--<--<-+-<-+--|   |--+-<-+-<-+-<-+--|
+                         | | |         | | |
+        read          |--+->-+->-->-->-+->-+--|
+                      0     ay         la
+
+    Case 1 (complement alignment):
+
+              0             ry lr1  0 rx             lr2
+        ref   |-->-->-->-+->-+--|   |--+->-+->-+->-+--|
+                         | | |         | | |
+        read          |--+->-+->-->-->-+->-+--|
+                      0     ay         bx     la
+    ---
+*/
+bool isGap(in ReadAlignment readAlignment) pure nothrow
+{
+    // dfmt off
+    return readAlignment.length == 2 &&
+        readAlignment[0].contigB.id != readAlignment[1].contigB.id &&
+        readAlignment[0 .. 1].getType != readAlignment[1 .. 2].getType;
+    // dfmt on
+}
+
+unittest
+{
+    with (AlignmentChain) with (LocalAlignment) with (Complement)
+            {
+                // dfmt off
+                auto testCases = [
+                    "innerAlignmentComplement": tuple(
+                        [
+                            AlignmentChain(
+                                1,
+                                Contig(1, 10),
+                                Contig(1, 100),
+                                no,
+                                [
+                                    LocalAlignment(
+                                        Locus(0, 1),
+                                        Locus(10, 11),
+                                        0,
+                                    ),
+                                    LocalAlignment(
+                                        Locus(9, 10),
+                                        Locus(19, 20),
+                                        0,
+                                    ),
+                                ]
+                            ),
+                        ],
+                        No.isValid,
+                        ReadAlignmentType.front,
+                        No.isExtension,
+                        No.isFrontExtension,
+                        No.isBackExtension,
+                        No.isGap,
+                    ),
+                    "innerAlignmentComplement": tuple(
+                        [
+                            AlignmentChain(
+                                2,
+                                Contig(1, 10),
+                                Contig(1, 100),
+                                yes,
+                                [
+                                    LocalAlignment(
+                                        Locus(0, 1),
+                                        Locus(10, 11),
+                                        0,
+                                    ),
+                                    LocalAlignment(
+                                        Locus(9, 10),
+                                        Locus(19, 20),
+                                        0,
+                                    ),
+                                ]
+                            ),
+                        ],
+                        No.isValid,
+                        ReadAlignmentType.front,
+                        No.isExtension,
+                        No.isFrontExtension,
+                        No.isBackExtension,
+                        No.isGap,
+                    ),
+                    "frontExtension": tuple(
+                        [
+                            AlignmentChain(
+                                3,
+                                Contig(1, 10),
+                                Contig(1, 100),
+                                no,
+                                [
+                                    LocalAlignment(
+                                        Locus(5, 6),
+                                        Locus(2, 3),
+                                        0,
+                                    ),
+                                    LocalAlignment(
+                                        Locus(9, 10),
+                                        Locus(5, 6),
+                                        0,
+                                    ),
+                                ]
+                            ),
+                        ],
+                        Yes.isValid,
+                        ReadAlignmentType.front,
+                        Yes.isExtension,
+                        Yes.isFrontExtension,
+                        No.isBackExtension,
+                        No.isGap,
+                    ),
+                    "frontExtensionComplement": tuple(
+                        [
+                            AlignmentChain(
+                                4,
+                                Contig(1, 10),
+                                Contig(1, 100),
+                                yes,
+                                [
+                                    LocalAlignment(
+                                        Locus(0, 1),
+                                        Locus(94, 95),
+                                        0,
+                                    ),
+                                    LocalAlignment(
+                                        Locus(4, 5),
+                                        Locus(97, 98),
+                                        0,
+                                    ),
+                                ]
+                            ),
+                        ],
+                        Yes.isValid,
+                        ReadAlignmentType.front,
+                        Yes.isExtension,
+                        Yes.isFrontExtension,
+                        No.isBackExtension,
+                        No.isGap,
+                    ),
+                    "backExtension": tuple(
+                        [
+                            AlignmentChain(
+                                5,
+                                Contig(1, 10),
+                                Contig(1, 100),
+                                no,
+                                [
+                                    LocalAlignment(
+                                        Locus(0, 1),
+                                        Locus(94, 95),
+                                        0,
+                                    ),
+                                    LocalAlignment(
+                                        Locus(4, 5),
+                                        Locus(97, 98),
+                                        0,
+                                    ),
+                                ]
+                            ),
+                        ],
+                        Yes.isValid,
+                        ReadAlignmentType.back,
+                        Yes.isExtension,
+                        No.isFrontExtension,
+                        Yes.isBackExtension,
+                        No.isGap,
+                    ),
+                    "backExtensionComplement": tuple(
+                        [
+                            AlignmentChain(
+                                6,
+                                Contig(1, 10),
+                                Contig(1, 100),
+                                yes,
+                                [
+                                    LocalAlignment(
+                                        Locus(5, 6),
+                                        Locus(2, 3),
+                                        0,
+                                    ),
+                                    LocalAlignment(
+                                        Locus(9, 10),
+                                        Locus(5, 6),
+                                        0,
+                                    ),
+                                ]
+                            ),
+                        ],
+                        Yes.isValid,
+                        ReadAlignmentType.back,
+                        Yes.isExtension,
+                        No.isFrontExtension,
+                        Yes.isBackExtension,
+                        No.isGap,
+                    ),
+                    "gap": tuple(
+                        [
+                            AlignmentChain(
+                                7,
+                                Contig(1, 10),
+                                Contig(1, 100),
+                                no,
+                                [
+                                    LocalAlignment(
+                                        Locus(0, 1),
+                                        Locus(94, 95),
+                                        0,
+                                    ),
+                                    LocalAlignment(
+                                        Locus(4, 5),
+                                        Locus(97, 98),
+                                        0,
+                                    ),
+                                ]
+                            ),
+                            AlignmentChain(
+                                8,
+                                Contig(1, 10),
+                                Contig(2, 100),
+                                no,
+                                [
+                                    LocalAlignment(
+                                        Locus(5, 6),
+                                        Locus(2, 3),
+                                        0,
+                                    ),
+                                    LocalAlignment(
+                                        Locus(9, 10),
+                                        Locus(5, 6),
+                                        0,
+                                    ),
+                                ]
+                            ),
+                        ],
+                        Yes.isValid,
+                        ReadAlignmentType.gap,
+                        No.isExtension,
+                        No.isFrontExtension,
+                        No.isBackExtension,
+                        Yes.isGap,
+                    ),
+                    "gapComplement": tuple(
+                        [
+                            AlignmentChain(
+                                9,
+                                Contig(1, 10),
+                                Contig(1, 100),
+                                yes,
+                                [
+                                    LocalAlignment(
+                                        Locus(5, 6),
+                                        Locus(2, 3),
+                                        0,
+                                    ),
+                                    LocalAlignment(
+                                        Locus(9, 10),
+                                        Locus(5, 6),
+                                        0,
+                                    ),
+                                ]
+                            ),
+                            AlignmentChain(
+                                10,
+                                Contig(1, 10),
+                                Contig(2, 100),
+                                yes,
+                                [
+                                    LocalAlignment(
+                                        Locus(0, 1),
+                                        Locus(94, 95),
+                                        0,
+                                    ),
+                                    LocalAlignment(
+                                        Locus(4, 5),
+                                        Locus(97, 98),
+                                        0,
+                                    ),
+                                ]
+                            ),
+                        ],
+                        Yes.isValid,
+                        ReadAlignmentType.gap,
+                        No.isExtension,
+                        No.isFrontExtension,
+                        No.isBackExtension,
+                        Yes.isGap,
+                    ),
+                ];
+                // dfmt on
+
+                alias getFailureMessage = (testCase, testFunction, expectedValue) => format!"expected %s(%s) to be %s"(
+                        testFunction, testCase, expectedValue);
+
+                foreach (testCase, testData; testCases)
+                {
+                    auto readAlignment = testData[0];
+
+                    assert(testData[1] == isValid(readAlignment),
+                            getFailureMessage(testCase, "isValid", testData[1]));
+                    if (isValid(readAlignment))
+                        assert(testData[2] == getType(readAlignment),
+                                getFailureMessage(testCase, "getType", testData[2]));
+                    else
+                        assertThrown!AssertError(getType(readAlignment),
+                                format!"expected getType(%s) to throw"(testCase));
+                    assert(testData[3] == isExtension(readAlignment),
+                            getFailureMessage(testCase, "isExtension", testData[3]));
+                    assert(testData[4] == isFrontExtension(readAlignment),
+                            getFailureMessage(testCase, "isFrontExtension", testData[4]));
+                    assert(testData[5] == isBackExtension(readAlignment),
+                            getFailureMessage(testCase, "isBackExtension", testData[5]));
+                    assert(testData[6] == isGap(readAlignment),
+                            getFailureMessage(testCase, "isGap", testData[6]));
+                }
+            }
+}
+
+/**
+    Returns the (approximate) size of the insertion produced by this
+    read alignment.
+
+    See_Also: `getGapSize`, `getExtensionSize`
+*/
+long getInsertionSize(in ReadAlignment readAlignment) pure
+{
+    final switch (readAlignment.getType)
+    {
+    case ReadAlignmentType.front:
+    case ReadAlignmentType.back:
+        return readAlignment.getExtensionSize();
+    case ReadAlignmentType.gap:
+        return readAlignment.getGapSize();
+    }
+}
+
+unittest
+{
+    with (AlignmentChain) with (LocalAlignment) with (Complement)
+            {
+                // dfmt off
+                auto extensionAlignment = [
+                    AlignmentChain(0, Contig(1, 50), Contig(1, 50), no, [
+                        LocalAlignment(Locus(0, 15), Locus(10, 20), 0),
+                        LocalAlignment(Locus(20, 40), Locus(30, 50), 1),
+                    ])
+                ];
+                auto gapAlignment = [
+                    AlignmentChain(0, Contig(1, 80), Contig(1, 50), no, [
+                        LocalAlignment(Locus(10, 15), Locus(30, 35), 0),
+                        LocalAlignment(Locus(20, 30), Locus(40, 50), 1),
+                    ]),
+                    AlignmentChain(1, Contig(1, 80), Contig(2, 50), no, [
+                        LocalAlignment(Locus(50, 55), Locus(0, 10), 2),
+                        LocalAlignment(Locus(60, 70), Locus(15, 20), 3),
+                    ]),
+                ];
+                // dfmt on
+
+                assert(extensionAlignment.getInsertionSize == extensionAlignment.getExtensionSize);
+                assert(gapAlignment.getInsertionSize == gapAlignment.getGapSize);
+            }
+}
+
+/**
+    Returns the (approximate) size of the extension constituted by alignmentsRange.
+    ---
+    extensionSize ~= readsSequenceLength - referenceExcess
+
+    CASE 1 (back extension, no complement):
+
+                   0       rx  ry  lr
+        reference  |-------+---+---|
+                            \ \ \
+                             \ \ \
+                   alignment  \ \ \
+                               \ \ \
+        read            |-->-->-+->-+->-->--|
+                        0       ax  ay      la
+
+        readsSequenceLength ~= la - ay
+        referenceExcess ~= lr - ry
+
+    CASE 2 (front extension, no complement):
+
+                            0    rx  ry lr
+        reference           |---+---+-------|
+                               / / /
+                              / / /
+                  alignment  / / /
+                            / / /
+        read       |-->-->-+->-+->-->--|
+                   0       ax  ay      la
+
+        readsSequenceLength ~= ax - 0 = ax
+        referenceExcess ~= rx - 0 = rx
+
+    CASE 3 (back extension, complement):
+
+                   0       rx  ry  lr
+        reference  |-------+---+---|
+                            \ \ \
+                             \ \ \
+                   alignment  \ \ \
+                               \ \ \
+        read            |--<--<-+-<-+-<--<--|
+                        0       ax  ay      la
+
+        readsSequenceLength ~= la - ay
+        referenceExcess ~= lr - ry
+
+    CASE 4 (front extension, complement):
+
+                            0    rx  ry lr
+        reference           |---+---+-------|
+                               / / /
+                              / / /
+                  alignment  / / /
+                            / / /
+        read       |--<--<-+-<-+-<--<--|
+                   0       ax  ay      la
+
+        readsSequenceLength ~= ax - 0 = ax
+        referenceExcess ~= rx - 0 = rx
+    ---
+*/
+private long getExtensionSize(in ReadAlignment readAlignment) pure
+{
+    assert(readAlignment.isExtension);
+
+    auto alignment = readAlignment[0];
+    // CASE 1/3 (back extension)
+    long readsSequenceLengthRightExtension = alignment.contigA.length - alignment.last.contigA.end;
+    long referenceExcessRightExtension = alignment.contigB.length - alignment.last.contigB.end;
+    // CASE 2/4 (front extension)
+    long readsSequenceLengthLeftExtension = alignment.first.contigA.begin;
+    long referenceExcessLeftExtension = alignment.first.contigB.begin;
+
+    // dfmt off
+    return max(
+        // Case 1/3 (back extension)
+        readsSequenceLengthRightExtension - referenceExcessRightExtension,
+        // Case 2/4 (front extension)
+        readsSequenceLengthLeftExtension - referenceExcessLeftExtension,
+    );
+    // dfmt on
+}
+
+unittest
+{
+    with (AlignmentChain) with (LocalAlignment) with (Complement)
+            {
+                // dfmt off
+                auto testCases = [
+                    // CASE 1 (right extension, no complement)
+                    // ------------------------------------
+                    //            0      10  50  50
+                    // reference  |-------+---+---|
+                    //                     \ \ \
+                    // read         |-->-->-+->-+->-->--|
+                    //              0       0  40      50
+                    tuple(
+                        [AlignmentChain(0, Contig(1, 50), Contig(1, 50), no, [
+                            LocalAlignment(Locus(0, 15), Locus(10, 20), 0),
+                            LocalAlignment(Locus(20, 40), Locus(30, 50), 1),
+                        ])],
+                        10
+                    ),
+                    //            0      10  45  50
+                    // reference  |-------+---+---|
+                    //                     \ \ \
+                    // read         |-->-->-+->-+->-->--|
+                    //              0       0  40      50
+                    tuple(
+                        [AlignmentChain(1, Contig(1, 50), Contig(1, 50), no, [
+                            LocalAlignment(Locus(0, 15), Locus(10, 20), 2),
+                            LocalAlignment(Locus(20, 40), Locus(30, 45), 3),
+                        ])],
+                        5
+                    ),
+                    // CASE 2 (left extension, no complement):
+                    // ------------------------------------
+                    //                  0   0  40      50
+                    // reference        |---+---+-------|
+                    //                     / / /
+                    // read       |-->-->-+->-+->-->--|
+                    //            0      10  50      50
+                    tuple(
+                        [AlignmentChain(2, Contig(1, 50), Contig(1, 50), no, [
+                            LocalAlignment(Locus(10, 15), Locus(0, 20), 4),
+                            LocalAlignment(Locus(20, 50), Locus(30, 40), 5),
+                        ])],
+                        10
+                    ),
+                    //                  0   5  40      50
+                    // reference        |---+---+-------|
+                    //                     / / /
+                    // read       |-->-->-+->-+->-->--|
+                    //            0      10  50      50
+                    tuple(
+                        [AlignmentChain(3, Contig(1, 50), Contig(1, 50), no, [
+                            LocalAlignment(Locus(10, 15), Locus(5, 20), 6),
+                            LocalAlignment(Locus(20, 50), Locus(30, 40), 7),
+                        ])],
+                        5
+                    ),
+                    // CASE 3 (right extension, complement):
+                    // ------------------------------------
+                    //            0      10  50  50
+                    // reference  |-------+---+---|
+                    //                     \ \ \
+                    // read         |--<--<-+-<-+-<--<--|
+                    //              0       0   40      50
+                    tuple(
+                        [AlignmentChain(4, Contig(1, 50), Contig(1, 50), yes, [
+                            LocalAlignment(Locus(0, 15), Locus(10, 20), 8),
+                            LocalAlignment(Locus(20, 40), Locus(30, 50), 9),
+                        ])],
+                        10
+                    ),
+                    //            0      10  45  50
+                    // reference  |-------+---+---|
+                    //                     \ \ \
+                    // read         |--<--<-+-<-+-<--<--|
+                    //              0       0   50      50
+                    tuple(
+                        [AlignmentChain(5, Contig(1, 50), Contig(1, 50), yes, [
+                            LocalAlignment(Locus(0, 15), Locus(10, 20), 10),
+                            LocalAlignment(Locus(20, 40), Locus(30, 45), 11),
+                        ])],
+                        5
+                    ),
+                    // CASE 4 (left extension, complement):
+                    // ------------------------------------
+                    //                  0   0  40      50
+                    // reference        |---+---+-------|
+                    //                     / / /
+                    // read       |--<--<-+-<-+-<--<--|
+                    //            0       10  50      50
+                    tuple(
+                        [AlignmentChain(6, Contig(1, 50), Contig(1, 50), yes, [
+                            LocalAlignment(Locus(10, 15), Locus(0, 20), 12),
+                            LocalAlignment(Locus(20, 50), Locus(30, 40), 13),
+                        ])],
+                        10
+                    ),
+                    //                  0   5  40      50
+                    // reference        |---+---+-------|
+                    //                     / / /
+                    // read       |--<--<-+-<-+-<--<--|
+                    //            0       10  50      50
+                    tuple(
+                        [AlignmentChain(7, Contig(1, 50), Contig(1, 50), yes, [
+                            LocalAlignment(Locus(10, 15), Locus(5, 20), 14),
+                            LocalAlignment(Locus(20, 50), Locus(30, 40), 15),
+                        ])],
+                        5
+                    ),
+                ];
+                // dfmt on
+
+                foreach (testCaseIdx, testCase; testCases.enumerate)
+                {
+                    auto gotValue = getExtensionSize(testCase[0]);
+                    auto expValue = testCase[1];
+                    auto errorMessage = format!"expected extension size %d but got %d for test case %d"(
+                            expValue, gotValue, testCaseIdx);
+
+                    assert(gotValue == expValue, errorMessage);
+                }
+            }
+}
+
+/**
+    Returns the (approximate) size of the gap spanned by this read alignment.
+    ---
+    gapSize = readsSequenceLength - referenceExcess
+
+    readsSequenceLength ~= a2x - a1y
+
+    referenceExcess ~= referenceExcess1 + referenceExcess2
+
+    referenceExcess1 ~= la - cay
+    referenceExcess2 ~= cbx - 0 = cbx
+
+    CASE 1 (no complement):
+
+                        contig a                  contig b
+
+                  0         cax cay la      0   cbx cby       lb
+        reference |---------+---+---|       |---+---+---------|
+                             \ \ \             / / /
+                              \ \ \           / / /
+                  alignment 1  \ \ \         / / /  alignment 2
+                                \ \ \       / / /
+        read            |-->-->--+->-+-->--+->-+-->-->--|
+                        0        a1x a1y   a2x a2y      lr
+
+    CASE 2 (complement):
+
+                        contig b                  contig a
+
+                  0         cax cay la      0   cbx cby       lb
+        reference |---------+---+---|       |---+---+---------|
+                             \ \ \             / / /
+                              \ \ \           / / /
+                  alignment 2  \ \ \         / / /  alignment 1
+                                \ \ \       / / /
+        read            |--<--<--+-<-+--<--+-<-+--<--<--|
+                        0        a1x a1y   a2x a2y      lr
+    ---
+*/
+private long getGapSize(in ReadAlignment readAlignment) pure
+{
+    assert(readAlignment.isGap);
+    // dfmt off
+    auto alignments = isBefore!"contigA"(readAlignment[0], readAlignment[1])
+        ? tuple(readAlignment[0], readAlignment[1])
+        : tuple(readAlignment[1], readAlignment[0]);
+    // dfmt on
+    auto firstAlignment = alignments[0];
+    auto secondAlignment = alignments[1];
+
+    assert(secondAlignment.first.contigA.begin > firstAlignment.last.contigA.end,
+            format!"intersecting local alignments in (%s, %s)"(firstAlignment, secondAlignment));
+
+    long readsSequenceLength = secondAlignment.first.contigA.begin - firstAlignment
+        .last.contigA.end;
+    // dfmt off
+    long referenceExcess1 = firstAlignment.contigB.length - firstAlignment.last.contigB.end;
+    long referenceExcess2 = secondAlignment.first.contigB.begin;
+    // dfmt on
+    long referenceExcess = referenceExcess1 + referenceExcess2;
+
+    return readsSequenceLength - referenceExcess;
+}
+
+unittest
+{
+    with (AlignmentChain) with (LocalAlignment) with (Complement)
+            {
+                // dfmt off
+                auto testCases = [
+                    // CASE 1 (no complement)
+                    // ------------------------------------
+                    //           0     30  50  50     0   0  20     50
+                    // reference |------+---+---|     |---+---+------|
+                    //                   \ \ \           / / /
+                    //       alignment 1  \ \ \         / / /  alignment 2
+                    //                     \ \ \       / / /
+                    // read        |-->-->--+->-+-->--+->-+-->-->--|
+                    //             0       10   30   50  70       80
+                    tuple(
+                        [
+                            AlignmentChain(0, Contig(1, 80), Contig(1, 50), no, [
+                                LocalAlignment(Locus(10, 15), Locus(30, 35), 0),
+                                LocalAlignment(Locus(20, 30), Locus(40, 50), 1),
+                            ]),
+                            AlignmentChain(1, Contig(1, 80), Contig(2, 50), no, [
+                                LocalAlignment(Locus(50, 55), Locus(0, 10), 2),
+                                LocalAlignment(Locus(60, 70), Locus(15, 20), 3),
+                            ]),
+                        ],
+                        20
+                    ),
+                    //           0     30  45  50     0   5  20     50
+                    // reference |------+---+---|     |---+---+------|
+                    //                   \ \ \           / / /
+                    //       alignment 1  \ \ \         / / /  alignment 2
+                    //                     \ \ \       / / /
+                    // read        |-->-->--+->-+-->--+->-+-->-->--|
+                    //             0       10   30   50  70       80
+                    tuple(
+                        [
+                            AlignmentChain(2, Contig(1, 80), Contig(1, 50), no, [
+                                LocalAlignment(Locus(10, 15), Locus(30, 35), 4),
+                                LocalAlignment(Locus(20, 30), Locus(40, 45), 5),
+                            ]),
+                            AlignmentChain(3, Contig(1, 80), Contig(2, 50), no, [
+                                LocalAlignment(Locus(50, 55), Locus(5, 10), 6),
+                                LocalAlignment(Locus(60, 70), Locus(15, 20), 7),
+                            ]),
+                        ],
+                        10
+                    ),
+                    //           0     30  45  50     0   5  20     50
+                    // reference |------+---+---|     |---+---+------|
+                    //                   \ \ \           / / /
+                    //       alignment 2  \ \ \         / / /  alignment 1
+                    //                     \ \ \       / / /
+                    // read        |-->-->--+->-+-->--+->-+-->-->--|
+                    //             0       10   30   50  70       80
+                    tuple(
+                        [
+                            AlignmentChain(4, Contig(1, 80), Contig(2, 50), no, [
+                                LocalAlignment(Locus(50, 55), Locus(5, 10), 6),
+                                LocalAlignment(Locus(60, 70), Locus(15, 20), 7),
+                            ]),
+                            AlignmentChain(5, Contig(1, 80), Contig(1, 50), no, [
+                                LocalAlignment(Locus(10, 15), Locus(30, 35), 4),
+                                LocalAlignment(Locus(20, 30), Locus(40, 45), 5),
+                            ]),
+                        ],
+                        10
+                    ),
+                    // CASE 2 (complement)
+                    // ------------------------------------
+                    //           0     30  50  50     0   0  20     50
+                    // reference |------+---+---|     |---+---+------|
+                    //                   \ \ \           / / /
+                    //       alignment 1  \ \ \         / / /  alignment 2
+                    //                     \ \ \       / / /
+                    // read        |--<--<--+-<-+--<--+-<-+--<--<--|
+                    //             0       10   30   50  70       80
+                    tuple(
+                        [
+                            AlignmentChain(6, Contig(1, 80), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(10, 15), Locus(30, 35), 8),
+                                LocalAlignment(Locus(20, 30), Locus(40, 50), 9),
+                            ]),
+                            AlignmentChain(7, Contig(1, 80), Contig(2, 50), yes, [
+                                LocalAlignment(Locus(50, 55), Locus(0, 10), 10),
+                                LocalAlignment(Locus(60, 70), Locus(15, 20), 11),
+                            ]),
+                        ],
+                        20
+                    ),
+                    //           0     30  45  50     0   5  20     50
+                    // reference |------+---+---|     |---+---+------|
+                    //                   \ \ \           / / /
+                    //       alignment 1  \ \ \         / / /  alignment 2
+                    //                     \ \ \       / / /
+                    // read        |--<--<--+-<-+--<--+-<-+--<--<--|
+                    //             0       10   30   50  70       80
+                    tuple(
+                        [
+                            AlignmentChain(8, Contig(1, 80), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(10, 15), Locus(30, 35), 12),
+                                LocalAlignment(Locus(20, 30), Locus(40, 45), 13),
+                            ]),
+                            AlignmentChain(9, Contig(1, 80), Contig(2, 50), yes, [
+                                LocalAlignment(Locus(50, 55), Locus(5, 10), 14),
+                                LocalAlignment(Locus(60, 70), Locus(15, 20), 15),
+                            ]),
+                        ],
+                        10
+                    ),
+                    //           0     30  45  50     0   5  20     50
+                    // reference |------+---+---|     |---+---+------|
+                    //                   \ \ \           / / /
+                    //       alignment 2  \ \ \         / / /  alignment 1
+                    //                     \ \ \       / / /
+                    // read        |--<--<--+-<-+--<--+-<-+--<--<--|
+                    //             0       10   30   50  70       80
+                    tuple(
+                        [
+                            AlignmentChain(10, Contig(1, 80), Contig(2, 50), yes, [
+                                LocalAlignment(Locus(50, 55), Locus(5, 10), 14),
+                                LocalAlignment(Locus(60, 70), Locus(15, 20), 15),
+                            ]),
+                            AlignmentChain(11, Contig(1, 80), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(10, 15), Locus(30, 35), 12),
+                                LocalAlignment(Locus(20, 30), Locus(40, 45), 13),
+                            ]),
+                        ],
+                        10
+                    ),
+                ];
+                // dfmt on
+
+                foreach (testCaseIdx, testCase; testCases.enumerate)
+                {
+                    auto gotValue = getGapSize(testCase[0]);
+                    auto expValue = testCase[1];
+                    auto errorMessage = format!"expected spanning gap size %d but got %d for test case %d"(
+                            expValue, gotValue, testCaseIdx);
+
+                    assert(gotValue == expValue, errorMessage);
+                }
+            }
+}
+
+size_t meanScore(in ReadAlignment readAlignment) pure
+{
+    return readAlignment.map!"a.score".mean;
+}
+
+/**
+    A pile of read alignments beloning to the same gap/contig end.
+
+    See_Also: Hit
+*/
+alias PileUp = ReadAlignment[];
+
+PileUp[] buildPileUps(AlignmentContainer!(AlignmentChain[]) candidates) pure
+{
+    static bool orderByReferenceIds(T)(T a, T b) pure
+    {
+        return a[0].contigB.id < b[0].contigB.id && (!(a.length > 1
+                && a[0].contigB.id == b[0].contigB.id) || a[1].contigB.id < b[1].contigB.id);
+    }
+
+    static size_t numContigsInvolved(T)(T readsByNumFlanksByGap)
+    {
+        auto readsByGap = readsByNumFlanksByGap.front;
+        auto readsByFirstGap = readsByGap.front;
+        auto reads = readsByFirstGap.front;
+
+        return reads.length;
+    }
+
+    static bool isSameRead(T)(T a, T b)
+    {
+        return a.contigA.id == b.contigA.id;
+    }
+
+    static ReadAlignment sortGapAlignment(ReadAlignment readAlignment) pure nothrow
+    {
+        if (readAlignment.isGap)
+        {
+            auto isBefore = readAlignment[0].isBefore!"contigA"(readAlignment[1]);
+            auto isComplement = readAlignment[0].complement;
+
+            if (isComplement == isBefore)
+                swap(readAlignment[0], readAlignment[1]);
+        }
+
+        return readAlignment;
+    }
+
+    // dfmt off
+    auto sortedReadAlignments = candidates
+        .b2a
+        .chunkBy!isSameRead
+        .map!array
+        .filter!isValid
+        .map!sortGapAlignment
+        .array;
+    // dfmt on
+    sortedReadAlignments.sort!byGapSort;
+    PileUp[] pileUpsByGap = [];
+    PileUp lastPileUp;
+    ReadAlignment lastReadAlignment;
+
+    foreach (readAlignment; sortedReadAlignments)
+    {
+        if (pileUpsByGap.length == 0)
+        {
+            pileUpsByGap ~= [readAlignment];
+            continue;
+        }
+
+        lastPileUp = pileUpsByGap[$ - 1];
+        lastReadAlignment = lastPileUp[$ - 1];
+
+        if (belongToSamePile(lastReadAlignment, readAlignment))
+        {
+            lastPileUp ~= readAlignment;
+            pileUpsByGap[$ - 1] = lastPileUp;
+        }
+        else
+        {
+            pileUpsByGap ~= [readAlignment];
+        }
+    }
+
+    debug logJsonDebug("pileStructure", pileUpsByGap.map!"a.length".map!Json.array);
+
+    return pileUpsByGap;
+}
+
+bool belongToSamePile(in ReadAlignment a, in ReadAlignment b) pure nothrow
+{
+    assert(isInReferenceOrder(a) && isInReferenceOrder(b),
+            "gap alignment chains must be in reference order");
+
+    debug logJsonDebug(
+        "aIsBackExtension", a.isBackExtension,
+        "aIsFrontExtension", a.isFrontExtension,
+        "aIsGap", a.isGap,
+        "aMapAContigBIDMapJsonArray", a.map!"a.contigB.id".map!Json.array,
+        "bIsBackExtension", b.isBackExtension,
+        "bIsFrontExtension", b.isFrontExtension,
+        "bIsGap", b.isGap,
+        "bMapAContigBIDMapJsonArray", b.map!"a.contigB.id".map!Json.array,
+    );
+
+    // dfmt off
+    return any(only(
+        a.isBackExtension && b.isBackExtension && a[0].contigB.id == b[0].contigB.id,
+        a.isBackExtension && b.isGap && a[0].contigB.id == b[0].contigB.id,
+        a.isGap && b.isGap && a[0].contigB.id == b[0].contigB.id && a[1].contigB.id == b[1].contigB.id,
+        a.isGap && b.isFrontExtension && a[1].contigB.id == b[0].contigB.id,
+        a.isFrontExtension && b.isFrontExtension && a[0].contigB.id == b[0].contigB.id,
+    ));
+    // dfmt on
+}
+
+bool byGapSort(in ReadAlignment a, in ReadAlignment b) pure nothrow
+{
+    assert(isInReferenceOrder(a) && isInReferenceOrder(b),
+            "gap alignment chains must be in reference order");
+
+    if (a.isExtension && b.isExtension)
+    {
+        return byGapSortForExtensions(a, b);
+    }
+    else if (a.isExtension && b.isGap)
+    {
+        return byGapSortForExtensionAndGap(a, b, Yes.inOrder);
+    }
+    else if (a.isGap && b.isExtension)
+    {
+        return byGapSortForExtensionAndGap(b, a, No.inOrder);
+    }
+    else
+    {
+        try
+        {
+            debug assert(a.isGap && b.isGap, a.to!string ~ " " ~ b.to!string);
+        }
+        catch (Exception)
+        {
+        }
+
+        return byGapSortForGaps(a, b);
+    }
+}
+
+private bool byGapSortForExtensions(in ReadAlignment a, in ReadAlignment b) pure nothrow
+{
+    if (a[0].contigB.id != b[0].contigB.id)
+    {
+        return a[0].contigB.id < b[0].contigB.id;
+    }
+    else if (a.getType != b.getType)
+    {
+        return a.getType < b.getType;
+    }
+    else
+    {
+        // same contig and same extension type => same pile
+        return false;
+    }
+}
+
+private bool byGapSortForGaps(in ReadAlignment a, in ReadAlignment b) pure nothrow
+{
+    if (a[0].contigB.id != b[0].contigB.id)
+    {
+        return a[0].contigB.id < b[0].contigB.id;
+    }
+    else if (a[1].contigB.id != b[1].contigB.id)
+    {
+        return a[1].contigB.id < b[1].contigB.id;
+    }
+    else
+    {
+        // same begin contig, same end contig => same pile
+        return false;
+    }
+}
+
+private bool byGapSortForExtensionAndGap(in ReadAlignment ext,
+        in ReadAlignment gap, Flag!"inOrder" inOrder) pure nothrow
+{
+    alias cmp = (extValue, gapValue) => inOrder ? extValue < gapValue : gapValue < extValue;
+    auto gapPart = ext.isFrontExtension ? gap[0] : gap[1];
+
+    if (ext[0].contigB.id != gap[0].contigB.id && ext[0].contigB.id != gap[1].contigB.id)
+    {
+        return cmp(ext[0].contigB.id, min(gap[0].contigB.id, gap[1].contigB.id));
+    }
+    else if (ext[0].contigB.id != gap[0].contigB.id && ext[0].contigB.id == gap[1].contigB.id)
+    {
+        // extension contig is end contig of gap => same pile if front extension else in reverse order
+        return !inOrder;
+    }
+    else if (ext[0].contigB.id == gap[0].contigB.id && ext[0].contigB.id != gap[1].contigB.id)
+    {
+        // extension contig is begin contig of gap => same pile if back extension else in order
+        return inOrder;
+    }
+    else
+    {
+        assert(0, "illegal gap: reference contigs are the same");
+    }
+}
+
+unittest
+{
+    //               c1                       c2                       c3
+    //        0    5   10   15         0    5   10   15         0    5   10   15
+    // ref:   |---->---->----|.........|---->---->----|.........|---->---->----|
+    // reads: .    .    .    :    .    :    .    .    :    .    :    .    .    .
+    //        . #1 |---->---->--| .    :    .    .    :    .    :    .    .    .
+    //        . #2 |----<----<--| .    :    .    .    :    .    :    .    .    .
+    //        . #3 |---->---->----|    :    .    .    :    .    :    .    .    .
+    //        .    . #4 |---->----|    :    .    .    :    .    :    .    .    .
+    //        .    . #5 |---->---->---->----|    .    :    .    :    .    .    .
+    //        .    . #6 |----<----<----<----|    .    :    .    :    .    .    .
+    //        .    .    #7 |->---->---->---->--| .    :    .    :    .    .    .
+    //        .    .    .    : #8 |---->---->--| .    :    .    :    .    .    .
+    //        .    .    .    : #9 |----<----<--| .    :    .    :    .    .    .
+    //        .    .    .    :#10 |---->---->----|    :    .    :    .    .    .
+    //        .    .    .    :    #11 |----->----|    :    .    :    .    .    .
+    //        .    .    .    :    .    :    .    .    :    .    :    .    .    .
+    //        .    .    .    :    .    :#12 |---->---->--| .    :    .    .    .
+    //        .    .    .    :    .    :#13 |----<----<--| .    :    .    .    .
+    //        .    .    .    :    .    :#14 |---->---->----|    :    .    .    .
+    //        .    .    .    :    .    :    .#15 |---->----|    :    .    .    .
+    //        .    .    .    :    .    :    .#16 |---->---->---->----|    .    .
+    //        .    .    .    :    .    :    .#17 |----<----<----<----|    .    .
+    //        .    .    .    :    .    :    .   #18 |->---->---->---->--| .    .
+    //        .    .    .    :    .    :    .    .    :#19 |---->---->--| .    .
+    //        .    .    .    :    .    :    .    .    :#20 |----<----<--| .    .
+    //        .    .    .    :    .    :    .    .    :#21 |---->---->----|    .
+    //        .    .    .    :    .    :    .    .    :    #22 |----->----|    .
+    import std.algorithm : clamp;
+    import std.random : randomShuffle;
+
+    with (AlignmentChain) with (LocalAlignment)
+        {
+            size_t alignmentChainId = 0;
+            size_t contReadId = 0;
+            ReadAlignment getDummyRead(size_t beginContigId, long beginIdx,
+                    size_t endContigId, long endIdx, Complement complement)
+            {
+                static immutable contigLength = 16;
+                static immutable gapLength = 9;
+                static immutable numDiffs = 0;
+
+                alignmentChainId += 2;
+                auto readId = ++contReadId;
+                // dfmt off
+                auto readLength = beginContigId == endContigId
+                    ? endIdx - beginIdx
+                    : contigLength - beginIdx + gapLength + endIdx;
+                // dfmt on
+                size_t firstReadBeginIdx;
+                size_t firstReadEndIdx;
+
+                if (beginIdx < 0)
+                {
+                    firstReadBeginIdx = readLength - endIdx;
+                    firstReadEndIdx = readLength;
+                }
+                else
+                {
+                    firstReadBeginIdx = 0;
+                    firstReadEndIdx = contigLength - beginIdx;
+                }
+
+                beginIdx = clamp(beginIdx, 0, contigLength);
+                endIdx = clamp(endIdx, 0, contigLength);
+
+                if (complement)
+                {
+                    beginIdx = contigLength - beginIdx;
+                    endIdx = contigLength - endIdx;
+                    swap(beginIdx, endIdx);
+
+                    firstReadBeginIdx = readLength - firstReadBeginIdx;
+                    firstReadEndIdx = readLength - firstReadEndIdx;
+                    swap(firstReadBeginIdx, firstReadEndIdx);
+                }
+
+                if (beginContigId == endContigId)
+                {
+                    // dfmt off
+                    return [AlignmentChain(
+                        alignmentChainId - 2,
+                        Contig(readId, readLength),
+                        Contig(beginContigId, contigLength),
+                        complement,
+                        [
+                            LocalAlignment(
+                                Locus(firstReadBeginIdx, firstReadBeginIdx + 1),
+                                Locus(beginIdx, beginIdx + 1),
+                                numDiffs,
+                            ),
+                            LocalAlignment(
+                                Locus(firstReadEndIdx - 1, firstReadEndIdx),
+                                Locus(endIdx - 1, endIdx),
+                                numDiffs,
+                            ),
+                        ],
+                    )];
+                    // dfmt on
+                }
+                else
+                {
+                    auto secondReadBeginIdx = readLength - endIdx;
+                    auto secondReadEndIdx = readLength;
+
+                    if (complement)
+                    {
+                        secondReadBeginIdx = readLength - secondReadBeginIdx;
+                        secondReadEndIdx = readLength - secondReadEndIdx;
+                        swap(secondReadBeginIdx, secondReadEndIdx);
+                    }
+
+                    // dfmt off
+                    return [
+                        AlignmentChain(
+                            alignmentChainId - 2,
+                            Contig(readId, readLength),
+                            Contig(beginContigId, contigLength),
+                            complement,
+                            [
+                                LocalAlignment(
+                                    Locus(firstReadBeginIdx, firstReadBeginIdx + 1),
+                                    Locus(beginIdx, beginIdx + 1),
+                                    numDiffs,
+                                ),
+                                LocalAlignment(
+                                    Locus(firstReadEndIdx - 1, firstReadEndIdx),
+                                    Locus(contigLength - 1, contigLength),
+                                    numDiffs,
+                                ),
+                            ],
+                        ),
+                        AlignmentChain(
+                            alignmentChainId - 1,
+                            Contig(readId, readLength),
+                            Contig(endContigId, contigLength),
+                            complement,
+                            [
+                                LocalAlignment(
+                                    Locus(secondReadBeginIdx, secondReadBeginIdx + 1),
+                                    Locus(0, 1),
+                                    numDiffs,
+                                ),
+                                LocalAlignment(
+                                    Locus(secondReadEndIdx - 1, secondReadEndIdx),
+                                    Locus(endIdx - 1, endIdx),
+                                    numDiffs,
+                                ),
+                            ],
+                        ),
+                    ];
+                    // dfmt on
+                }
+            }
+
+            size_t c1 = 1;
+            size_t c2 = 2;
+            size_t c3 = 3;
+            // dfmt off
+            auto totalOrderingGroups = [
+                [
+                    getDummyRead(c1,  5, c1, 18, Complement.no),  //  #1
+                    getDummyRead(c1,  5, c1, 18, Complement.yes), //  #2
+                    getDummyRead(c1,  5, c1, 20, Complement.no),  //  #3
+                    getDummyRead(c1, 10, c1, 20, Complement.no),  //  #4
+                ],
+                [
+                    getDummyRead(c1, 10, c2,  5, Complement.no),  //  #5
+                    getDummyRead(c1, 10, c2,  5, Complement.yes), //  #6
+                    getDummyRead(c1, 13, c2,  8, Complement.no),  //  #7
+                ],
+                [
+                    getDummyRead(c2, -5, c2,  8, Complement.no),  //  #8
+                    getDummyRead(c2, -5, c2,  8, Complement.yes), //  #9
+                    getDummyRead(c2, -5, c2, 10, Complement.no),  // #10
+                    getDummyRead(c2, -1, c2, 10, Complement.no),  // #11
+                ],
+                [
+                    getDummyRead(c2,  5, c2, 18, Complement.no),  // #12
+                    getDummyRead(c2,  5, c2, 18, Complement.yes), // #13
+                    getDummyRead(c2,  5, c2, 20, Complement.no),  // #14
+                    getDummyRead(c2, 10, c2, 20, Complement.no),  // #15
+                ],
+                [
+                    getDummyRead(c2, 10, c3,  5, Complement.no),  // #16
+                    getDummyRead(c2, 10, c3,  5, Complement.yes), // #17
+                    getDummyRead(c2, 13, c3,  8, Complement.no),  // #18
+                ],
+                [
+                    getDummyRead(c3, -5, c3,  8, Complement.no),  // #19
+                    getDummyRead(c3, -5, c3,  8, Complement.yes), // #20
+                    getDummyRead(c3, -5, c3, 10, Complement.no),  // #21
+                    getDummyRead(c3, -1, c3, 10, Complement.no),  // #22
+                ],
+            ];
+
+            foreach (i, group1; totalOrderingGroups.enumerate)
+            {
+                foreach (j, group2; totalOrderingGroups.enumerate)
+                {
+                    foreach (readAlignment1; group1)
+                    {
+                        foreach (readAlignment2; group2)
+                        {
+                            size_t read1Id = readAlignment1[0].contigA.id;
+                            size_t read2Id = readAlignment2[0].contigA.id;
+
+                            assert((i != j) || !byGapSort(readAlignment1, readAlignment2),
+                                format!"read %d should not be before %d (same pile)"(read1Id, read2Id));
+                            assert((i < j) == byGapSort(readAlignment1, readAlignment2),
+                                format!"read %d should be before %d"(read1Id, read2Id));
+                            assert((i > j) == byGapSort(readAlignment2, readAlignment1),
+                                format!"read %d should be after %d"(read2Id, read1Id));
+
+                            bool shouldGroup = i == j || (i + 1 == j && j != 3);
+                            assert(shouldGroup == byGapGroup(readAlignment1, readAlignment2),
+                                format!"reads %d and %d should%s be grouped"(read1Id, read2Id, (shouldGroup ? "" : " not")));
+                        }
+                    }
+                }
+            }
+        }
+}
+
+bool isValid(in PileUp pileUp) pure nothrow
+{
+    return pileUp.isExtension ^ pileUp.isGap;
+}
+
+bool isExtension(in PileUp pileUp) pure nothrow
+{
+    if (pileUp[0].isFrontExtension)
+    {
+        return pileUp.all!(readAlignment => readAlignment.isFrontExtension);
+    }
+    else if (pileUp[0].isBackExtension)
+    {
+        return pileUp.all!(readAlignment => readAlignment.isBackExtension);
+    }
+    else
+    {
+        return false;
+    }
+}
+
+bool isGap(in PileUp pileUp) pure nothrow
+{
+    return pileUp.any!(readAlignment => readAlignment.isGap);
+}
+
+/// A read consenus alignment deemed true and the source of the sequence.
+// dfmt off
+alias Hit = Tuple!(
+    ReadAlignment, "alignments",
+    string, "dbFile",
+);
+// dfmt on
+
+            class DJunctor
+            {
+                /// Stop after maxLoops `mainLoop`s at the latest.
+                static immutable maxLoops = 1;
+                /**
         Two scores are condsidered similar if the relative "error" of them is
         smaller than defaulMaxRelativeDiff.
 
@@ -707,8 +2129,8 @@ class DJunctor
         arithmetic hence AlignmentChain.maxScore corresponds to 1 in the above
         equation.
     */
-    static immutable maxRelativeDiff = AlignmentChain.maxScore / 20; // 5% of larger value
-    /**
+                static immutable maxRelativeDiff = AlignmentChain.maxScore / 20; // 5% of larger value
+                /**
         Two scores are condsidered similar if the absolute "error" of them is
         smaller than defaulMaxAbsoluteDiff.
 
@@ -720,88 +2142,85 @@ class DJunctor
         arithmetic hence all scores are lower than or equal to
         AlignmentChain.maxScore .
     */
-    static immutable maxAbsoluteDiff = AlignmentChain.maxScore / 100; // 1% wrt. score
-    alias numEstimateUseless = (numCatUnsure, iteration) => (numCatUnsure - numCatUnsure / 20) / (
-            iteration + 1);
-    alias MatchedAlignmentChains = AlignmentChain[];
-    alias PileUp = MatchedAlignmentChains[];
-    alias Hit = Tuple!(MatchedAlignmentChains, "alignments", string, "dbFile");
+                static immutable maxAbsoluteDiff = AlignmentChain.maxScore / 100; // 1% wrt. score
+                alias numEstimateUseless = (numCatUnsure, iteration) => (
+                        numCatUnsure - numCatUnsure / 20) / (iteration + 1);
 
-    AlignmentContainer!(AlignmentChain[]) selfAlignment;
-    AlignmentContainer!(AlignmentChain[]) readsAlignment;
-    const Options options;
-    /// Set of read ids not to be considered in further processing.
-    size_t[] catUseless;
-    /// Set of alignments to be considered in further processing.
-    AlignmentContainer!(AlignmentChain[]) catCandidates;
-    /// Set of alignments to be used for gap filling.
-    Hit[] catHits;
-    /// Access contigs distributed over several DBs by ID.
-    DBUnion referenceDb;
-    /// Transform coordinates before insertions to coordinates after them.
-    CoordinateTransform coordTransform;
-    alias T = coordTransform;
-    size_t iteration;
+                AlignmentContainer!(AlignmentChain[]) selfAlignment;
+                AlignmentContainer!(AlignmentChain[]) readsAlignment;
+                const Options options;
+                /// Set of read ids not to be considered in further processing.
+                size_t[] catUseless;
+                /// Set of alignments to be considered in further processing.
+                AlignmentContainer!(AlignmentChain[]) catCandidates;
+                /// Set of alignments to be used for gap filling.
+                Hit[] catHits;
+                /// Access contigs distributed over several DBs by ID.
+                DBUnion referenceDb;
+                /// Transform coordinates before insertions to coordinates after them.
+                CoordinateTransform coordTransform;
+                alias T = coordTransform;
+                size_t iteration;
 
-    this(in ref Options options)
-    {
-        this.options = options;
-        this.catUseless = [];
-        this.catHits = [];
-        this.iteration = 0;
-        this.referenceDb.baseDb = options.refDb;
-    }
+                this(in ref Options options)
+                {
+                    this.options = options;
+                    this.catUseless = [];
+                    this.catHits = [];
+                    this.iteration = 0;
+                    this.referenceDb.baseDb = options.refDb;
+                }
 
-    DJunctor run()
-    {
-        logJsonDiagnostic("state", "enter", "function", "run");
-        // dfmt off
+                DJunctor run()
+                {
+                    logJsonDiagnostic("state", "enter", "function", "run");
+                    // dfmt off
         this
             .init
             .mainLoop
             .finish;
         // dfmt on
-        logJsonDiagnostic("state", "exit", "function", "run");
+                    logJsonDiagnostic("state", "exit", "function", "run");
 
-        return this;
-    }
+                    return this;
+                }
 
-    protected DJunctor init()
-    {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.init");
-        selfAlignment = getLocalAlignments(options.refDb, options);
-        readsAlignment = getMappings(options.refDb, options.readsDb, options);
-        catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup,
-                readsAlignment.b2a.dup);
-        logJsonDiagnostic("state", "exit", "function", "djunctor.init");
+                protected DJunctor init()
+                {
+                    logJsonDiagnostic("state", "enter", "function", "djunctor.init");
+                    selfAlignment = getLocalAlignments(options.refDb, options);
+                    readsAlignment = getMappings(options.refDb, options.readsDb, options);
+                    catCandidates = AlignmentContainer!(AlignmentChain[])(
+                            readsAlignment.a2b.dup, readsAlignment.b2a.dup);
+                    logJsonDiagnostic("state", "exit", "function", "djunctor.init");
 
-        return this;
-    }
+                    return this;
+                }
 
-    unittest
-    {
-        auto options = Options();
-        auto djunctor = new DJunctor(options);
+                unittest
+                {
+                    auto options = Options();
+                    auto djunctor = new DJunctor(options);
 
-        djunctor.init();
+                    djunctor.init();
 
-        assert(getLocalAlignments.wasCalled);
-        assert(djunctor.selfAlignment == getLocalAlignments.returnValue);
-        getLocalAlignments.reset();
-        assert(getMappings.wasCalled);
-        assert(djunctor.readsAlignment == getMappings.returnValue);
-        getMappings.reset();
-    }
+                    assert(getLocalAlignments.wasCalled);
+                    assert(djunctor.selfAlignment == getLocalAlignments.returnValue);
+                    getLocalAlignments.reset();
+                    assert(getMappings.wasCalled);
+                    assert(djunctor.readsAlignment == getMappings.returnValue);
+                    getMappings.reset();
+                }
 
-    protected DJunctor mainLoop()
-    {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.mainLoop");
-        do
-        {
-            filterUseless();
-            findHits();
+                protected DJunctor mainLoop()
+                {
+                    logJsonDiagnostic("state", "enter", "function", "djunctor.mainLoop");
+                    do
+                    {
+                        filterUseless();
+                        findHits();
 
-            // dfmt off
+                        // dfmt off
             logJsonDiagnostic(
                 "iteration", iteration,
                 "numUseless", catUseless.length,
@@ -811,27 +2230,27 @@ class DJunctor
             );
             // dfmt on
 
-            if (catHits.length > 0)
-            {
-                insertHits();
-            }
+                        if (catHits.length > 0)
+                        {
+                            insertHits();
+                        }
 
-            ++iteration;
-        }
-        while (catHits.length > 0 && iteration < maxLoops);
-        logJsonDiagnostic("state", "exit", "function", "djunctor.mainLoop");
+                        ++iteration;
+                    }
+                    while (catHits.length > 0 && iteration < maxLoops);
+                    logJsonDiagnostic("state", "exit", "function", "djunctor.mainLoop");
 
-        return this;
-    }
+                    return this;
+                }
 
-    protected DJunctor filterUseless()
-    {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.filterUseless");
+                protected DJunctor filterUseless()
+                {
+                    logJsonDiagnostic("state", "enter", "function", "djunctor.filterUseless");
 
-        auto sizeReserve = numEstimateUseless(catCandidates.a2b.length, iteration);
-        if (sizeReserve == 0)
-        {
-            // dfmt off
+                    auto sizeReserve = numEstimateUseless(catCandidates.a2b.length, iteration);
+                    if (sizeReserve == 0)
+                    {
+                        // dfmt off
             logJsonDiagnostic(
                 "state", "exit",
                 "function", "djunctor.filterUseless",
@@ -839,955 +2258,642 @@ class DJunctor
             );
             // dfmt on
 
-            // Skip this step if we do not expect to find "useless" reads;
-            // it is not harmful to consider some "useless" reads as
-            // candidates (catCandidates).
-            return this;
-        }
+                        // Skip this step if we do not expect to find "useless" reads;
+                        // it is not harmful to consider some "useless" reads as
+                        // candidates (catCandidates).
+                        return this;
+                    }
 
-        auto uselessAcc = appender!(size_t[]);
-        auto candidatesAcc = appender!(AlignmentChain[]);
-        uselessAcc.reserve(sizeReserve);
-        alias isNotUseless = ac => !uselessAcc.data.canFind(ac.contigA.id);
+                    auto uselessAcc = appender!(size_t[]);
+                    auto candidatesAcc = appender!(AlignmentChain[]);
+                    uselessAcc.reserve(sizeReserve);
+                    alias isNotUseless = ac => !uselessAcc.data.canFind(ac.contigA.id);
 
-        foreach (alignmentsChunk; catCandidates.a2b.chunkBy!haveEqualIds)
-        {
-            auto alignments = alignmentsChunk.array;
-            alignments.sort!"a.score > b.score";
+                    foreach (alignmentsChunk; catCandidates.a2b.chunkBy!haveEqualIds)
+                    {
+                        auto alignments = alignmentsChunk.array;
+                        alignments.sort!"a.score > b.score";
 
-            // Mark reads as useless if either: (s. issue #3)
-            // (a) The aligned read, ie. the alignment extened with the exceeding
-            //     read sequence on either end, is fully contained in a single
-            //     contig.
-            // (b) It aligns in multiple locations of one contig with
-            //     approximately equal quality.
-            if (alignments[0].isFullyContained || (alignments.length > 1
-                    && similarScore(alignments[0].score, alignments[1].score)))
-            {
-                uselessAcc ~= alignments[0].contigB.id;
-            }
-            else
-            {
-                candidatesAcc ~= alignments;
-            }
-        }
-        // dfmt off
+                        // Mark reads as useless if either: (s. issue #3)
+                        // (a) The aligned read, ie. the alignment extened with the exceeding
+                        //     read sequence on either end, is fully contained in a single
+                        //     contig.
+                        // (b) It aligns in multiple locations of one contig with
+                        //     approximately equal quality.
+                        if (alignments[0].isFullyContained || (alignments.length > 1
+                                && similarScore(alignments[0].score, alignments[1].score)))
+                        {
+                            uselessAcc ~= alignments[0].contigB.id;
+                        }
+                        else
+                        {
+                            candidatesAcc ~= alignments;
+                        }
+                    }
+                    // dfmt off
         logJsonDiagnostic(
             "numUselessExpected", sizeReserve,
             "numUselessFound", uselessAcc.data.length,
         );
         // dfmt on
 
-        this.catUseless ~= uselessAcc.data;
-        this.catCandidates.a2b = candidatesAcc.data;
-        this.catCandidates.b2a = this.catCandidates.b2a.filter!isNotUseless.array;
-        logJsonDiagnostic("state", "exit", "function", "djunctor.filterUseless");
+                    this.catUseless ~= uselessAcc.data;
+                    this.catCandidates.a2b = candidatesAcc.data;
+                    this.catCandidates.b2a = this.catCandidates.b2a.filter!isNotUseless.array;
+                    logJsonDiagnostic("state", "exit", "function", "djunctor.filterUseless");
 
-        return this;
-    }
+                    return this;
+                }
 
-    protected static bool similarScore(size_t a, size_t b) pure
-    {
-        auto diff = a > b ? a - b : b - a;
-        auto magnitude = a > b ? a : b;
-
-        return diff < maxAbsoluteDiff || (diff * AlignmentChain.maxScore / magnitude) < maxRelativeDiff;
-    }
-
-    unittest
-    {
-        immutable eps = 1;
-        immutable refValueSmall = 2 * maxAbsoluteDiff;
-        immutable refValueLarge = AlignmentChain.maxScore / 2;
-
-        // test absolute part
-        assert(similarScore(refValueSmall, refValueSmall));
-        assert(similarScore(refValueSmall, refValueSmall + (maxAbsoluteDiff - 1)));
-        assert(similarScore(refValueSmall, refValueSmall - (maxAbsoluteDiff - 1)));
-        assert(!similarScore(refValueSmall, refValueSmall + (maxAbsoluteDiff + 1)));
-        assert(!similarScore(refValueSmall, refValueSmall - (maxAbsoluteDiff + 1)));
-        // test relative part
-        assert(similarScore(refValueLarge, refValueLarge));
-        assert(similarScore(refValueLarge,
-                refValueLarge + refValueLarge * maxRelativeDiff / AlignmentChain.maxScore));
-        assert(similarScore(refValueLarge,
-                refValueLarge - refValueLarge * maxRelativeDiff / AlignmentChain.maxScore) + eps);
-        assert(!similarScore(refValueLarge,
-                refValueLarge + refValueLarge * 2 * maxRelativeDiff / AlignmentChain.maxScore));
-        assert(!similarScore(refValueLarge,
-                refValueLarge - refValueLarge * 2 * maxRelativeDiff / AlignmentChain.maxScore));
-    }
-
-    protected DJunctor findHits()
-    {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.findHits");
-
-        auto groupedByGap = groupByGap(catCandidates);
-        PileUp[] extendingReadsByContig = groupedByGap.extendingReadsByContig;
-        PileUp[] spanningReadsByGap = groupedByGap.spanningReadsByGap;
-
-        logFillingInfo!("findHits", "extension", "raw")(extendingReadsByContig);
-        logFillingInfo!("findHits", "span", "raw")(spanningReadsByGap);
-
-        alias getReadId = (reads) => reads[0].contigA.id;
-
-        foreach (gap; spanningReadsByGap)
-        {
-            size_t refContig1Id = gap[0][0].contigB.id;
-            size_t refContig2Id = gap[0][1].contigB.id;
-            size_t[] readIds = gap.map!getReadId.array;
-            string[] fastaEntries = getFastaEntries(options.readsDb, readIds, options).array;
-            string pileupDb = buildDamFile(fastaEntries, options);
-            string[] consensusDbs = getConsensus(pileupDb, options);
-
-            // dfmt off
-            logJsonDebug(
-                "consensusDbs", consensusDbs.map!Json.array,
-                "contigIds", [Json(refContig1Id), Json(refContig2Id)],
-            );
-            // dfmt on
-
-            foreach (consensusDb; consensusDbs)
-            {
-                auto consensusAlignments = getMappings(options.refDb, consensusDb, options);
-                auto consensusGroupedByGap = groupByGap(consensusAlignments);
-                PileUp consensusPileUp = consensusGroupedByGap.spanningReadsByGap[0];
-                consensusPileUp.sort!(Comparator!gapScore.gt);
-
-                logFillingInfo!("findHits", "span", "consensus")([consensusPileUp]);
-                // dfmt off
-                logJsonDebug(
-                    "contigIds", [Json(refContig1Id), Json(refContig2Id)],
-                    "pileUp", consensusPileUp
-                        .map!(spanningReads => Json([
-                            "estimateSize": Json(estimateSize(spanningReads)),
-                            "gapScore": Json(gapScore(spanningReads)),
-                            "alignmentScores": Json([
-                                Json(spanningReads[0].score),
-                                Json(spanningReads[1].score),
-                            ]),
-                            "readId": Json(spanningReads[0].contigA.id),
-                        ]))
-                        .array,
-                );
-                // dfmt on
-
-                // Mark best scoring read for later sequence insertion.
-                catHits ~= Hit(consensusPileUp[0], consensusDb);
-            }
-        }
-
-        logJsonDiagnostic("state", "exit", "function", "djunctor.findHits");
-
-        return this;
-    }
-
-    protected Tuple!(PileUp[], "extendingReadsByContig", PileUp[], "spanningReadsByGap") groupByGap(
-            AlignmentContainer!(AlignmentChain[]) candidates)
-    {
-        static bool orderByReferenceIds(T)(T a, T b) pure
-        {
-            return a[0].contigB.id < b[0].contigB.id && (!(a.length > 1
-                    && a[0].contigB.id == b[0].contigB.id) || a[1].contigB.id < b[1].contigB.id);
-        }
-
-        static size_t numContigsInvolved(T)(T readsByNumFlanksByGap)
-        {
-            auto readsByGap = readsByNumFlanksByGap.front;
-            auto readsByFirstGap = readsByGap.front;
-            auto reads = readsByFirstGap.front;
-
-            return reads.length;
-        }
-
-        static bool isSameRead(T)(T a, T b)
-        {
-            return a.contigA.id == b.contigA.id;
-        }
-
-        // dfmt off
-        auto readsByNumFlanks = candidates
-            .b2a
-            .chunkBy!isSameRead
-            .map!array
-            .array
-            .sort!"a.length < b.length"
-            .groupBy;
-        auto readsByNumFlanksByGap = readsByNumFlanks
-            .map!(group => group
-                .array
-                .sort!orderByReferenceIds
-                .groupBy);
-        // dfmt on
-        PileUp[] extendingReadsByContig;
-        PileUp[] spanningReadsByGap;
-
-        if (!readsByNumFlanksByGap.empty && numContigsInvolved(readsByNumFlanksByGap) == 1)
-        {
-            extendingReadsByContig = readsByNumFlanksByGap.front.map!array.array;
-            readsByNumFlanksByGap.popFront();
-        }
-
-        if (!readsByNumFlanksByGap.empty && numContigsInvolved(readsByNumFlanksByGap) == 2)
-        {
-            spanningReadsByGap = readsByNumFlanksByGap.front.map!array.array;
-            readsByNumFlanksByGap.popFront();
-            sortSpanninReadAlignments(spanningReadsByGap);
-        }
-
-        return typeof(return)(extendingReadsByContig, spanningReadsByGap);
-    }
-
-    static protected void sortSpanninReadAlignments(ref PileUp[] spanningReadsByGap) pure nothrow
-    {
-        foreach (spanningReadByGap; spanningReadsByGap)
-            foreach (spanningReads; spanningReadByGap)
-            {
-                auto isBefore = spanningReads[0].isBefore!"contigA"(spanningReads[1]);
-                auto isComplement = spanningReads[0].complement;
-
-                if (isComplement == isBefore)
-                    swap(spanningReads[0], spanningReads[1]);
-            }
-    }
-
-    static protected long estimateSize(in MatchedAlignmentChains alignments) pure
-    {
-        switch (alignments.length)
-        {
-        case 1:
-            return extensionSize(alignments[0]);
-        case 2:
-            return spanningGapSize(alignments[0], alignments[1]);
-        default:
-            throw new Exception(
-                    format!"cannot estimate size for %d matched alignments"(alignments.length));
-        }
-    }
-
-    /**
-        Returns the (approximate) size of the gap spanned by alignmentsRange.
-        ---
-        gapSize = readsSequenceLength - referenceExcess
-
-        readsSequenceLength ~= a2x - a1y
-
-        referenceExcess ~= referenceExcess1 + referenceExcess2
-
-        referenceExcess1 ~= la - cay
-        referenceExcess2 ~= cbx - 0 = cbx
-
-        CASE 1 (no complement):
-
-                            contig a                  contig b
-
-                      0         cax cay la      0   cbx cby       lb
-            reference |---------+---+---|       |---+---+---------|
-                                 \ \ \             / / /
-                                  \ \ \           / / /
-                      alignment 1  \ \ \         / / /  alignment 2
-                                    \ \ \       / / /
-            read            |-->-->--+->-+-->--+->-+-->-->--|
-                            0        a1x a1y   a2x a2y      lr
-
-        CASE 2 (complement):
-
-                            contig b                  contig a
-
-                      0         cax cay la      0   cbx cby       lb
-            reference |---------+---+---|       |---+---+---------|
-                                 \ \ \             / / /
-                                  \ \ \           / / /
-                      alignment 2  \ \ \         / / /  alignment 1
-                                    \ \ \       / / /
-            read            |--<--<--+-<-+--<--+-<-+--<--<--|
-                            0        a1x a1y   a2x a2y      lr
-        ---
-    */
-    static protected long spanningGapSize(in AlignmentChain alignment1, in AlignmentChain alignment2) pure
-    {
-        // dfmt off
-        auto alignments = isBefore!"contigA"(alignment1, alignment2)
-            ? tuple(alignment1, alignment2)
-            : tuple(alignment2, alignment1);
-        // dfmt on
-        auto firstAlignment = alignments[0];
-        auto secondAlignment = alignments[1];
-
-        assert(secondAlignment.first.contigA.begin > firstAlignment.last.contigA.end,
-                format!"intersecting local alignments in %s"(tuple(firstAlignment,
-                    secondAlignment).to!string));
-        long readsSequenceLength = secondAlignment.first.contigA.begin
-            - firstAlignment.last.contigA.end;
-        // dfmt off
-        long referenceExcess1 = firstAlignment.contigB.length - firstAlignment.last.contigB.end;
-        long referenceExcess2 = secondAlignment.first.contigB.begin;
-        // dfmt on
-        long referenceExcess = referenceExcess1 + referenceExcess2;
-
-        return readsSequenceLength - referenceExcess;
-    }
-
-    unittest
-    {
-        with (AlignmentChain) with (LocalAlignment) with (Complement)
+                protected static bool similarScore(size_t a, size_t b) pure
                 {
-                    // dfmt off
-                    auto testCases = [
-                        // CASE 1 (no complement)
-                        // ------------------------------------
-                        //           0     30  50  50     0   0  20     50
-                        // reference |------+---+---|     |---+---+------|
-                        //                   \ \ \           / / /
-                        //       alignment 1  \ \ \         / / /  alignment 2
-                        //                     \ \ \       / / /
-                        // read        |-->-->--+->-+-->--+->-+-->-->--|
-                        //             0       10   30   50  70       80
-                        tuple(
-                            AlignmentChain(0, Contig(1, 80), Contig(1, 50), no, [
-                                LocalAlignment(Locus(10, 15), Locus(30, 35), 0),
-                                LocalAlignment(Locus(20, 30), Locus(40, 50), 1),
-                            ]),
-                            AlignmentChain(1, Contig(1, 80), Contig(2, 50), no, [
-                                LocalAlignment(Locus(50, 55), Locus(0, 10), 2),
-                                LocalAlignment(Locus(60, 70), Locus(15, 20), 3),
-                            ]),
-                            20
-                        ),
-                        //           0     30  45  50     0   5  20     50
-                        // reference |------+---+---|     |---+---+------|
-                        //                   \ \ \           / / /
-                        //       alignment 1  \ \ \         / / /  alignment 2
-                        //                     \ \ \       / / /
-                        // read        |-->-->--+->-+-->--+->-+-->-->--|
-                        //             0       10   30   50  70       80
-                        tuple(
-                            AlignmentChain(2, Contig(1, 80), Contig(1, 50), no, [
-                                LocalAlignment(Locus(10, 15), Locus(30, 35), 4),
-                                LocalAlignment(Locus(20, 30), Locus(40, 45), 5),
-                            ]),
-                            AlignmentChain(3, Contig(1, 80), Contig(2, 50), no, [
-                                LocalAlignment(Locus(50, 55), Locus(5, 10), 6),
-                                LocalAlignment(Locus(60, 70), Locus(15, 20), 7),
-                            ]),
-                            10
-                        ),
-                        //           0     30  45  50     0   5  20     50
-                        // reference |------+---+---|     |---+---+------|
-                        //                   \ \ \           / / /
-                        //       alignment 2  \ \ \         / / /  alignment 1
-                        //                     \ \ \       / / /
-                        // read        |-->-->--+->-+-->--+->-+-->-->--|
-                        //             0       10   30   50  70       80
-                        tuple(
-                            AlignmentChain(4, Contig(1, 80), Contig(2, 50), no, [
-                                LocalAlignment(Locus(50, 55), Locus(5, 10), 6),
-                                LocalAlignment(Locus(60, 70), Locus(15, 20), 7),
-                            ]),
-                            AlignmentChain(5, Contig(1, 80), Contig(1, 50), no, [
-                                LocalAlignment(Locus(10, 15), Locus(30, 35), 4),
-                                LocalAlignment(Locus(20, 30), Locus(40, 45), 5),
-                            ]),
-                            10
-                        ),
-                        // CASE 2 (complement)
-                        // ------------------------------------
-                        //           0     30  50  50     0   0  20     50
-                        // reference |------+---+---|     |---+---+------|
-                        //                   \ \ \           / / /
-                        //       alignment 1  \ \ \         / / /  alignment 2
-                        //                     \ \ \       / / /
-                        // read        |--<--<--+-<-+--<--+-<-+--<--<--|
-                        //             0       10   30   50  70       80
-                        tuple(
-                            AlignmentChain(6, Contig(1, 80), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(10, 15), Locus(30, 35), 8),
-                                LocalAlignment(Locus(20, 30), Locus(40, 50), 9),
-                            ]),
-                            AlignmentChain(7, Contig(1, 80), Contig(2, 50), yes, [
-                                LocalAlignment(Locus(50, 55), Locus(0, 10), 10),
-                                LocalAlignment(Locus(60, 70), Locus(15, 20), 11),
-                            ]),
-                            20
-                        ),
-                        //           0     30  45  50     0   5  20     50
-                        // reference |------+---+---|     |---+---+------|
-                        //                   \ \ \           / / /
-                        //       alignment 1  \ \ \         / / /  alignment 2
-                        //                     \ \ \       / / /
-                        // read        |--<--<--+-<-+--<--+-<-+--<--<--|
-                        //             0       10   30   50  70       80
-                        tuple(
-                            AlignmentChain(8, Contig(1, 80), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(10, 15), Locus(30, 35), 12),
-                                LocalAlignment(Locus(20, 30), Locus(40, 45), 13),
-                            ]),
-                            AlignmentChain(9, Contig(1, 80), Contig(2, 50), yes, [
-                                LocalAlignment(Locus(50, 55), Locus(5, 10), 14),
-                                LocalAlignment(Locus(60, 70), Locus(15, 20), 15),
-                            ]),
-                            10
-                        ),
-                        //           0     30  45  50     0   5  20     50
-                        // reference |------+---+---|     |---+---+------|
-                        //                   \ \ \           / / /
-                        //       alignment 2  \ \ \         / / /  alignment 1
-                        //                     \ \ \       / / /
-                        // read        |--<--<--+-<-+--<--+-<-+--<--<--|
-                        //             0       10   30   50  70       80
-                        tuple(
-                            AlignmentChain(10, Contig(1, 80), Contig(2, 50), yes, [
-                                LocalAlignment(Locus(50, 55), Locus(5, 10), 14),
-                                LocalAlignment(Locus(60, 70), Locus(15, 20), 15),
-                            ]),
-                            AlignmentChain(11, Contig(1, 80), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(10, 15), Locus(30, 35), 12),
-                                LocalAlignment(Locus(20, 30), Locus(40, 45), 13),
-                            ]),
-                            10
-                        ),
-                    ];
-                    // dfmt on
+                    auto diff = a > b ? a - b : b - a;
+                    auto magnitude = a > b ? a : b;
 
-                    foreach (testCaseIdx, testCase; testCases.enumerate)
+                    return diff < maxAbsoluteDiff
+                        || (diff * AlignmentChain.maxScore / magnitude) < maxRelativeDiff;
+                }
+
+                unittest
+                {
+                    immutable eps = 1;
+                    immutable refValueSmall = 2 * maxAbsoluteDiff;
+                    immutable refValueLarge = AlignmentChain.maxScore / 2;
+
+                    // test absolute part
+                    assert(similarScore(refValueSmall, refValueSmall));
+                    assert(similarScore(refValueSmall, refValueSmall + (maxAbsoluteDiff - 1)));
+                    assert(similarScore(refValueSmall, refValueSmall - (maxAbsoluteDiff - 1)));
+                    assert(!similarScore(refValueSmall, refValueSmall + (maxAbsoluteDiff + 1)));
+                    assert(!similarScore(refValueSmall, refValueSmall - (maxAbsoluteDiff + 1)));
+                    // test relative part
+                    assert(similarScore(refValueLarge, refValueLarge));
+                    assert(similarScore(refValueLarge,
+                            refValueLarge + refValueLarge * maxRelativeDiff / AlignmentChain
+                            .maxScore));
+                    assert(similarScore(refValueLarge,
+                            refValueLarge - refValueLarge * maxRelativeDiff / AlignmentChain
+                            .maxScore) + eps);
+                    assert(!similarScore(refValueLarge,
+                            refValueLarge + refValueLarge * 2 * maxRelativeDiff
+                            / AlignmentChain.maxScore));
+                    assert(!similarScore(refValueLarge,
+                            refValueLarge - refValueLarge * 2 * maxRelativeDiff
+                            / AlignmentChain.maxScore));
+                }
+
+                protected DJunctor findHits()
+                {
+                    logJsonDiagnostic("state", "enter", "function", "djunctor.findHits");
+
+                    auto pileUps = buildPileUps(catCandidates);
+
+                    logFillingInfo!("findHits", "raw")(pileUps);
+                    logJsonDebug("pileUps", pileUps.serializeToJson);
+
+                    alias getReadId = (reads) => reads[0].contigA.id;
+
+                    foreach (pileUp; pileUps)
                     {
-                        auto gotValue = spanningGapSize(testCase[0], testCase[1]);
-                        auto expValue = testCase[2];
-                        auto errorMessage = format!"expected spanning gap size %d but got %d for test case %d"(
-                                expValue, gotValue, testCaseIdx);
+                        assert(pileUp.isValid, "ambiguous pile up");
 
-                        assert(gotValue == expValue, errorMessage);
+                        bool isGap = pileUp.isGap;
+                        const(size_t)[] refContigIds = pileUp[0].map!"a.contigB.id".array;
+                        size_t[] readIds = pileUp.map!getReadId.array;
+                        string[] fastaEntries = getFastaEntries(options.readsDb, readIds, options)
+                            .array;
+                        string pileupDb = buildDamFile(fastaEntries, options);
+                        string[] consensusDbs = getConsensus(pileupDb, options);
+
+                        // dfmt off
+                        logJsonDebug(
+                            "consensusDbs", consensusDbs.map!Json.array,
+                            "contigIds", refContigIds.map!Json.array,
+                        );
+                        // dfmt on
+
+                        foreach (consensusDb; consensusDbs)
+                        {
+                            auto consensusAlignments = getMappings(options.refDb,
+                                    consensusDb, options);
+                            auto consensusPileUps = buildPileUps(consensusAlignments);
+                            auto consensusPileUp = consensusPileUps.maxElement!"a.length";
+                            consensusPileUp.sort!(Comparator!meanScore.gt);
+                            // dfmt off
+                            auto hitReadAlignment = consensusPileUp
+                                .filter!(readAlignment => !isGap || readAlignment.isGap)
+                                .front;
+
+                            if (consensusPileUps.length > 1)
+                                logJsonWarn(
+                                    "contigIds", refContigIds.map!Json.array,
+                                    "code", "ambiguousConsensusAlignment",
+                                    "message", "consensus has more than one pile up",
+                                );
+                            // dfmt on
+                            logFillingInfo!("findHits", "consensus")([consensusPileUp]);
+                            // dfmt off
+                            logJsonDebug(
+                                "contigIds", refContigIds.map!Json.array,
+                                "pileUp", consensusPileUp
+                                    .map!(readAlignment => Json([
+                                        "type": Json(getType(readAlignment).to!string),
+                                        "estimateSize": Json(getInsertionSize(readAlignment)),
+                                        "hitScore": Json(meanScore(readAlignment)),
+                                        "alignmentScores": Json(readAlignment.map!"a.score".map!Json.array),
+                                        "readId": Json(getReadId(readAlignment)),
+                                    ]))
+                                    .array,
+                            );
+                            // dfmt on
+
+                            // Mark best scoring read for later sequence insertion.
+                            catHits ~= Hit(hitReadAlignment, consensusDb);
+                        }
+                    }
+
+                    logJsonDiagnostic("state", "exit", "function", "djunctor.findHits");
+
+                    return this;
+                }
+
+                protected DJunctor insertHits()
+                {
+                    logJsonDiagnostic("state", "enter", "function", "djunctor.insertHits");
+                    foreach (hit; catHits)
+                    {
+                        insertHit(hit);
+                    }
+                    // dfmt off
+                    logJsonDiagnostic(
+                        "step", "djunctor.insertHits",
+                        "coordTransform", coordTransform.serializeToJson,
+                        "coordTransformPython", coordTransform.toString(),
+                    );
+                    // dfmt on
+                    // Clear `catHits` for next iteration.
+                    catHits.length = 0;
+                    logJsonDiagnostic("state", "exit", "function", "djunctor.insertHits");
+
+                    return this;
+                }
+
+                protected DJunctor insertHit(in Hit hit)
+                {
+                    logJsonDiagnostic("state", "enter", "function", "djunctor.insertHit");
+
+                    const(size_t)[] refContigIds = hit.alignments.map!"a.contigB.id".array;
+                    auto complement = hit.alignments[0].complement;
+                    size_t readId = hit.alignments[0].contigA.id;
+                    auto read = getFastaEntries(hit.dbFile, [readId], options)
+                        .front.parseFastaRecord;
+                    auto gapSequenceSlice = getHitSequenceSlice(hit);
+                    // dfmt off
+                    auto insertSequence = complement
+                        ? read.reverseComplement[gapSequenceSlice]
+                        : read[gapSequenceSlice];
+                    // dfmt on
+                    auto insertionInfo = getInsertionInfo(hit);
+                    auto trInsertionInfo = insertionInfo;
+                    trInsertionInfo.begin = T(insertionInfo.begin);
+                    trInsertionInfo.end = T(insertionInfo.end);
+                    auto refContigFastaEntries = refContigIds.map!(
+                            contigId => getReferenceFastaEntry(contigId)).array;
+                    auto endContigLength = refContigFastaEntries[$ - 1].length;
+                    string newHeader = refContigFastaEntries[0].header;
+                    size_t newContigLength = trInsertionInfo.totalInsertionLength(endContigLength);
+                    immutable lineSep = typeof(refContigFastaEntries[0]).lineSep;
+                    auto fastaBuilder = appender!string;
+                    auto expectedFastaLength = newHeader.length + newContigLength
+                        + newContigLength / options.fastaLineWidth + 2;
+                    fastaBuilder.reserve(expectedFastaLength);
+
+                    fastaBuilder ~= newHeader;
+                    fastaBuilder ~= lineSep;
+
+                    with (ReadAlignmentType)
+                    {
+                        final switch (insertionInfo.type)
+                        {
+                        case gap:
+                            // dfmt off
+                            auto joinedSequence = chain(
+                                refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx],
+                                insertSequence,
+                                refContigFastaEntries[1][trInsertionInfo.end.idx .. $],
+                            );
+                            // dfmt on
+                            fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth)
+                                .joiner(lineSep);
+                            break;
+                        case front:
+                            // dfmt off
+                            auto joinedSequence = chain(
+                                insertSequence,
+                                refContigFastaEntries[0][trInsertionInfo.end.idx .. $],
+                            );
+                            // dfmt on
+                            fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth)
+                                .joiner(lineSep);
+                            break;
+                        case back:
+                            // dfmt off
+                            auto joinedSequence = chain(
+                                refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx],
+                                insertSequence,
+                            );
+                            // dfmt on
+                            fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth)
+                                .joiner(lineSep);
+                            break;
+                        }
+                    }
+
+                    fastaBuilder ~= lineSep;
+
+                    auto overlayDb = buildDamFile([fastaBuilder.data], options);
+
+                    referenceDb.addAlias(insertionInfo.begin.contigId, overlayDb, 1);
+                    referenceDb.addAlias(insertionInfo.end.contigId, overlayDb, 1);
+                    T ~= insertionInfo;
+
+                    // dfmt off
+                    logJsonDebug(
+                        "step", "insertHits",
+                        "type", insertionInfo.type.to!string,
+                        "contigIds", refContigIds.map!Json.array,
+                        "readId", readId,
+                        "complement", complement.to!bool,
+                        "insertSequence", insertSequence.array.to!string,
+                        "insertionInfo", insertionInfo.serializeToJson(),
+                        "transformedInsertionInfo", trInsertionInfo.serializeToJson(),
+                        "overlayDb", overlayDb,
+                        "expectedFastaLength", expectedFastaLength,
+                        "newHeaderLength", newHeader.length,
+                        "newContigLength", newContigLength,
+                        "optionsFastaLineWidth", options.fastaLineWidth,
+                        "fastaBuilderDataLength", fastaBuilder.data.length,
+                    );
+                    // dfmt on
+                    debug assert(expectedFastaLength >= fastaBuilder.data.length,
+                            format!"avoid reallocation: expeceted %d but used %d"(
+                                expectedFastaLength, fastaBuilder.data.length));
+
+                    logJsonDiagnostic("state", "exit", "function", "djunctor.insertHit");
+
+                    return this;
+                }
+
+                protected auto getInsertionInfo(in Hit hit) pure
+                {
+                    if (hit.alignments.length == 1)
+                        return getInsertionInfoForExtension(hit);
+                    else if (hit.alignments.length == 2)
+                        return getInsertionInfoForGap(hit);
+                    else
+                        assert(0, "illegal alignments count in hit");
+                }
+
+                protected auto getInsertionInfoForExtension(in Hit hit) pure
+                {
+                    with (CoordinateTransform)
+                    {
+                        with (ReadAlignmentType)
+                        {
+                            auto alignment = hit.alignments[0];
+                            assert(hit.alignments.isValid && hit.alignments.isExtension);
+                            ReadAlignmentType extensionType = hit.alignments.getType;
+                            size_t refContigId = alignment.contigB.id;
+                            // dfmt off
+                            size_t idx = (extensionType == front) ^ alignment.complement
+                                ? alignment.first.contigB.begin
+                                : alignment.last.contigB.end;
+                            // dfmt on
+
+                            if (alignment.complement)
+                            {
+                                idx = alignment.contigB.length - idx;
+                            }
+                            auto extensionSequenceSlice = getHitSequenceSlice(hit);
+
+                            // dfmt off
+                            debug logJsonDebug(
+                                "alignment", alignment.serializeToJson,
+                                "refContigId", refContigId,
+                                "extensionType", extensionType.to!string,
+                                "idx", idx,
+                                "extensionSequenceSlice", extensionSequenceSlice.serializeToJson,
+                            );
+                            // dfmt on
+
+                            // dfmt off
+                            return Insertion.make(
+                                Coordinate(refContigId, idx),
+                                Coordinate(refContigId, idx),
+                                extensionSequenceSlice[1] - extensionSequenceSlice[0],
+                                extensionType,
+                            );
+                            // dfmt on
+                        }
                     }
                 }
-    }
 
-    /**
-        Returns the (approximate) size of the extension constituted by alignmentsRange.
-        ---
-        extensionSize ~= readsSequenceLength - referenceExcess
-
-        CASE 1 (right extension, no complement):
-
-                       0       rx  ry  lr
-            reference  |-------+---+---|
-                                \ \ \
-                                 \ \ \
-                       alignment  \ \ \
-                                   \ \ \
-            read            |-->-->-+->-+->-->--|
-                            0       ax  ay      la
-
-            readsSequenceLength ~= la - ay
-            referenceExcess ~= lr - ry
-
-        CASE 2 (left extension, no complement):
-
-                                0    rx  ry lr
-            reference           |---+---+-------|
-                                   / / /
-                                  / / /
-                      alignment  / / /
-                                / / /
-            read       |-->-->-+->-+->-->--|
-                       0       ax  ay      la
-
-            readsSequenceLength ~= ax - 0 = ax
-            referenceExcess ~= rx - 0 = rx
-
-        CASE 3 (right extension, complement):
-
-                       0       rx  ry  lr
-            reference  |-------+---+---|
-                                \ \ \
-                                 \ \ \
-                       alignment  \ \ \
-                                   \ \ \
-            read            |--<--<-+-<-+-<--<--|
-                            0       ax  ay      la
-
-            readsSequenceLength ~= la - ay
-            referenceExcess ~= lr - ry
-
-        CASE 4 (left extension, complement):
-
-                                0    rx  ry lr
-            reference           |---+---+-------|
-                                   / / /
-                                  / / /
-                      alignment  / / /
-                                / / /
-            read       |--<--<-+-<-+-<--<--|
-                       0       ax  ay      la
-
-            readsSequenceLength ~= ax - 0 = ax
-            referenceExcess ~= rx - 0 = rx
-        ---
-    */
-    static protected long extensionSize(in AlignmentChain alignment) pure
-    {
-        // CASE 1/3 (right extension)
-        long readsSequenceLengthRightExtension = alignment.contigA.length
-            - alignment.last.contigA.end;
-        long referenceExcessRightExtension = alignment.contigB.length - alignment.last.contigB.end;
-        // CASE 2/4 (left extension)
-        long readsSequenceLengthLeftExtension = alignment.first.contigA.begin;
-        long referenceExcessLeftExtension = alignment.first.contigB.begin;
-
-        // dfmt off
-        return max(
-            // Case 1/3 (right extension)
-            readsSequenceLengthRightExtension - referenceExcessRightExtension,
-            // Case 2/4 (left extension)
-            readsSequenceLengthLeftExtension - referenceExcessLeftExtension,
-        );
-        // dfmt on
-    }
-
-    unittest
-    {
-        with (AlignmentChain) with (LocalAlignment) with (Complement)
+                protected auto getInsertionInfoForGap(in Hit hit) pure
                 {
-                    // dfmt off
-                    auto testCases = [
-                        // CASE 1 (right extension, no complement)
-                        // ------------------------------------
-                        //            0      10  50  50
-                        // reference  |-------+---+---|
-                        //                     \ \ \
-                        // read         |-->-->-+->-+->-->--|
-                        //              0       0  40      50
-                        tuple(
-                            AlignmentChain(0, Contig(1, 50), Contig(1, 50), no, [
-                                LocalAlignment(Locus(0, 15), Locus(10, 20), 0),
-                                LocalAlignment(Locus(20, 40), Locus(30, 50), 1),
-                            ]),
-                            10
-                        ),
-                        //            0      10  45  50
-                        // reference  |-------+---+---|
-                        //                     \ \ \
-                        // read         |-->-->-+->-+->-->--|
-                        //              0       0  40      50
-                        tuple(
-                            AlignmentChain(1, Contig(1, 50), Contig(1, 50), no, [
-                                LocalAlignment(Locus(0, 15), Locus(10, 20), 2),
-                                LocalAlignment(Locus(20, 40), Locus(30, 45), 3),
-                            ]),
-                            5
-                        ),
-                        // CASE 2 (left extension, no complement):
-                        // ------------------------------------
-                        //                  0   0  40      50
-                        // reference        |---+---+-------|
-                        //                     / / /
-                        // read       |-->-->-+->-+->-->--|
-                        //            0      10  50      50
-                        tuple(
-                            AlignmentChain(2, Contig(1, 50), Contig(1, 50), no, [
-                                LocalAlignment(Locus(10, 15), Locus(0, 20), 4),
-                                LocalAlignment(Locus(20, 50), Locus(30, 40), 5),
-                            ]),
-                            10
-                        ),
-                        //                  0   5  40      50
-                        // reference        |---+---+-------|
-                        //                     / / /
-                        // read       |-->-->-+->-+->-->--|
-                        //            0      10  50      50
-                        tuple(
-                            AlignmentChain(3, Contig(1, 50), Contig(1, 50), no, [
-                                LocalAlignment(Locus(10, 15), Locus(5, 20), 6),
-                                LocalAlignment(Locus(20, 50), Locus(30, 40), 7),
-                            ]),
-                            5
-                        ),
-                        // CASE 3 (right extension, complement):
-                        // ------------------------------------
-                        //            0      10  50  50
-                        // reference  |-------+---+---|
-                        //                     \ \ \
-                        // read         |--<--<-+-<-+-<--<--|
-                        //              0       0   40      50
-                        tuple(
-                            AlignmentChain(4, Contig(1, 50), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(0, 15), Locus(10, 20), 8),
-                                LocalAlignment(Locus(20, 40), Locus(30, 50), 9),
-                            ]),
-                            10
-                        ),
-                        //            0      10  45  50
-                        // reference  |-------+---+---|
-                        //                     \ \ \
-                        // read         |--<--<-+-<-+-<--<--|
-                        //              0       0   50      50
-                        tuple(
-                            AlignmentChain(5, Contig(1, 50), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(0, 15), Locus(10, 20), 10),
-                                LocalAlignment(Locus(20, 40), Locus(30, 45), 11),
-                            ]),
-                            5
-                        ),
-                        // CASE 4 (left extension, complement):
-                        // ------------------------------------
-                        //                  0   0  40      50
-                        // reference        |---+---+-------|
-                        //                     / / /
-                        // read       |--<--<-+-<-+-<--<--|
-                        //            0       10  50      50
-                        tuple(
-                            AlignmentChain(6, Contig(1, 50), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(10, 15), Locus(0, 20), 12),
-                                LocalAlignment(Locus(20, 50), Locus(30, 40), 13),
-                            ]),
-                            10
-                        ),
-                        //                  0   5  40      50
-                        // reference        |---+---+-------|
-                        //                     / / /
-                        // read       |--<--<-+-<-+-<--<--|
-                        //            0       10  50      50
-                        tuple(
-                            AlignmentChain(7, Contig(1, 50), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(10, 15), Locus(5, 20), 14),
-                                LocalAlignment(Locus(20, 50), Locus(30, 40), 15),
-                            ]),
-                            5
-                        ),
-                    ];
-                    // dfmt on
+                    size_t refContig1Id = hit.alignments[0].contigB.id;
+                    size_t refContig2Id = hit.alignments[1].contigB.id;
 
-                    foreach (testCaseIdx, testCase; testCases.enumerate)
+                    size_t gapRefBegin;
+                    size_t gapRefEnd;
+
+                    if (hit.alignments[0].complement)
                     {
-                        auto gotValue = extensionSize(testCase[0]);
-                        auto expValue = testCase[1];
-                        auto errorMessage = format!"expected extension size %d but got %d for test case %d"(
-                                expValue, gotValue, testCaseIdx);
+                        gapRefBegin = hit.alignments[0].contigB.length
+                            - hit.alignments[0].first.contigB.begin;
+                        gapRefEnd = hit.alignments[1].contigB.length
+                            - hit.alignments[1].last.contigB.end;
+                    }
+                    else
+                    {
+                        gapRefBegin = hit.alignments[0].last.contigB.end;
+                        gapRefEnd = hit.alignments[1].first.contigB.begin;
+                    }
 
-                        assert(gotValue == expValue, errorMessage);
+                    auto gapSequenceSlice = getHitSequenceSlice(hit);
+
+                    with (CoordinateTransform)
+                    {
+                        // dfmt off
+                        return Insertion.make!(ReadAlignmentType.gap)(
+                            Coordinate(refContig1Id, gapRefBegin),
+                            Coordinate(refContig2Id, gapRefEnd),
+                            gapSequenceSlice[1] - gapSequenceSlice[0],
+                        );
+                        // dfmt on
                     }
                 }
-    }
 
-    static protected size_t gapScore(in MatchedAlignmentChains alignments) pure
-    {
-        assert(alignments.length == 2);
-        auto score1 = alignments[0].score.to!long;
-        auto score2 = alignments[1].score.to!long;
+                protected static Tuple!(int, int) getHitSequenceSlice(in Hit hit) pure
+                {
+                    if (hit.alignments.length == 1)
+                        return getExtensionSequenceSlice(hit);
+                    else if (hit.alignments.length == 2)
+                        return getGapSequenceSlice(hit);
+                    else
+                        assert(0, "illegal alignments count in hit");
+                }
 
-        return (score1 + score2) / 2 - abs(score1 - score2);
-    }
+                protected static Tuple!(int, int) getExtensionSequenceSlice(in Hit hit) pure
+                {
+                    auto alignment = hit.alignments[0];
+                    auto extensionType = hit.alignments.getType;
+                    size_t begin;
+                    size_t end;
 
-    protected DJunctor insertHits()
-    {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.insertHits");
-        foreach (hit; catHits)
-        {
-            switch (hit.length)
-            {
-            case 1:
-                extendContig(hit);
-                break;
-            case 2:
-                fillGap(hit);
-                break;
-            default:
-                throw new Exception(format!"cannot fill gap for %d alignment chains"(hit.length));
-            }
-        }
-        // dfmt off
-        logJsonDiagnostic(
-            "step", "djunctor.insertHits",
-            "coordTransform", coordTransform.serializeToJson,
-            "coordTransformPython", coordTransform.toString(),
-        );
-        // dfmt off
-        // Clear `catHits` for next iteration.
-        catHits.length = 0;
-        logJsonDiagnostic("state", "exit", "function", "djunctor.insertHits");
+                    switch (extensionType)
+                    {
+                    case ReadAlignmentType.front:
+                        if (alignment.complement)
+                        {
+                            begin = alignment.last.contigA.end;
+                            end = alignment.contigA.length;
+                        }
+                        else
+                        {
+                            begin = 0;
+                            end = alignment.first.contigA.begin;
+                        }
+                        break;
+                    case ReadAlignmentType.back:
+                        if (alignment.complement)
+                        {
+                            begin = 0;
+                            end = alignment.first.contigA.begin;
+                        }
+                        else
+                        {
+                            begin = alignment.last.contigA.end;
+                            end = alignment.contigA.length;
+                        }
+                        break;
+                    default:
+                        assert(0);
+                    }
 
-        return this;
-    }
+                    return typeof(return)(begin.to!int, end.to!int);
+                }
 
-    protected DJunctor extendContig(in Hit hit)
-    {
-        assert(0, "unimplemented");
-        //logJsonDiagnostic("state", "enter", "function", "djunctor.extendContig");
-        //logJsonDiagnostic("state", "exit", "function", "djunctor.extendContig");
+                protected static Tuple!(int, int) getGapSequenceSlice(in Hit hit) pure
+                {
+                    auto alignment1 = hit.alignments[0];
+                    auto alignment2 = hit.alignments[1];
+                    size_t begin;
+                    size_t end;
 
-        //return this;
-    }
+                    if (alignment1.isBefore!"contigA"(alignment2))
+                    {
+                        begin = alignment1.last.contigA.end;
+                        end = alignment2.first.contigA.begin;
+                    }
+                    else
+                    {
+                        begin = alignment2.last.contigA.end;
+                        end = alignment1.first.contigA.begin;
+                    }
 
-    protected DJunctor fillGap(in Hit hit)
-    {
-        assert(hit.alignments.length == 2);
-        //assert(hit.alignments[0].isBefore!"contigA"(hit.alignments[1]));
+                    return typeof(return)(begin.to!int, end.to!int);
+                }
 
-        logJsonDiagnostic("state", "enter", "function", "djunctor.fillGap");
-        const(size_t)[] refContigIds = hit.alignments.map!"a.contigB.id".array;
-        auto complement = hit.alignments[0].complement;
-        size_t readId = hit.alignments[0].contigA.id;
-        auto read = getFastaEntries(hit.dbFile, [readId], options).front.parseFastaRecord;
-        auto gapSequenceSlice = getGapSequenceSlice(hit);
-        // dfmt off
-        auto insertSequence = complement
-            ? read.reverseComplement[gapSequenceSlice]
-            : read[gapSequenceSlice];
-        // dfmt on
-        auto insertionInfo = getInsertionInfoForGap(hit);
-        auto trInsertionInfo = insertionInfo;
-        trInsertionInfo.begin = T(insertionInfo.begin);
-        trInsertionInfo.end = T(insertionInfo.end);
-        auto refContigFastaEntries = refContigIds.map!(
-                contigId => getReferenceFastaEntry(contigId)).array;
-        string newHeader = refContigFastaEntries[0].header;
-        size_t newContigLength = trInsertionInfo.begin.idx + insertSequence.save.walkLength
-            + refContigFastaEntries[1].length - trInsertionInfo.end.idx;
-        // dfmt off
-        auto joinedSequence = chain(
-            refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx],
-            insertSequence,
-            refContigFastaEntries[1][trInsertionInfo.end.idx .. $],
-        );
-        // dfmt on
-        immutable lineSep = typeof(refContigFastaEntries[0]).lineSep;
-        auto fastaBuilder = appender!string;
-        auto expectedFastaLength = newHeader.length + newContigLength
-            + newContigLength / options.fastaLineWidth + 2;
-        fastaBuilder.reserve(expectedFastaLength);
+                protected auto getReferenceFastaEntry(in size_t contigId) const
+                {
+                    auto dbRef = referenceDb[contigId];
 
-        fastaBuilder ~= newHeader;
-        fastaBuilder ~= lineSep;
-        fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth).joiner(lineSep);
-        fastaBuilder ~= lineSep;
+                    return parseFastaRecord(getFastaEntries(dbRef.dbFile,
+                            [dbRef.contigId], options).front);
+                }
 
-        debug assert(expectedFastaLength >= fastaBuilder.data.length, "avoid reallocation");
-        auto overlayDb = buildDamFile([fastaBuilder.data], options);
+                protected DJunctor finish()
+                {
+                    logJsonDiagnostic("state", "enter", "function", "djunctor.finish");
+                    logJsonDiagnostic("state", "exit", "function", "djunctor.finish");
 
-        referenceDb.addAlias(insertionInfo.begin.contigId, overlayDb, 1);
-        referenceDb.addAlias(insertionInfo.end.contigId, overlayDb, 1);
-        T ~= insertionInfo;
+                    return this;
+                }
 
-        // dfmt off
-        logJsonDebug(
-            "step", "insertHits",
-            "type", "span",
-            "contigIds", refContigIds.map!Json.array,
-            "readId", readId,
-            "complement", complement.to!bool,
-            "insertSequence", insertSequence.array.to!string,
-            "insertionInfo", insertionInfo.serializeToJson(),
-            "transformedInsertionInfo", trInsertionInfo.serializeToJson(),
-            "overlayDb", overlayDb,
-        );
-        // dfmt on
+                private void logFillingInfo(string step, string readState)(in PileUp[] pileUpsByGap)
+                {
+                    static auto getGapInfo(in PileUp pileUp)
+                    {
+                        bool isGap = pileUp.isGap;
+                        auto type = isGap ? ReadAlignmentType.gap : pileUp[0].getType;
 
-        logJsonDiagnostic("state", "exit", "function", "djunctor.fillGap");
+                        alias lengthFilter = p => isGap ? p.length == 2 : p.length == 1;
 
-        return this;
-    }
+                        // dfmt off
+                        return Json([
+                            "type": Json(type.to!string),
+                            "contigIds": pileUp
+                                .filter!lengthFilter
+                                .map!(readAlignment => readAlignment
+                                    .map!"a.contigB.id"
+                                    .map!Json
+                                    .array)
+                                .front
+                                .Json,
+                            "estimateLengthMean": pileUp
+                                .filter!lengthFilter
+                                .map!getInsertionSize
+                                .array
+                                .mean
+                                .Json,
+                            "estimateLengthMedian": pileUp
+                                .filter!lengthFilter
+                                .map!getInsertionSize
+                                .array
+                                .median
+                                .Json,
+                            "numReads": Json(pileUp.length),
+                        ]);
+                        // dfmt on
+                    }
 
-    protected static Tuple!(int, int) getGapSequenceSlice(in Hit hit) pure
-    {
-        auto alignment1 = hit.alignments[0];
-        auto alignment2 = hit.alignments[1];
-        size_t begin;
-        size_t end;
-
-        if (alignment1.isBefore!"contigA"(alignment2))
-        {
-            begin = alignment1.last.contigA.end;
-            end = alignment2.first.contigA.begin;
-        }
-        else
-        {
-            begin = alignment2.last.contigA.end;
-            end = alignment1.first.contigA.begin;
-        }
-
-        return typeof(return)(begin.to!int, end.to!int);
-    }
-
-    protected auto getInsertionInfoForGap(in Hit hit) pure
-    {
-        size_t refContig1Id = hit.alignments[0].contigB.id;
-        size_t refContig2Id = hit.alignments[1].contigB.id;
-
-        size_t gapRefBegin;
-        size_t gapRefEnd;
-
-        if (hit.alignments[0].complement)
-        {
-            gapRefBegin = hit.alignments[0].contigB.length - hit.alignments[0].first.contigB.begin;
-            gapRefEnd = hit.alignments[1].contigB.length - hit.alignments[1].last.contigB.end;
-        }
-        else
-        {
-            gapRefBegin = hit.alignments[0].last.contigB.end;
-            gapRefEnd = hit.alignments[1].first.contigB.begin;
-        }
-
-        auto gapSequenceSlice = getGapSequenceSlice(hit);
-
-        with (CoordinateTransform)
-        {
-            // dfmt off
-            return Insertion.make!(Insertion.Type.gap)(
-                Coordinate(refContig1Id, gapRefBegin),
-                Coordinate(refContig2Id, gapRefEnd),
-                gapSequenceSlice[1] - gapSequenceSlice[0],
-            );
-            // dfmt on
-        }
-    }
-
-    protected auto getReferenceFastaEntry(in size_t readId) const
-    {
-        auto dbRef = referenceDb[readId];
-
-        return parseFastaRecord(getFastaEntries(dbRef.dbFile, [dbRef.contigId], options).front);
-    }
-
-    protected DJunctor finish()
-    {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.finish");
-        logJsonDiagnostic("state", "exit", "function", "djunctor.finish");
-
-        return this;
-    }
-
-    private void logFillingInfo(string step, string type, string readState)(in PileUp[] readsByContig)
-            if (type == "extension" || type == "span")
-    {
-        immutable lengthFilter = type == "extension" ? "a.length == 1" : "a.length == 2";
-
-        // dfmt off
-        logJsonDiagnostic(
-            "step", step,
-            "type", type,
-            "readState", readState,
-            "numGaps", readsByContig.length,
-            "estimateLengths", readsByContig
-                .map!(readsByGap => readsByGap
-                    .filter!lengthFilter
-                    .map!estimateSize
-                    .array
-                    .mean)
-                .map!Json
-                .array,
-            "numReads", readsByContig
-                .map!"a.length"
-                .map!Json
-                .array,
-        );
-        // dfmt on
-    }
-}
-
-/**
-    This realizes a transform which translates coordinates before insertions
-    to coordinates after them. The insertions can be added sequentially. The
-    transform is fully functional at any point in time and can be converted
-    to a Python 2.7 script for external usage.
-*/
-struct CoordinateTransform
-{
-    static struct Coordinate
-    {
-        size_t contigId;
-        size_t idx;
-    }
-
-    static struct Insertion
-    {
-        static enum Type
-        {
-            gap,
-            front,
-            back,
-        }
-
-        Coordinate begin;
-        Coordinate end;
-        size_t length;
-
-        @disable this(Coordinate);
-        @disable this(Coordinate, Coordinate);
-        private this(Coordinate begin, Coordinate end, size_t length) pure nothrow
-        {
-            this.begin = begin;
-            this.end = end;
-            this.length = length;
-        }
-
-        static typeof(this) make(Type insertionType)(Coordinate begin, Coordinate end, size_t length) pure nothrow
-        {
-            static if (insertionType == Type.front)
-            {
-                begin.idx = 0;
-            }
-            else static if (insertionType == Type.back)
-            {
-                end.idx = begin.idx + length;
+                    // dfmt off
+                    logJsonDiagnostic(
+                        "step", step,
+                        "readState", readState,
+                        "numGaps", pileUpsByGap.length,
+                        "gapInfo", pileUpsByGap.map!getGapInfo.array,
+                    );
+                    // dfmt on
+                }
             }
 
-            return typeof(this)(begin, end, length);
-        }
-
-        invariant
-        {
-            bool isExtension = begin.contigId == end.contigId;
-            bool isFrontExtension = isExtension && (begin.idx == 0 && end.idx < begin.idx + length);
-            bool isBackExtension = isExtension && (begin.idx > 0 && end.idx == begin.idx + length);
-            bool isGap = !isExtension;
-
-            assert(isGap ^ isFrontExtension ^ isBackExtension, "ambiguous insertion type");
-        }
-
-        @property isExtension() pure const nothrow
-        {
-            return begin.contigId == end.contigId;
-        }
-
-        @property isFrontExtension() pure const nothrow
-        {
-            return isExtension && (begin.idx == 0 && end.idx < begin.idx + length);
-        }
-
-        @property isBackExtension() pure const nothrow
-        {
-            return isExtension && (begin.idx > 0 && end.idx == begin.idx + length);
-        }
-
-        @property isGap() pure const nothrow
-        {
-            return !isExtension;
-        }
-
-        @property type() pure const nothrow
-        {
-            if (isGap)
+            /**
+                This realizes a transform which translates coordinates before insertions
+                to coordinates after them. The insertions can be added sequentially. The
+                transform is fully functional at any point in time and can be converted
+                to a Python 2.7 script for external usage.
+            */
+            struct CoordinateTransform
             {
-                return Type.gap;
-            }
-            else if (isFrontExtension)
-            {
-                return Type.front;
-            }
-            else
-            {
-                return Type.back;
-            }
-        }
-    }
+                static struct Coordinate
+                {
+                    size_t contigId;
+                    size_t idx;
+                }
 
-    static enum ExportLanguage
-    {
-        python,
-    }
+                static struct Insertion
+                {
+                    Coordinate begin;
+                    Coordinate end;
+                    size_t length;
 
-    const(Insertion)[] insertions;
+                    @disable this(Coordinate);
+                    @disable this(Coordinate, Coordinate);
+                    private this(Coordinate begin, Coordinate end, size_t length) pure nothrow
+                    {
+                        this.begin = begin;
+                        this.end = end;
+                        this.length = length;
+                    }
 
-    /**
+                    // TODO eliminate
+                    static typeof(this) make(ReadAlignmentType insertionType)(
+                            Coordinate begin, Coordinate end, size_t length) pure nothrow
+                    {
+                        static if (insertionType == ReadAlignmentType.front)
+                        {
+                            begin.idx = 0;
+                        }
+                        else static if (insertionType == ReadAlignmentType.back)
+                        {
+                            end.idx = begin.idx + length;
+                        }
+
+                        return typeof(this)(begin, end, length);
+                    }
+
+                    static typeof(this) make(Coordinate begin, Coordinate end,
+                            size_t length, in ReadAlignmentType insertionType) pure nothrow
+                    {
+                        final switch (insertionType)
+                        {
+                        case ReadAlignmentType.gap:
+                            return make!(ReadAlignmentType.gap)(begin, end, length);
+                        case ReadAlignmentType.front:
+                            return make!(ReadAlignmentType.front)(begin, end, length);
+                        case ReadAlignmentType.back:
+                            return make!(ReadAlignmentType.back)(begin, end, length);
+                        }
+                    }
+
+                    invariant
+                    {
+                        assert(begin != end || (begin.idx == end.idx && length > 0), "empty insertion");
+                        if (begin.contigId == end.contigId)
+                        {
+                            assert(end.idx >= begin.idx, "insertion begin index should be before/equal to end index on same contig");
+                            assert(length >= end.idx - begin.idx, "inserted sequence too small");
+                        }
+                    }
+
+                    @property isExtension() pure const nothrow
+                    {
+                        return begin.contigId == end.contigId;
+                    }
+
+                    @property isFrontExtension() pure const nothrow
+                    {
+                        return isExtension && !isBackExtension;
+                    }
+
+                    @property isBackExtension() pure const nothrow
+                    {
+                        return isExtension && (begin.idx > 0 && end.idx == begin.idx + length);
+                    }
+
+                    @property isGap() pure const nothrow
+                    {
+                        return !isExtension;
+                    }
+
+                    @property type() pure const nothrow
+                    {
+                        if (isGap)
+                        {
+                            return ReadAlignmentType.gap;
+                        }
+                        else if (isFrontExtension)
+                        {
+                            return ReadAlignmentType.front;
+                        }
+                        else
+                        {
+                            return ReadAlignmentType.back;
+                        }
+                    }
+
+                    size_t totalInsertionLength(in size_t endContigLength) pure const nothrow
+                    {
+                        final switch (type)
+                        {
+                        case ReadAlignmentType.gap:
+                        case ReadAlignmentType.front:
+                            return begin.idx + length + endContigLength - end.idx;
+                        case ReadAlignmentType.back:
+                            return begin.idx + length;
+                        }
+                    }
+                }
+
+                static enum ExportLanguage
+                {
+                    python,
+                }
+
+                const(Insertion)[] insertions;
+
+                /**
         Transform a coordinate accordin to insertions. If the designated
         contig is not present in insertions then the original coordinate is
         returned. Otherwise the new coordinate is computed as follows:
@@ -1855,762 +2961,767 @@ struct CoordinateTransform
 
         Returns: transformed coordinate.
     */
-    Coordinate transform(in size_t contigId, in size_t idx) pure const
-    {
-        return transform(Coordinate(contigId, idx));
-    }
+                Coordinate transform(in size_t contigId, in size_t idx) pure const
+                {
+                    return transform(Coordinate(contigId, idx));
+                }
 
-    /// ditto
-    Coordinate transform(in Coordinate input) pure const
-    {
-        Coordinate result = input;
+                /// ditto
+                Coordinate transform(in Coordinate input) pure const
+                {
+                    Coordinate result = input;
 
-        // dfmt off
-        auto insertionChain = insertions[]
-            .retro
-            .find!"a.end.contigId == b"(0 + input.contigId);
-        // dfmt on
-        size_t lastContigId = input.contigId;
+                    // dfmt off
+                    auto insertionChain = insertions[]
+                        .retro
+                        .find!"a.end.contigId == b"(0 + input.contigId);
+                    // dfmt on
+                    size_t lastContigId = input.contigId;
 
-        foreach (insertion; insertionChain)
-        {
-            if (insertion.end.contigId != lastContigId)
-            {
-                break; // chain end reached
-            }
+                    foreach (insertion; insertionChain)
+                    {
+                        if (insertion.end.contigId != lastContigId)
+                        {
+                            break; // chain end reached
+                        }
 
-            // Note: reverse order of calculation to prevent negative
-            // intermediate results
-            result.idx += insertion.begin.idx; // (3)
-            result.idx += insertion.length; // (2)
-            result.idx -= insertion.end.idx; // (1)
-            // Begin contig is the new reference
-            result.contigId = insertion.begin.contigId;
-            lastContigId = insertion.begin.contigId;
-        }
+                        // Note: reverse order of calculation to prevent negative
+                        // intermediate results
+                        result.idx += insertion.begin.idx; // (3)
+                        result.idx += insertion.length; // (2)
+                        result.idx -= insertion.end.idx; // (1)
+                        // Begin contig is the new reference
+                        result.contigId = insertion.begin.contigId;
+                        lastContigId = insertion.begin.contigId;
+                    }
 
-        return result;
-    }
+                    return result;
+                }
 
-    /// ditto
-    alias opCall = transform;
+                /// ditto
+                alias opCall = transform;
 
-    ///
-    unittest
-    {
-        CoordinateTransform coordTransform;
-        //           0        495 500 0   5  100   600
-        // reference |----------+---| |---+--+-------|
-        //                      |         |
-        // insert               |---------|
-        //                      0       100
-        // dfmt off
-        coordTransform.add(Insertion.make!(Insertion.Type.gap)(
-            Coordinate(1, 495),
-            Coordinate(2, 5),
-            100,
-        ));
-        // dfmt on
+                ///
+                unittest
+                {
+                    CoordinateTransform coordTransform;
+                    //           0        495 500 0   5  100   600
+                    // reference |----------+---| |---+--+-------|
+                    //                      |         |
+                    // insert               |---------|
+                    //                      0       100
+                    // dfmt off
+                    coordTransform.add(Insertion.make!(ReadAlignmentType.gap)(
+                        Coordinate(1, 495),
+                        Coordinate(2, 5),
+                        100,
+                    ));
+                    // dfmt on
 
-        auto inputCoord = Coordinate(2, 100);
-        // dfmt off
-        auto transformedCoord = Coordinate(
-            1,
-            (
-                100
-                - 5    // coord on contig 2 relative to insertion point
-                + 100  // make relative to begin of insertion
-                + 495  // make relative to begin of contig 1
-            )
-        );
-        // dfmt on
-        assert(coordTransform.transform(inputCoord) == transformedCoord);
-        assert(coordTransform(inputCoord) == transformedCoord);
-    }
-
-    unittest
-    {
-        with (Insertion.Type)
-        {
-            CoordinateTransform coordTransform;
-            // dfmt off
-            coordTransform.add(Insertion.make!gap(
-                Coordinate(100, 0),
-                Coordinate(101, 0),
-                0,
-            ));
-            coordTransform.add(Insertion.make!gap(
-                Coordinate(1, 495),
-                Coordinate(2, 5),
-                100,
-            ));
-            coordTransform.add(Insertion.make!gap(
-                Coordinate(2, 490),
-                Coordinate(5, 10),
-                150,
-            ));
-            coordTransform.add(Insertion.make!gap(
-                Coordinate(5, 480),
-                Coordinate(3, 20),
-                200,
-            ));
-            coordTransform.add(Insertion.make!gap(
-                Coordinate(102, 0),
-                Coordinate(103, 0),
-                0,
-            ));
-            coordTransform.add(Insertion.make!front(
-                Coordinate(200),
-                Coordinate(200, 5),
-                10,
-            ));
-            coordTransform.add(Insertion.make!back(
-                Coordinate(201, 90),
-                Coordinate(201),
-                20,
-            ));
-            coordTransform.add(Insertion.make!front(
-                Coordinate(202),
-                Coordinate(202, 15),
-                30,
-            ));
-            coordTransform.add(Insertion.make!front(
-                Coordinate(202),
-                Coordinate(202, 20),
-                40,
-            ));
-            coordTransform.add(Insertion.make!back(
-                Coordinate(203, 65),
-                Coordinate(203),
-                50,
-            ));
-            coordTransform.add(Insertion.make!back(
-                Coordinate(203, 60),
-                Coordinate(203),
-                60,
-            ));
-            // dfmt on
-
-            {
-                // Case: contig not present in insertions
-                auto inputCoord = Coordinate(1337, 42);
-                assert(coordTransform.transform(inputCoord) == inputCoord);
-            }
-            {
-                // Case: contig is never end of an insertions
-                auto inputCoord = Coordinate(1, 64);
-                assert(coordTransform.transform(inputCoord) == inputCoord);
-            }
-            {
-                // Case: contig is end of the last insertions of a reverse chain.
-                auto inputCoord = Coordinate(2, 64);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    1,
-                    (
-                          64   // last and only insertion in chain
-                        - 5    // (1)
-                        + 100  // (2)
-                        + 495  // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-            {
-                // Case: contig is end of an inner insertions, ie. there are
-                //       insertions before and after in the chain.
-                auto inputCoord = Coordinate(5, 64);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    1,
-                    (
+                    auto inputCoord = Coordinate(2, 100);
+                    // dfmt off
+                    auto transformedCoord = Coordinate(
+                        1,
                         (
-                              64   // last insertion in chain
-                            - 5    // (1)
-                            + 100  // (2)
-                            + 495  // (3)
-                        )      // first insertion in chain
-                        - 10    // (1)
-                        + 150  // (2)
-                        + 490  // (3)
-                    )
+                            100
+                            - 5    // coord on contig 2 relative to insertion point
+                            + 100  // make relative to begin of insertion
+                            + 495  // make relative to begin of contig 1
+                        )
+                    );
+                    // dfmt on
+                    assert(coordTransform.transform(inputCoord) == transformedCoord);
+                    assert(coordTransform(inputCoord) == transformedCoord);
+                }
 
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-            {
-                // Case: contig is end of the first insertions of a reverse chain.
-                auto inputCoord = Coordinate(3, 64);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    1,
-                    (
-                        (
-                            (
-                                  64   // last insertion in chain
-                                - 5    // (1)
-                                + 100  // (2)
-                                + 495  // (3)
-                            )      // second insertion in chain
-                            - 10    // (1)
-                            + 150  // (2)
-                            + 490  // (3)
-                        )      // first insertion in chain
-                        - 20    // (1)
-                        + 200  // (2)
-                        + 480  // (3)
-                    )
+                unittest
+                {
+                    with (ReadAlignmentType)
+                    {
+                        CoordinateTransform coordTransform;
+                        // dfmt off
+                        coordTransform.add(Insertion.make!gap(
+                            Coordinate(100, 0),
+                            Coordinate(101, 0),
+                            0,
+                        ));
+                        coordTransform.add(Insertion.make!gap(
+                            Coordinate(1, 495),
+                            Coordinate(2, 5),
+                            100,
+                        ));
+                        coordTransform.add(Insertion.make!gap(
+                            Coordinate(2, 490),
+                            Coordinate(5, 10),
+                            150,
+                        ));
+                        coordTransform.add(Insertion.make!gap(
+                            Coordinate(5, 480),
+                            Coordinate(3, 20),
+                            200,
+                        ));
+                        coordTransform.add(Insertion.make!gap(
+                            Coordinate(102, 0),
+                            Coordinate(103, 0),
+                            0,
+                        ));
+                        coordTransform.add(Insertion.make!front(
+                            Coordinate(200),
+                            Coordinate(200, 5),
+                            10,
+                        ));
+                        coordTransform.add(Insertion.make!back(
+                            Coordinate(201, 90),
+                            Coordinate(201),
+                            20,
+                        ));
+                        coordTransform.add(Insertion.make!front(
+                            Coordinate(202),
+                            Coordinate(202, 15),
+                            30,
+                        ));
+                        coordTransform.add(Insertion.make!front(
+                            Coordinate(202),
+                            Coordinate(202, 20),
+                            40,
+                        ));
+                        coordTransform.add(Insertion.make!back(
+                            Coordinate(203, 65),
+                            Coordinate(203),
+                            50,
+                        ));
+                        coordTransform.add(Insertion.make!back(
+                            Coordinate(203, 60),
+                            Coordinate(203),
+                            60,
+                        ));
+                        // dfmt on
 
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-            {
-                // Case: coordinate on rejected part of end contig, ie. `x < ie`.
-                auto inputCoord = Coordinate(2, 3);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    1,
-                    (
-                          3    // last and only insertion in chain
-                        - 5    // (1)
-                        + 100  // (2)
-                        + 495  // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
+                        {
+                            // Case: contig not present in insertions
+                            auto inputCoord = Coordinate(1337, 42);
+                            assert(coordTransform.transform(inputCoord) == inputCoord);
+                        }
+                        {
+                            // Case: contig is never end of an insertions
+                            auto inputCoord = Coordinate(1, 64);
+                            assert(coordTransform.transform(inputCoord) == inputCoord);
+                        }
+                        {
+                            // Case: contig is end of the last insertions of a reverse chain.
+                            auto inputCoord = Coordinate(2, 64);
+                            // dfmt off
+                            auto transformedCoord = Coordinate(
+                                1,
+                                (
+                                      64   // last and only insertion in chain
+                                    - 5    // (1)
+                                    + 100  // (2)
+                                    + 495  // (3)
+                                )
+                            );
+                            // dfmt on
+                            assert(coordTransform.transform(inputCoord) == transformedCoord);
+                        }
+                        {
+                            // Case: contig is end of an inner insertions, ie. there are
+                            //       insertions before and after in the chain.
+                            auto inputCoord = Coordinate(5, 64);
+                            // dfmt off
+                            auto transformedCoord = Coordinate(
+                                1,
+                                (
+                                    (
+                                          64   // last insertion in chain
+                                        - 5    // (1)
+                                        + 100  // (2)
+                                        + 495  // (3)
+                                    )      // first insertion in chain
+                                    - 10    // (1)
+                                    + 150  // (2)
+                                    + 490  // (3)
+                                )
 
-            {
-                // Case: simple front extension
-                auto inputCoord = Coordinate(200, 3);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    200,
-                    (
-                          3    // only extension (in chain)
-                        - 5    // (1)
-                        + 10   // (2)
-                        + 0    // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-            {
-                // Case: simple back extension
-                auto inputCoord = Coordinate(201, 3);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    201,
-                    (
-                          3    // only extension (in chain)
-                        - 110  // (1)
-                        + 20   // (2)
-                        + 90   // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-            {
-                // Case: double front extension
-                auto inputCoord = Coordinate(202, 3);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    202,
-                    (
-                        (
-                              3    // last extension (in chain)
-                            - 15   // (1)
-                            + 30   // (2)
-                            +  0   // (3)
-                        )     // first extension (in chain)
-                        - 20  // (1)
-                        + 40  // (2)
-                        +  0  // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-            {
-                // Case: double back extension
-                auto inputCoord = Coordinate(203, 3);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    203,
-                    (
-                        (
-                              3    // last extension (in chain)
-                            - 115  // (1)
-                            + 50   // (2)
-                            + 65   // (3)
-                        )      // first extension (in chain)
-                        - 120  // (1)
-                        + 60   // (2)
-                        + 60   // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
+                            );
+                            // dfmt on
+                            assert(coordTransform.transform(inputCoord) == transformedCoord);
+                        }
+                        {
+                            // Case: contig is end of the first insertions of a reverse chain.
+                            auto inputCoord = Coordinate(3, 64);
+                            // dfmt off
+                            auto transformedCoord = Coordinate(
+                                1,
+                                (
+                                    (
+                                        (
+                                              64   // last insertion in chain
+                                            - 5    // (1)
+                                            + 100  // (2)
+                                            + 495  // (3)
+                                        )      // second insertion in chain
+                                        - 10    // (1)
+                                        + 150  // (2)
+                                        + 490  // (3)
+                                    )      // first insertion in chain
+                                    - 20    // (1)
+                                    + 200  // (2)
+                                    + 480  // (3)
+                                )
 
-            // dfmt off
-            coordTransform.add(Insertion.make!gap(
-                Coordinate(203, 115),
-                Coordinate(202, 5),
-                50,
-            ));
-            // dfmt on
+                            );
+                            // dfmt on
+                            assert(coordTransform.transform(inputCoord) == transformedCoord);
+                        }
+                        {
+                            // Case: coordinate on rejected part of end contig, ie. `x < ie`.
+                            auto inputCoord = Coordinate(2, 3);
+                            // dfmt off
+                            auto transformedCoord = Coordinate(
+                                1,
+                                (
+                                      3    // last and only insertion in chain
+                                    - 5    // (1)
+                                    + 100  // (2)
+                                    + 495  // (3)
+                                )
+                            );
+                            // dfmt on
+                            assert(coordTransform.transform(inputCoord) == transformedCoord);
+                        }
 
-            {
-                // Case: double front extension + double back extension + gap spanned
-                auto inputCoord = Coordinate(202, 3);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    203,
-                    (
-                        (
-                            (
-                                  3    // last front extension (in chain)
-                                - 15   // (1)
-                                + 30   // (2)
-                                +  0   // (3)
-                            )     // first front extension (in chain)
-                            - 20  // (1)
-                            + 40  // (2)
-                            +  0  // (3)
-                        )      // only gap (in chain)
-                        -   5  // (1)
-                        +  50  // (2)
-                        + 115  // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-        }
-    }
+                        {
+                            // Case: simple front extension
+                            auto inputCoord = Coordinate(200, 3);
+                            // dfmt off
+                            auto transformedCoord = Coordinate(
+                                200,
+                                (
+                                      3    // only extension (in chain)
+                                    - 5    // (1)
+                                    + 10   // (2)
+                                    + 0    // (3)
+                                )
+                            );
+                            // dfmt on
+                            assert(coordTransform.transform(inputCoord) == transformedCoord);
+                        }
+                        {
+                            // Case: simple back extension
+                            auto inputCoord = Coordinate(201, 3);
+                            // dfmt off
+                            auto transformedCoord = Coordinate(
+                                201,
+                                (
+                                      3    // only extension (in chain)
+                                    - 110  // (1)
+                                    + 20   // (2)
+                                    + 90   // (3)
+                                )
+                            );
+                            // dfmt on
+                            assert(coordTransform.transform(inputCoord) == transformedCoord);
+                        }
+                        {
+                            // Case: double front extension
+                            auto inputCoord = Coordinate(202, 3);
+                            // dfmt off
+                            auto transformedCoord = Coordinate(
+                                202,
+                                (
+                                    (
+                                          3    // last extension (in chain)
+                                        - 15   // (1)
+                                        + 30   // (2)
+                                        +  0   // (3)
+                                    )     // first extension (in chain)
+                                    - 20  // (1)
+                                    + 40  // (2)
+                                    +  0  // (3)
+                                )
+                            );
+                            // dfmt on
+                            assert(coordTransform.transform(inputCoord) == transformedCoord);
+                        }
+                        {
+                            // Case: double back extension
+                            auto inputCoord = Coordinate(203, 3);
+                            // dfmt off
+                            auto transformedCoord = Coordinate(
+                                203,
+                                (
+                                    (
+                                          3    // last extension (in chain)
+                                        - 115  // (1)
+                                        + 50   // (2)
+                                        + 65   // (3)
+                                    )      // first extension (in chain)
+                                    - 120  // (1)
+                                    + 60   // (2)
+                                    + 60   // (3)
+                                )
+                            );
+                            // dfmt on
+                            assert(coordTransform.transform(inputCoord) == transformedCoord);
+                        }
 
-    /**
+                        // dfmt off
+                        coordTransform.add(Insertion.make!gap(
+                            Coordinate(203, 115),
+                            Coordinate(202, 5),
+                            50,
+                        ));
+                        // dfmt on
+
+                        {
+                            // Case: double front extension + double back extension + gap spanned
+                            auto inputCoord = Coordinate(202, 3);
+                            // dfmt off
+                            auto transformedCoord = Coordinate(
+                                203,
+                                (
+                                    (
+                                        (
+                                              3    // last front extension (in chain)
+                                            - 15   // (1)
+                                            + 30   // (2)
+                                            +  0   // (3)
+                                        )     // first front extension (in chain)
+                                        - 20  // (1)
+                                        + 40  // (2)
+                                        +  0  // (3)
+                                    )      // only gap (in chain)
+                                    -   5  // (1)
+                                    +  50  // (2)
+                                    + 115  // (3)
+                                )
+                            );
+                            // dfmt on
+                            assert(coordTransform.transform(inputCoord) == transformedCoord);
+                        }
+                    }
+                }
+
+                /**
         Add an insertion to this transform.
 
         Returns: this tranform.
         See_Also: `CoordinateTransform.transform`.
     */
-    CoordinateTransform add(in Insertion newInsertion) pure
-    {
-        size_t idx = getInsertionIndex(newInsertion);
+                CoordinateTransform add(in Insertion newInsertion) pure
+                {
+                    size_t idx = getInsertionIndex(newInsertion);
 
-        if (idx == 0)
-        {
-            insertions = [newInsertion] ~ insertions;
-        }
-        else if (idx == insertions.length)
-        {
-            insertions ~= newInsertion;
-        }
-        else
-        {
-            insertions = insertions[0 .. idx] ~ [newInsertion] ~ insertions[idx .. $];
-        }
+                    if (idx == 0)
+                    {
+                        insertions = [newInsertion] ~ insertions;
+                    }
+                    else if (idx == insertions.length)
+                    {
+                        insertions ~= newInsertion;
+                    }
+                    else
+                    {
+                        insertions = insertions[0 .. idx] ~ [newInsertion] ~ insertions[idx .. $];
+                    }
 
-        return this;
-    }
+                    return this;
+                }
 
-    /// ditto
-    void opOpAssign(string op)(in Insertion newInsertion) pure if (op == "~")
-    {
-        this.add(newInsertion);
-    }
+                /// ditto
+                void opOpAssign(string op)(in Insertion newInsertion) pure
+                        if (op == "~")
+                {
+                    this.add(newInsertion);
+                }
 
-    unittest
-    {
-        with (Insertion.Type)
-        {
-            Insertion getDummyInsertion(Insertion.Type insertionType = gap)(in size_t beginContigId,
-                    in size_t endContigId)
-            {
-                static immutable dummyLength = 42;
+                unittest
+                {
+                    with (ReadAlignmentType)
+                    {
+                        Insertion getDummyInsertion(ReadAlignmentType insertionType = gap)(
+                                in size_t beginContigId, in size_t endContigId)
+                        {
+                            static immutable dummyLength = 42;
 
-                return Insertion.make!insertionType(Coordinate(beginContigId,
-                        dummyLength / 2), Coordinate(endContigId, dummyLength / 2), dummyLength);
-            }
+                            return Insertion.make!insertionType(Coordinate(beginContigId,
+                                    dummyLength / 2), Coordinate(endContigId,
+                                    dummyLength / 2), dummyLength);
+                        }
 
-            CoordinateTransform getDummyTransform()
-            {
-                CoordinateTransform coordTransform;
+                        CoordinateTransform getDummyTransform()
+                        {
+                            CoordinateTransform coordTransform;
 
-                // dfmt off
-                coordTransform.insertions = [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ];
-                // dfmt on
+                            // dfmt off
+                            coordTransform.insertions = [
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                            ];
+                            // dfmt on
 
-                return coordTransform;
-            }
+                            return coordTransform;
+                        }
 
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 1 (Gap): newInsertion fits between two existing insertions
-                // dfmt off
-                coordTransform.add(getDummyInsertion(2, 3));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(2, 3),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                coordTransform.add(getDummyInsertion(8, 6));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(2, 3),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(8, 6),
-                    getDummyInsertion(6, 5),
-                ]);
-                // dfmt on
-            }
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 2* (Gap): newInsertion extends an existing insertion chain in the front
-                // dfmt off
-                coordTransform.add(getDummyInsertion(42, 1));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(42, 1),
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                // Case 2 (Gap): newInsertion extends an existing insertion chain in the front
-                coordTransform.add(getDummyInsertion(42, 9));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(42, 1),
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(42, 9),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                // dfmt on
-            }
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 2* (Extension): newInsertion extends an existing insertion chain in the front
-                // dfmt off
-                coordTransform.add(getDummyInsertion!front(1, 1));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion!front(1, 1),
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                coordTransform.add(getDummyInsertion!front(1, 1));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion!front(1, 1),
-                    getDummyInsertion!front(1, 1),
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                // Case 2 (Extension): newInsertion extends an existing insertion chain in the front
-                coordTransform.add(getDummyInsertion!front(9, 9));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion!front(1, 1),
-                    getDummyInsertion!front(1, 1),
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion!front(9, 9),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                coordTransform.add(getDummyInsertion!front(9, 9));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion!front(1, 1),
-                    getDummyInsertion!front(1, 1),
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion!front(9, 9),
-                    getDummyInsertion!front(9, 9),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                // dfmt on
-            }
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 3 (Gap): newInsertion extends an existing insertion chain in the back
-                // dfmt off
-                coordTransform.add(getDummyInsertion(4, 42));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(4, 42),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                coordTransform.add(getDummyInsertion(5, 42));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(4, 42),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion(5, 42),
-                ]);
-                // dfmt on
-            }
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 3 (Extension): newInsertion extends an existing insertion chain in the back
-                // dfmt off
-                coordTransform.add(getDummyInsertion!back(4, 4));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion!back(4, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                coordTransform.add(getDummyInsertion!back(4, 4));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion!back(4, 4),
-                    getDummyInsertion!back(4, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                coordTransform.add(getDummyInsertion!back(5, 5));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion!back(4, 4),
-                    getDummyInsertion!back(4, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion!back(5, 5),
-                ]);
-                coordTransform.add(getDummyInsertion!back(5, 5));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion!back(4, 4),
-                    getDummyInsertion!back(4, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion!back(5, 5),
-                    getDummyInsertion!back(5, 5),
-                ]);
-                // dfmt on
-            }
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 4 (Gap): open new insertion chain
-                // dfmt off
-                coordTransform.add(getDummyInsertion(1337, 42));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion(1337, 42),
-                ]);
-                coordTransform.add(getDummyInsertion(1337, 42));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion(1337, 42),
-                    getDummyInsertion(1337, 42),
-                ]);
-                // dfmt on
-            }
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 4 (Extension): open new insertion chain
-                // dfmt off
-                coordTransform.add(getDummyInsertion!front(1337, 1337));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion!front(1337, 1337),
-                ]);
-                coordTransform.add(getDummyInsertion!back(42, 42));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion!front(1337, 1337),
-                    getDummyInsertion!back(42, 42),
-                ]);
-                // dfmt on
-            }
-            {
-                CoordinateTransform emptyCoordTransform;
+                        {
+                            auto coordTransform = getDummyTransform();
+                            // Case 1 (Gap): newInsertion fits between two existing insertions
+                            // dfmt off
+                            coordTransform.add(getDummyInsertion(2, 3));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(2, 3),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                            ]);
+                            coordTransform.add(getDummyInsertion(8, 6));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(2, 3),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(8, 6),
+                                getDummyInsertion(6, 5),
+                            ]);
+                            // dfmt on
+                        }
+                        {
+                            auto coordTransform = getDummyTransform();
+                            // Case 2* (Gap): newInsertion extends an existing insertion chain in the front
+                            // dfmt off
+                            coordTransform.add(getDummyInsertion(42, 1));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(42, 1),
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                            ]);
+                            // Case 2 (Gap): newInsertion extends an existing insertion chain in the front
+                            coordTransform.add(getDummyInsertion(42, 9));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(42, 1),
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion(42, 9),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                            ]);
+                            // dfmt on
+                        }
+                        {
+                            auto coordTransform = getDummyTransform();
+                            // Case 2* (Extension): newInsertion extends an existing insertion chain in the front
+                            // dfmt off
+                            coordTransform.add(getDummyInsertion!front(1, 1));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion!front(1, 1),
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                            ]);
+                            coordTransform.add(getDummyInsertion!front(1, 1));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion!front(1, 1),
+                                getDummyInsertion!front(1, 1),
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                            ]);
+                            // Case 2 (Extension): newInsertion extends an existing insertion chain in the front
+                            coordTransform.add(getDummyInsertion!front(9, 9));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion!front(1, 1),
+                                getDummyInsertion!front(1, 1),
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion!front(9, 9),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                            ]);
+                            coordTransform.add(getDummyInsertion!front(9, 9));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion!front(1, 1),
+                                getDummyInsertion!front(1, 1),
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion!front(9, 9),
+                                getDummyInsertion!front(9, 9),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                            ]);
+                            // dfmt on
+                        }
+                        {
+                            auto coordTransform = getDummyTransform();
+                            // Case 3 (Gap): newInsertion extends an existing insertion chain in the back
+                            // dfmt off
+                            coordTransform.add(getDummyInsertion(4, 42));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion(4, 42),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                            ]);
+                            coordTransform.add(getDummyInsertion(5, 42));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion(4, 42),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                                getDummyInsertion(5, 42),
+                            ]);
+                            // dfmt on
+                        }
+                        {
+                            auto coordTransform = getDummyTransform();
+                            // Case 3 (Extension): newInsertion extends an existing insertion chain in the back
+                            // dfmt off
+                            coordTransform.add(getDummyInsertion!back(4, 4));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion!back(4, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                            ]);
+                            coordTransform.add(getDummyInsertion!back(4, 4));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion!back(4, 4),
+                                getDummyInsertion!back(4, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                            ]);
+                            coordTransform.add(getDummyInsertion!back(5, 5));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion!back(4, 4),
+                                getDummyInsertion!back(4, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                                getDummyInsertion!back(5, 5),
+                            ]);
+                            coordTransform.add(getDummyInsertion!back(5, 5));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion!back(4, 4),
+                                getDummyInsertion!back(4, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                                getDummyInsertion!back(5, 5),
+                                getDummyInsertion!back(5, 5),
+                            ]);
+                            // dfmt on
+                        }
+                        {
+                            auto coordTransform = getDummyTransform();
+                            // Case 4 (Gap): open new insertion chain
+                            // dfmt off
+                            coordTransform.add(getDummyInsertion(1337, 42));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                                getDummyInsertion(1337, 42),
+                            ]);
+                            coordTransform.add(getDummyInsertion(1337, 42));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                                getDummyInsertion(1337, 42),
+                                getDummyInsertion(1337, 42),
+                            ]);
+                            // dfmt on
+                        }
+                        {
+                            auto coordTransform = getDummyTransform();
+                            // Case 4 (Extension): open new insertion chain
+                            // dfmt off
+                            coordTransform.add(getDummyInsertion!front(1337, 1337));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                                getDummyInsertion!front(1337, 1337),
+                            ]);
+                            coordTransform.add(getDummyInsertion!back(42, 42));
+                            assert(coordTransform.insertions == [
+                                getDummyInsertion(1, 2),
+                                getDummyInsertion(3, 4),
+                                getDummyInsertion(9, 8),
+                                getDummyInsertion(6, 5),
+                                getDummyInsertion!front(1337, 1337),
+                                getDummyInsertion!back(42, 42),
+                            ]);
+                            // dfmt on
+                        }
+                        {
+                            CoordinateTransform emptyCoordTransform;
 
-                // Case 4* (Gap): open new insertion chain
-                assert(emptyCoordTransform.add(getDummyInsertion(1337, 42))
-                        .insertions == [getDummyInsertion(1337, 42)]);
-            }
-            {
-                CoordinateTransform emptyCoordTransform;
+                            // Case 4* (Gap): open new insertion chain
+                            assert(emptyCoordTransform.add(getDummyInsertion(1337,
+                                    42)).insertions == [getDummyInsertion(1337, 42)]);
+                        }
+                        {
+                            CoordinateTransform emptyCoordTransform;
 
-                // Case 4* (Extension): open new insertion chain
-                assert(emptyCoordTransform.add(getDummyInsertion!front(1337,
-                        1337)).insertions == [getDummyInsertion!front(1337, 1337)]);
-            }
-            {
-                CoordinateTransform emptyCoordTransform;
+                            // Case 4* (Extension): open new insertion chain
+                            assert(emptyCoordTransform.add(getDummyInsertion!front(1337, 1337))
+                                    .insertions == [getDummyInsertion!front(1337, 1337)]);
+                        }
+                        {
+                            CoordinateTransform emptyCoordTransform;
 
-                // Operator Style
-                emptyCoordTransform ~= getDummyInsertion(1337, 42);
-                assert(emptyCoordTransform.insertions == [getDummyInsertion(1337, 42)]);
-            }
-        }
-    }
+                            // Operator Style
+                            emptyCoordTransform ~= getDummyInsertion(1337, 42);
+                            assert(emptyCoordTransform.insertions == [getDummyInsertion(1337, 42)]);
+                        }
+                    }
+                }
 
-    private size_t getInsertionIndex(in Insertion newInsertion) pure const
-    {
-        // dfmt off
-        if (
-            // Case 4*: open new insertion chain
-            insertions.length == 0 ||
-            // Case 2*: newInsertion extends an existing insertion chain in the front
-            newInsertion.end.contigId == insertions[0].begin.contigId
-        )
-        // dfmt on
-        {
-            return 0;
-        }
-        // Case 3*: newInsertion extends an existing insertion chain in the back
-        // Case 4**: open new insertion chain
-        else if (insertions.length == 1)
-        {
-            // Note: this case is needed in order for `slice(2)` to always yield
-            //       pairs (of size two).
-            return 1;
-        }
+                private size_t getInsertionIndex(in Insertion newInsertion) pure const
+                {
+                    // dfmt off
+                    if (
+                        // Case 4*: open new insertion chain
+                        insertions.length == 0 ||
+                        // Case 2*: newInsertion extends an existing insertion chain in the front
+                        newInsertion.end.contigId == insertions[0].begin.contigId
+                    )
+                    {
+                        return 0;
+                    }
+                    // dfmt on
+                    // Case 3*: newInsertion extends an existing insertion chain in the back
+                    // Case 4**: open new insertion chain
+                    else if (insertions.length == 1)
+                    {
+                        // Note: this case is needed in order for `slice(2)` to always yield
+                        //       pairs (of size two).
+                        return 1;
+                    }
 
-        foreach (i, insAB; insertions.slide(2).enumerate)
-        {
-            auto insA = insAB[0];
-            auto insB = insAB[1];
+                    foreach (i, insAB; insertions.slide(2).enumerate)
+                    {
+                        auto insA = insAB[0];
+                        auto insB = insAB[1];
 
-            // dfmt off
-            if (any(only(
-                // Case 1: newInsertion fits between two existing insertions
-                newInsertion.begin.contigId == insA.end.contigId && newInsertion.end.contigId == insB.begin.contigId,
-                // Case 2: newInsertion extends an existing insertion chain in the front
-                newInsertion.begin.contigId != insA.end.contigId && newInsertion.end.contigId == insB.begin.contigId,
-                // Case 3: newInsertion extends an existing insertion chain in the back
-                newInsertion.begin.contigId == insA.end.contigId && newInsertion.end.contigId != insB.begin.contigId,
-            )))
-            {
-                return i + 1;
-            }
-            // dfmt on
-        }
+                        // dfmt off
+                        if (any(only(
+                            // Case 1: newInsertion fits between two existing insertions
+                            newInsertion.begin.contigId == insA.end.contigId && newInsertion.end.contigId == insB.begin.contigId,
+                            // Case 2: newInsertion extends an existing insertion chain in the front
+                            newInsertion.begin.contigId != insA.end.contigId && newInsertion.end.contigId == insB.begin.contigId,
+                            // Case 3: newInsertion extends an existing insertion chain in the back
+                            newInsertion.begin.contigId == insA.end.contigId && newInsertion.end.contigId != insB.begin.contigId,
+                        )))
+                        {
+                            return i + 1;
+                        }
+                        // dfmt on
+                    }
 
-        // Case 4: open new insertion chain
-        return insertions.length;
-    }
+                    // Case 4: open new insertion chain
+                    return insertions.length;
+                }
 
-    unittest
-    {
-        Insertion getDummyInsertion(in size_t beginContigId, in size_t endContigId)
-        {
-            return Insertion(Coordinate(beginContigId, 0), Coordinate(endContigId, 0), 0);
-        }
+                unittest
+                {
+                    Insertion getDummyInsertion(in size_t beginContigId, in size_t endContigId)
+                    {
+                        return Insertion(Coordinate(beginContigId, 0),
+                                Coordinate(endContigId, 0), 0);
+                    }
 
-        CoordinateTransform coordTransform;
+                    CoordinateTransform coordTransform;
 
-        // dfmt off
-        coordTransform.insertions = [
-            getDummyInsertion(1, 2),
-            getDummyInsertion(3, 4),
-            getDummyInsertion(9, 8),
-            getDummyInsertion(6, 5),
-        ];
-        // dfmt on
-        {
-            // Case 1: newInsertion fits between two existing insertions
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(2, 3)) == 1);
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(8, 6)) == 3);
-        }
-        {
-            // Case 2*: newInsertion extends an existing insertion chain in the front
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 1)) == 0);
-            // Case 2: newInsertion extends an existing insertion chain in the front
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 9)) == 2);
-        }
-        {
-            // Case 3: newInsertion extends an existing insertion chain in the front
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(4, 42)) == 2);
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(5, 42)) == 4);
-        }
-        {
-            // Case 4: open new insertion chain
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(1337, 42)) == 4);
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 1337)) == 4);
-        }
-        {
-            CoordinateTransform emptyCoordTransform;
+                    // dfmt off
+                    coordTransform.insertions = [
+                        getDummyInsertion(1, 2),
+                        getDummyInsertion(3, 4),
+                        getDummyInsertion(9, 8),
+                        getDummyInsertion(6, 5),
+                    ];
+                    // dfmt on
+                    {
+                        // Case 1: newInsertion fits between two existing insertions
+                        assert(coordTransform.getInsertionIndex(getDummyInsertion(2, 3)) == 1);
+                        assert(coordTransform.getInsertionIndex(getDummyInsertion(8, 6)) == 3);
+                    }
+                    {
+                        // Case 2*: newInsertion extends an existing insertion chain in the front
+                        assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 1)) == 0);
+                        // Case 2: newInsertion extends an existing insertion chain in the front
+                        assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 9)) == 2);
+                    }
+                    {
+                        // Case 3: newInsertion extends an existing insertion chain in the front
+                        assert(coordTransform.getInsertionIndex(getDummyInsertion(4, 42)) == 2);
+                        assert(coordTransform.getInsertionIndex(getDummyInsertion(5, 42)) == 4);
+                    }
+                    {
+                        // Case 4: open new insertion chain
+                        assert(coordTransform.getInsertionIndex(getDummyInsertion(1337, 42)) == 4);
+                        assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 1337)) == 4);
+                    }
+                    {
+                        CoordinateTransform emptyCoordTransform;
 
-            // Case 4*: open new insertion chain
-            assert(emptyCoordTransform.getInsertionIndex(getDummyInsertion(1337, 42)) == 0);
-            assert(emptyCoordTransform.getInsertionIndex(getDummyInsertion(42, 1337)) == 0);
-        }
-        coordTransform.insertions = [getDummyInsertion(1, 2)];
-        {
-            // Case 3*: newInsertion extends an existing insertion chain in the front
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(2, 42)) == 1);
-        }
-        {
-            // Case 4**: open new insertion chain
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(1337, 42)) == 1);
-        }
-    }
+                        // Case 4*: open new insertion chain
+                        assert(emptyCoordTransform.getInsertionIndex(getDummyInsertion(1337,
+                                42)) == 0);
+                        assert(emptyCoordTransform.getInsertionIndex(getDummyInsertion(42,
+                                1337)) == 0);
+                    }
+                    coordTransform.insertions = [getDummyInsertion(1, 2)];
+                    {
+                        // Case 3*: newInsertion extends an existing insertion chain in the front
+                        assert(coordTransform.getInsertionIndex(getDummyInsertion(2, 42)) == 1);
+                    }
+                    {
+                        // Case 4**: open new insertion chain
+                        assert(coordTransform.getInsertionIndex(getDummyInsertion(1337, 42)) == 1);
+                    }
+                }
 
-    string toString(in ExportLanguage lang = ExportLanguage.python) pure const
-    {
-        immutable estimatePrefaceLength = 250;
-        immutable estimateLengthPerInsertion = 100;
-        immutable estimateEpilogueLength = 2000;
+                string toString(in ExportLanguage lang = ExportLanguage.python) pure const
+                {
+                    immutable estimatePrefaceLength = 250;
+                    immutable estimateLengthPerInsertion = 100;
+                    immutable estimateEpilogueLength = 2000;
 
-        auto result = appender!string;
-        result.reserve(estimatePrefaceLength + estimateLengthPerInsertion
-                * insertions.length + estimateEpilogueLength);
+                    auto result = appender!string;
+                    result.reserve(estimatePrefaceLength + estimateLengthPerInsertion
+                            * insertions.length + estimateEpilogueLength);
 
-        final switch (lang)
-        {
-        case ExportLanguage.python:
-            buildPythonString(result);
-            break;
-        }
+                    final switch (lang)
+                    {
+                    case ExportLanguage.python:
+                        buildPythonString(result);
+                        break;
+                    }
 
-        return result.data;
-    }
+                    return result.data;
+                }
 
-    private void buildPythonString(out Appender!string builder) pure const
-    {
-        immutable preface = q"EOF
+                private void buildPythonString(out Appender!string builder) pure const
+                {
+                    immutable preface = q"EOF
             from __future__ import print_function
             from collections import namedtuple
             from sys import argv, exit
@@ -2620,7 +3731,7 @@ struct CoordinateTransform
 
             INSERTIONS = [
 EOF".outdent;
-        immutable epilogue = q"EOF
+                    immutable epilogue = q"EOF
             ]
 
 
@@ -2680,7 +3791,7 @@ EOF".outdent;
                 transformed = transform(contig_id, idx)
                 print("{} {}".format(transformed.contig_id, transformed.idx))
 EOF".outdent;
-        immutable insertionTemplate = q"EOF
+                    immutable insertionTemplate = q"EOF
             Insertion(
                 Coordinate(%d, %d),
                 Coordinate(%d, %d),
@@ -2688,88 +3799,88 @@ EOF".outdent;
             ),
 EOF".outdent.indent(4);
 
-        builder ~= preface;
-        foreach (insertion; insertions)
-        {
-            // dfmt off
-            formattedWrite!insertionTemplate(
-                builder,
-                insertion.begin.contigId,
-                insertion.begin.idx,
-                insertion.end.contigId,
-                insertion.end.idx,
-                insertion.length,
-            );
-            // dfmt on
-        }
-        builder ~= epilogue;
-    }
-}
+                    builder ~= preface;
+                    foreach (insertion; insertions)
+                    {
+                        // dfmt off
+                        formattedWrite!insertionTemplate(
+                            builder,
+                            insertion.begin.contigId,
+                            insertion.begin.idx,
+                            insertion.end.contigId,
+                            insertion.end.idx,
+                            insertion.length,
+                        );
+                        // dfmt on
+                    }
+                    builder ~= epilogue;
+                }
+            }
 
-/// Access contigs distributed over various DBs by ID.
-struct DBUnion
-{
-    alias DBReference = Tuple!(string, "dbFile", size_t, "contigId");
+            /// Access contigs distributed over various DBs by ID.
+            struct DBUnion
+            {
+                alias DBReference = Tuple!(string, "dbFile", size_t, "contigId");
 
-    string baseDb;
-    DBReference[size_t] overlayDbs;
+                string baseDb;
+                DBReference[size_t] overlayDbs;
 
-    /// Return the `dbFile` for `contigId`.
-    DBReference opIndex(in size_t contigId) pure const
-    {
-        return overlayDbs.get(contigId, DBReference(baseDb, contigId));
-    }
+                /// Return the `dbFile` for `contigId`.
+                DBReference opIndex(in size_t contigId) pure const
+                {
+                    return overlayDbs.get(contigId, DBReference(baseDb, contigId));
+                }
 
-    unittest
-    {
-        auto dbQuery = DBUnion("baseDb");
-        dbQuery.overlayDbs[42] = DBReference("overlayDb42", 1);
+                unittest
+                {
+                    auto dbQuery = DBUnion("baseDb");
+                    dbQuery.overlayDbs[42] = DBReference("overlayDb42", 1);
 
-        assert(dbQuery[0] == DBReference("baseDb", 0));
-        assert(dbQuery[7] == DBReference("baseDb", 7));
-        assert(dbQuery[42] == DBReference("overlayDb42", 1));
-    }
+                    assert(dbQuery[0] == DBReference("baseDb", 0));
+                    assert(dbQuery[7] == DBReference("baseDb", 7));
+                    assert(dbQuery[42] == DBReference("overlayDb42", 1));
+                }
 
-    /// Set the source for `contigId`.
-    void addAlias(in size_t contigId, in string dbFile, in size_t newContigId) pure
-    {
-        addAlias(contigId, DBReference(dbFile, newContigId));
-    }
+                /// Set the source for `contigId`.
+                void addAlias(in size_t contigId, in string dbFile, in size_t newContigId) pure
+                {
+                    addAlias(contigId, DBReference(dbFile, newContigId));
+                }
 
-    /// ditto
-    void addAlias(in size_t contigId, in DBReference dbRef) pure
-    {
-        overlayDbs[contigId] = dbRef;
-    }
+                /// ditto
+                void addAlias(in size_t contigId, in DBReference dbRef) pure
+                {
+                    overlayDbs[contigId] = dbRef;
+                }
 
-    unittest
-    {
-        auto dbQuery = DBUnion("baseDb");
+                unittest
+                {
+                    auto dbQuery = DBUnion("baseDb");
 
-        assert(dbQuery[42] == DBReference("baseDb", 42));
+                    assert(dbQuery[42] == DBReference("baseDb", 42));
 
-        dbQuery.addAlias(42, DBReference("overlayDb42", 1));
+                    dbQuery.addAlias(42, DBReference("overlayDb42", 1));
 
-        assert(dbQuery[42] == DBReference("overlayDb42", 1));
-    }
-}
+                    assert(dbQuery[42] == DBReference("overlayDb42", 1));
+                }
+            }
 
-///
-unittest
-{
-    auto dbQuery = DBUnion("baseDb");
+            ///
+            unittest
+            {
+                auto dbQuery = DBUnion("baseDb");
 
-    dbQuery.addAlias(42, "overlayDb42", 1);
+                dbQuery.addAlias(42, "overlayDb42", 1);
 
-    assert(dbQuery[0].dbFile == "baseDb");
-    assert(dbQuery[0].contigId == 0);
-    assert(dbQuery[7].dbFile == "baseDb");
-    assert(dbQuery[7].contigId == 7);
-    assert(dbQuery[42].dbFile == "overlayDb42");
-    assert(dbQuery[42].contigId == 1);
+                assert(dbQuery[0].dbFile == "baseDb");
+                assert(dbQuery[0].contigId == 0);
+                assert(dbQuery[7].dbFile == "baseDb");
+                assert(dbQuery[7].contigId == 7);
+                assert(dbQuery[42].dbFile == "overlayDb42");
+                assert(dbQuery[42].contigId == 1);
 
-    dbQuery.addAlias(7, "overlayDb7", 1);
+                dbQuery.addAlias(7, "overlayDb7", 1);
 
-    assert(dbQuery[7].dbFile == "overlayDb7");
-    assert(dbQuery[7].contigId == 1);
-}
+                assert(dbQuery[7].dbFile == "overlayDb7");
+                assert(dbQuery[7].contigId == 1);
+            }

@@ -13,8 +13,9 @@ TEST_DATA_ARCHIVE="integration-tests.tar.gz"
 TEST_DATA_READS="integration-tests/reads"
 TEST_DATA_REF="integration-tests/reference"
 TEST_DATA_MODREF="integration-tests/reference_mod"
+GDB_INIT_SCRIPT="gdbinit"
 DJUNCTOR_OPTS=(-v -v -v --input-provide-method symlink)
-BUILD_OPTS=()
+BUILD_OPTS=(--build=debug)
 JQ_DEFS=''
 
 ARGV=("$@")
@@ -118,11 +119,11 @@ function clean_up()
 
 function provide_test_data()
 {
-    pushd "$WORKDIR"
+    pushd "$WORKDIR" > /dev/null
     cp "$TEST_ROOT/data/$TEST_DATA_ARCHIVE" ./
     tar -xzf "$TEST_DATA_ARCHIVE"
     rm "$TEST_DATA_ARCHIVE"
-    popd
+    popd > /dev/null
 
     TEST_DATA_READS="$WORKDIR/$TEST_DATA_READS"
     TEST_DATA_REF="$WORKDIR/$TEST_DATA_REF"
@@ -133,12 +134,12 @@ function run_djunctor()
 {
     if $RUN_GDB;
     then
-        echo '------------------------'
-        echo run "${DJUNCTOR_OPTS[@]}" \
-                   "$TEST_DATA_MODREF.dam" \
-                   "$TEST_DATA_READS.dam"
-        echo '------------------------'
-        gdb djunctor
+        build_gdb_init_script > "$WORKDIR/$GDB_INIT_SCRIPT"
+        echo '------------------------------------'
+        echo 'type `djunctor` to start the program'
+        echo '------------------------------------'
+
+        gdb -x "$WORKDIR/$GDB_INIT_SCRIPT" djunctor
         exit
     else
         if ! ./djunctor "${DJUNCTOR_OPTS[@]}" \
@@ -151,6 +152,13 @@ function run_djunctor()
             exit 1
         fi
     fi
+}
+
+function build_gdb_init_script()
+{
+    echo 'define djunctor'
+    echo run "${DJUNCTOR_OPTS[@]}" "$TEST_DATA_MODREF.dam" "$TEST_DATA_READS.dam"
+    echo 'end'
 }
 
 function do_tests()
@@ -187,7 +195,7 @@ function do_tests()
 
 function list_test_cases()
 {
-    declare -F | grep -oP "(?<=^declare -f )test_.*$"
+    declare -F | grep -oP "(?<=^declare -f )test_.*$" | sort
 }
 
 function show_coverage_summary()
@@ -306,28 +314,47 @@ function expect_insert_sequence_ends()
 # Test Cases
 #-----------------------------------------------------------------------------
 
-function test_extension_found()
+function test_front_extension_found()
 {
     expect_json \
-        '. | has("estimateLengths") and .type == "extension" and .step == "findHits" and .readState == "raw"' \
-        'length == 1 and .[0].estimateLengths == [1851, 3898, 3249, 5485, 2175] and  .[0].numReads == [20, 55, 54, 42, 28]'
+        '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
+        '.[0].gapInfo | map(select(.type == "front")) | length == 1 and map(.contigIds) == [[5]] and map(.estimateLengthMean) == [4538] and map(.numReads) == [15]' \
+        '.[0].gapInfo | map(select(.type == "front"))' && \
+    expect_json \
+        '. | has("gapInfo") and .step == "findHits" and .readState == "consensus"' \
+        '(map(select(.gapInfo | length == 1 and .[0].type == "front") | .gapInfo) | flatten) | length == 1 and map(.contigIds) == [[5]] and map(.estimateLengthMean) == [4217] and map(.numReads) == [15]' \
+        '(map(select(.gapInfo | length == 1 and .[0].type == "front") | .gapInfo) | flatten)'
 }
 
 function test_gaps_found()
 {
     expect_json \
-        '. | has("estimateLengths") and .type == "span" and .step == "findHits" and .readState == "raw" and .numGaps > 1' \
-        'length == 1 and .[0].estimateLengths == [4156, 8561, 5064] and .[0].numReads == [38, 6, 4]' && \
+        '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
+        '.[0].gapInfo | map(select(.type == "gap")) | length == 3 and map(.contigIds) == [[1, 2], [2, 3], [3, 4]] and map(.estimateLengthMean) == [4156, 8561, 5064] and map(.numReads) == [71, 81, 64]' \
+        '.[0].gapInfo | map(select(.type == "gap"))' && \
     expect_json \
-        '. | has("estimateLengths") and .type == "span" and .step == "findHits" and .readState == "consensus" and .numGaps == 1' \
-        '(map(.estimateLengths) | flatten == [4100, 8450, 5003]) and (map(.numReads) | flatten == [36, 6, 4])'
+        '. | has("gapInfo") and .step == "findHits" and .readState == "consensus"' \
+        '(map(select(.gapInfo | length == 1 and .[0].type == "gap") | .gapInfo) | flatten) | length == 3 and map(.contigIds) == [[1, 2], [2, 3], [3, 4]] and map(.estimateLengthMean) == [4100, 8449, 5000] and map(.numReads) == [71, 81, 64]' \
+        '(map(select(.gapInfo | length == 1 and .[0].type == "gap") | .gapInfo) | flatten)'
+}
+
+function test_back_extension_found()
+{
+    expect_json \
+        '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
+        '.[0].gapInfo | map(select(.type == "back")) | length == 0' \
+        '.[0].gapInfo | map(select(.type == "back"))' && \
+    expect_json \
+        '. | has("gapInfo") and .step == "findHits" and .readState == "consensus"' \
+        '(map(select(.gapInfo | length == 1 and .[0].type == "back") | .gapInfo) | flatten) | length == 0' \
+        '(map(select(.gapInfo | length == 1 and .[0].type == "back") | .gapInfo) | flatten)'
 }
 
 function test_gaps_filled()
 {
     expect_json \
-        '. | .type == "span" and .step == "insertHits" and has("readId")' \
-        'length == 3 and map(.readId) == [1, 1, 1] and map(.contigIds) == [[1, 2], [2, 3], [3, 4]]' \
+        '.type == "gap" and .step == "insertHits" and has("readId")' \
+        'length == 3 and map(.readId) == [17, 6, 2] and map(.contigIds) == [[1, 2], [2, 3], [3, 4]]' \
         '{ readIds: map(.readId), contigIds: map(.contigIds) }'
 }
 
@@ -339,9 +366,9 @@ function test_gap_1_2_nicely_filled()
         '.[0] | {".begin.idx": .transformedInsertionInfo.begin.idx, ".end.idx": .transformedInsertionInfo.end.idx, ".length": .transformedInsertionInfo.length, "length": (.insertSequence | length)}' && \
     expect_insert_sequence_ends \
         1 2 \
-        'ggttgtaaattgactgttgtctgctgccaatctactggtgggggagagat' \
-        'gaatgaatcttgcatctatgttgctaagtaaagggtggcagtatgaagat'
-    # this is the true sequence
+        'ctgcagcagagaccacacattaactcttattacgttccaacaacctataa' \
+        'acttatgtttactagttattatggtctcaatgtgtgtacacccccacccc'
+    # this is the expected consensus
 }
 
 function test_gap_2_3_nicely_filled()
@@ -361,7 +388,7 @@ function test_gap_3_4_nicely_filled()
 {
     expect_json \
         '.contigIds == [3, 4] and has("transformedInsertionInfo")' \
-        '.[0].transformedInsertionInfo | (.begin.idx == 154900 and .end.idx == 0 and .length == 5004)' \
+        '.[0].transformedInsertionInfo | (.begin.idx == 154900 and .end.idx == 0 and .length == 5000)' \
         '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' && \
     expect_insert_sequence_ends \
         3 4 \
@@ -394,7 +421,7 @@ function test_coordinate_transform()
         1 $((42 - 0 + 8450 + 8350 - 0 + 4100 + 8300)) && \
     expect_transformed_coord "$COORD_TRANSFORM" \
         4 42 \
-        1 $((42 - 0 + 5004 + 125700 - 0 + 8450 + 8350 - 0 + 4100 + 8300)) && \
+        1 $((42 - 0 + 5000 + 125700 - 0 + 8450 + 8350 - 0 + 4100 + 8300)) && \
     expect_transformed_coord "$COORD_TRANSFORM" \
         1337 42 \
         1337 42
