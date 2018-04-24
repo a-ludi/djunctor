@@ -196,11 +196,8 @@ void log(T...)(LogLevel level, string fmt, lazy T args) nothrow
 
         if (level >= minLevel)
         {
-            File output;
-            if (level == LogLevel.info)
-                () @trusted{ output = stdout; }();
-            else
-                () @trusted{ output = stderr; }();
+            File output = stderr;
+
             if (output.isOpen)
             {
                 output.writeln(txt.data);
