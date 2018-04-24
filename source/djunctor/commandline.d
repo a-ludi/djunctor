@@ -267,7 +267,6 @@ private
             // dfmt off
             options.dalignerOptions = [
                 "-s126", // prevent integer overflow in trace point procedure
-                "-t20", // ignore k-mers occuring more than this number
             ];
             // dfmt on
         }
