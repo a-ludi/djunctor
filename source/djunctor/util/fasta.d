@@ -169,7 +169,7 @@ template FastaRecord(T) if (isSomeString!T)
         alias data this;
 
         /// Get this record in FASTA format.
-        auto toFasta(int lineWidth = 50) pure const
+        auto toFasta(in size_t lineWidth = 50) pure const
         {
             auto formattedBody = this[].chunks(lineWidth).joiner(lineSep);
 
