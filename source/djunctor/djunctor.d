@@ -2070,7 +2070,7 @@ unittest
                                 format!"read %d should be after %d"(read2Id, read1Id));
 
                             bool shouldGroup = i == j || (i + 1 == j && j != 3);
-                            assert(shouldGroup == byGapGroup(readAlignment1, readAlignment2),
+                            assert(shouldGroup == belongToSamePile(readAlignment1, readAlignment2),
                                 format!"reads %d and %d should%s be grouped"(read1Id, read2Id, (shouldGroup ? "" : " not")));
                         }
                     }
