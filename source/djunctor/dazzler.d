@@ -720,6 +720,31 @@ AlignmentContainer!(string[]) getLasFiles(in string dbA, in string dbB, in strin
     return fileLists;
 }
 
+size_t getNumContigs(Options)(in string damFile, in Options options)
+        if (hasOption!(Options, "workdir", isSomeString))
+{
+    immutable contigNumFormat = "+ R %d";
+    immutable contigNumFormatStart = contigNumFormat[0 .. 4];
+    size_t numContigs;
+    size_t[] empty;
+    auto matchingLine = dbdump(damFile, empty, [], options.workdir).filter!(
+            line => line.startsWith(contigNumFormatStart)).front;
+
+    if (!matchingLine)
+    {
+        auto errorMessage = format!"could not read the contig count in `%s`"(damFile);
+        throw new DazzlerCommandException(errorMessage);
+    }
+
+    if (formattedRead!contigNumFormat(matchingLine, numContigs) != 1)
+    {
+        auto errorMessage = format!"could not read the contig count in `%s`"(damFile);
+        throw new DazzlerCommandException(errorMessage);
+    }
+
+    return numContigs;
+}
+
 private
 {
     bool lasEmpty(in string lasFile, in string dbA, in string dbB, in string workdir)
