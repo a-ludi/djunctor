@@ -2730,7 +2730,7 @@ alias Hit = Tuple!(
 
                     // dfmt off
                     this
-                        .squashOverlayDb
+                        .mergeOverlayDb
                         .writeCoordTransform;
                     // dfmt on
 
@@ -2739,7 +2739,7 @@ alias Hit = Tuple!(
                     return this;
                 }
 
-                protected DJunctor squashOverlayDb()
+                protected DJunctor mergeOverlayDb()
                 {
                     size_t numReferenceContigs = getNumContigs(referenceDb.baseDb, options);
                     // dfmt off
