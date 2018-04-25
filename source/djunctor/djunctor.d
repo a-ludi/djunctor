@@ -2381,6 +2381,7 @@ alias Hit = Tuple!(
                             auto consensusAlignments = getMappings(options.refDb,
                                     consensusDb, options);
                             auto consensusPileUps = buildPileUps(consensusAlignments);
+                            // Select the largest pile up if there are more than one
                             auto consensusPileUp = consensusPileUps.maxElement!"a.length";
                             consensusPileUp.sort!(Comparator!meanScore.gt);
                             // dfmt off
