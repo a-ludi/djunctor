@@ -131,7 +131,7 @@ struct Options
     @Help("list of options to pass to `DBsplit`")
     string[] dbsplitOptions = [];
 
-    @Option("fasta-line-width")
+    @Option("fasta-line-width", "w")
     @Help("list of options to pass to `DBsplit`")
     size_t fastaLineWidth = 50;
 
