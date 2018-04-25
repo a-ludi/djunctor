@@ -333,7 +333,8 @@ private
             }
             catch (ErrnoException e)
             {
-                throw new Exception(format!"cannot write coord transform file `%s`: %s"(options.coordTransform, e));
+                throw new Exception(format!"cannot write coord transform file `%s`: %s"(
+                        options.coordTransform, e));
             }
         }
     }

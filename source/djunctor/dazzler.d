@@ -757,15 +757,18 @@ private
     {
         auto additionalOptions = only(readsDam is null ? "-I" : null);
         auto secondInputFile = readsDam is null ? refDam : readsDam;
-        auto inputFiles = only(refDam.relativeToWorkdir(workdir), secondInputFile.relativeToWorkdir(workdir));
+        auto inputFiles = only(refDam.relativeToWorkdir(workdir),
+                secondInputFile.relativeToWorkdir(workdir));
 
-        executeCommand(chain(only("daligner"), additionalOptions, dalignerOpts, inputFiles), workdir);
+        executeCommand(chain(only("daligner"), additionalOptions, dalignerOpts,
+                inputFiles), workdir);
     }
 
     void damapper(in string refDam, in string readsDam, in string[] damapperOpts, in string workdir)
     {
         executeCommand(chain(only("damapper", "-C"), damapperOpts,
-                only(refDam.relativeToWorkdir(workdir), readsDam.relativeToWorkdir(workdir))), workdir);
+                only(refDam.relativeToWorkdir(workdir), readsDam.relativeToWorkdir(workdir))),
+                workdir);
     }
 
     string daccord(in string dbFile, in string lasFile, in string[] daccordOpts, in string workdir)

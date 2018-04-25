@@ -24,8 +24,8 @@ import std.conv;
 import std.exception : assertNotThrown, assertThrown;
 import std.format : format, formattedWrite;
 import std.math : abs, sgn;
-import std.range : assumeSorted, chain, chunks, ElementType, enumerate,
-    iota, isForwardRange, only, retro, slide, SortedRange, walkLength;
+import std.range : assumeSorted, chain, chunks, ElementType, enumerate, iota,
+    isForwardRange, only, retro, slide, SortedRange, walkLength;
 import std.stdio : File, write, writeln;
 import std.string : outdent;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
@@ -36,7 +36,8 @@ version (unittest)
     import djunctor.util.testing : MockCallable;
     import djunctor.dazzler : origGetLocalAlignments = getLocalAlignments,
         origGetMappings = getMappings;
-    import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries, getNumContigs;
+    import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
+        getNumContigs;
 
     MockCallable!(AlignmentContainer!(AlignmentChain[]), const string, const Options) getLocalAlignments;
     MockCallable!(origGetMappings!Options) getMappings;
@@ -2066,15 +2067,17 @@ unittest
                             size_t read2Id = readAlignment2[0].contigA.id;
 
                             assert((i != j) || !byGapSort(readAlignment1, readAlignment2),
-                                format!"read %d should not be before %d (same pile)"(read1Id, read2Id));
+                                    format!"read %d should not be before %d (same pile)"(read1Id,
+                                        read2Id));
                             assert((i < j) == byGapSort(readAlignment1, readAlignment2),
-                                format!"read %d should be before %d"(read1Id, read2Id));
+                                    format!"read %d should be before %d"(read1Id, read2Id));
                             assert((i > j) == byGapSort(readAlignment2, readAlignment1),
-                                format!"read %d should be after %d"(read2Id, read1Id));
+                                    format!"read %d should be after %d"(read2Id, read1Id));
 
                             bool shouldGroup = i == j || (i + 1 == j && j != 3);
                             assert(shouldGroup == belongToSamePile(readAlignment1, readAlignment2),
-                                format!"reads %d and %d should%s be grouped"(read1Id, read2Id, (shouldGroup ? "" : " not")));
+                                    format!"reads %d and %d should%s be grouped"(read1Id,
+                                        read2Id, (shouldGroup ? "" : " not")));
                         }
                     }
                 }
@@ -2116,11 +2119,11 @@ alias Hit = Tuple!(
 );
 // dfmt on
 
-            class DJunctor
-            {
-                /// Stop after maxLoops `mainLoop`s at the latest.
-                static immutable maxLoops = 1;
-                /**
+class DJunctor
+{
+    /// Stop after maxLoops `mainLoop`s at the latest.
+    static immutable maxLoops = 1;
+    /**
         Two scores are condsidered similar if the relative "error" of them is
         smaller than defaulMaxRelativeDiff.
 
@@ -2132,8 +2135,8 @@ alias Hit = Tuple!(
         arithmetic hence AlignmentChain.maxScore corresponds to 1 in the above
         equation.
     */
-                static immutable maxRelativeDiff = AlignmentChain.maxScore / 20; // 5% of larger value
-                /**
+    static immutable maxRelativeDiff = AlignmentChain.maxScore / 20; // 5% of larger value
+    /**
         Two scores are condsidered similar if the absolute "error" of them is
         smaller than defaulMaxAbsoluteDiff.
 
@@ -2145,836 +2148,825 @@ alias Hit = Tuple!(
         arithmetic hence all scores are lower than or equal to
         AlignmentChain.maxScore .
     */
-                static immutable maxAbsoluteDiff = AlignmentChain.maxScore / 100; // 1% wrt. score
-                alias numEstimateUseless = (numCatUnsure, iteration) => (
-                        numCatUnsure - numCatUnsure / 20) / (iteration + 1);
-
-                AlignmentContainer!(AlignmentChain[]) selfAlignment;
-                AlignmentContainer!(AlignmentChain[]) readsAlignment;
-                const Options options;
-                /// Set of read ids not to be considered in further processing.
-                size_t[] catUseless;
-                /// Set of alignments to be considered in further processing.
-                AlignmentContainer!(AlignmentChain[]) catCandidates;
-                /// Set of alignments to be used for gap filling.
-                Hit[] catHits;
-                /// Access contigs distributed over several DBs by ID.
-                DBUnion referenceDb;
-                /// Transform coordinates before insertions to coordinates after them.
-                CoordinateTransform coordTransform;
-                alias T = coordTransform;
-                size_t iteration;
-
-                this(in ref Options options)
-                {
-                    this.options = options;
-                    this.catUseless = [];
-                    this.catHits = [];
-                    this.iteration = 0;
-                    this.referenceDb.baseDb = options.refDb;
-                }
-
-                DJunctor run()
-                {
-                    logJsonDiagnostic("state", "enter", "function", "run");
-                    // dfmt off
-                    this
-                        .init
-                        .mainLoop
-                        .finish;
-                    // dfmt on
-                    logJsonDiagnostic("state", "exit", "function", "run");
-
-                    return this;
-                }
-
-                protected DJunctor init()
-                {
-                    logJsonDiagnostic("state", "enter", "function", "djunctor.init");
-                    selfAlignment = getLocalAlignments(options.refDb, options);
-                    readsAlignment = getMappings(options.refDb, options.readsDb, options);
-                    catCandidates = AlignmentContainer!(AlignmentChain[])(
-                            readsAlignment.a2b.dup, readsAlignment.b2a.dup);
-                    logJsonDiagnostic("state", "exit", "function", "djunctor.init");
-
-                    return this;
-                }
-
-                unittest
-                {
-                    auto options = Options();
-                    auto djunctor = new DJunctor(options);
-
-                    djunctor.init();
-
-                    assert(getLocalAlignments.wasCalled);
-                    assert(djunctor.selfAlignment == getLocalAlignments.returnValue);
-                    getLocalAlignments.reset();
-                    assert(getMappings.wasCalled);
-                    assert(djunctor.readsAlignment == getMappings.returnValue);
-                    getMappings.reset();
-                }
-
-                protected DJunctor mainLoop()
-                {
-                    logJsonDiagnostic("state", "enter", "function", "djunctor.mainLoop");
-                    do
-                    {
-                        filterUseless();
-                        findHits();
-
-                        // dfmt off
-                        logJsonDiagnostic(
-                            "iteration", iteration,
-                            "numUseless", catUseless.length,
-                            "numCandiatesA2b", catCandidates.a2b.length,
-                            "numCandiatesB2a", catCandidates.b2a.length,
-                            "numHits", catHits.length
-                        );
-                        // dfmt on
-
-                        if (catHits.length > 0)
-                        {
-                            insertHits();
-                        }
-
-                        ++iteration;
-                    }
-                    while (catHits.length > 0 && iteration < maxLoops);
-                    logJsonDiagnostic("state", "exit", "function", "djunctor.mainLoop");
-
-                    return this;
-                }
-
-                protected DJunctor filterUseless()
-                {
-                    logJsonDiagnostic("state", "enter", "function", "djunctor.filterUseless");
-
-                    auto sizeReserve = numEstimateUseless(catCandidates.a2b.length, iteration);
-                    if (sizeReserve == 0)
-                    {
-                        // dfmt off
-                        logJsonDiagnostic(
-                            "state", "exit",
-                            "function", "djunctor.filterUseless",
-                            "reason", "skipping: expecting zero useless reads",
-                        );
-                        // dfmt on
-
-                        // Skip this step if we do not expect to find "useless" reads;
-                        // it is not harmful to consider some "useless" reads as
-                        // candidates (catCandidates).
-                        return this;
-                    }
-
-                    auto uselessAcc = appender!(size_t[]);
-                    auto candidatesAcc = appender!(AlignmentChain[]);
-                    uselessAcc.reserve(sizeReserve);
-                    alias isNotUseless = ac => !uselessAcc.data.canFind(ac.contigA.id);
-
-                    foreach (alignmentsChunk; catCandidates.a2b.chunkBy!haveEqualIds)
-                    {
-                        auto alignments = alignmentsChunk.array;
-                        alignments.sort!"a.score > b.score";
-
-                        // Mark reads as useless if either: (s. issue #3)
-                        // (a) The aligned read, ie. the alignment extened with the exceeding
-                        //     read sequence on either end, is fully contained in a single
-                        //     contig.
-                        // (b) It aligns in multiple locations of one contig with
-                        //     approximately equal quality.
-                        if (alignments[0].isFullyContained || (alignments.length > 1
-                                && similarScore(alignments[0].score, alignments[1].score)))
-                        {
-                            uselessAcc ~= alignments[0].contigB.id;
-                        }
-                        else
-                        {
-                            candidatesAcc ~= alignments;
-                        }
-                    }
-                    // dfmt off
-                    logJsonDiagnostic(
-                        "numUselessExpected", sizeReserve,
-                        "numUselessFound", uselessAcc.data.length,
-                    );
-                    // dfmt on
-
-                    this.catUseless ~= uselessAcc.data;
-                    this.catCandidates.a2b = candidatesAcc.data;
-                    this.catCandidates.b2a = this.catCandidates.b2a.filter!isNotUseless.array;
-                    logJsonDiagnostic("state", "exit", "function", "djunctor.filterUseless");
-
-                    return this;
-                }
-
-                protected static bool similarScore(size_t a, size_t b) pure
-                {
-                    auto diff = a > b ? a - b : b - a;
-                    auto magnitude = a > b ? a : b;
-
-                    return diff < maxAbsoluteDiff
-                        || (diff * AlignmentChain.maxScore / magnitude) < maxRelativeDiff;
-                }
-
-                unittest
-                {
-                    immutable eps = 1;
-                    immutable refValueSmall = 2 * maxAbsoluteDiff;
-                    immutable refValueLarge = AlignmentChain.maxScore / 2;
-
-                    // test absolute part
-                    assert(similarScore(refValueSmall, refValueSmall));
-                    assert(similarScore(refValueSmall, refValueSmall + (maxAbsoluteDiff - 1)));
-                    assert(similarScore(refValueSmall, refValueSmall - (maxAbsoluteDiff - 1)));
-                    assert(!similarScore(refValueSmall, refValueSmall + (maxAbsoluteDiff + 1)));
-                    assert(!similarScore(refValueSmall, refValueSmall - (maxAbsoluteDiff + 1)));
-                    // test relative part
-                    assert(similarScore(refValueLarge, refValueLarge));
-                    assert(similarScore(refValueLarge,
-                            refValueLarge + refValueLarge * maxRelativeDiff / AlignmentChain
-                            .maxScore));
-                    assert(similarScore(refValueLarge,
-                            refValueLarge - refValueLarge * maxRelativeDiff / AlignmentChain
-                            .maxScore) + eps);
-                    assert(!similarScore(refValueLarge,
-                            refValueLarge + refValueLarge * 2 * maxRelativeDiff
-                            / AlignmentChain.maxScore));
-                    assert(!similarScore(refValueLarge,
-                            refValueLarge - refValueLarge * 2 * maxRelativeDiff
-                            / AlignmentChain.maxScore));
-                }
-
-                protected DJunctor findHits()
-                {
-                    logJsonDiagnostic("state", "enter", "function", "djunctor.findHits");
-
-                    auto pileUps = buildPileUps(catCandidates);
-
-                    logFillingInfo!("findHits", "raw")(pileUps);
-                    logJsonDebug("pileUps", pileUps.serializeToJson);
-
-                    alias getReadId = (reads) => reads[0].contigA.id;
-
-                    foreach (pileUp; pileUps)
-                    {
-                        assert(pileUp.isValid, "ambiguous pile up");
-
-                        bool isGap = pileUp.isGap;
-                        const(size_t)[] refContigIds = pileUp[0].map!"a.contigB.id".array;
-                        size_t[] readIds = pileUp.map!getReadId.array;
-                        string[] fastaEntries = getFastaEntries(options.readsDb, readIds, options)
-                            .array;
-                        string pileupDb = buildDamFile(fastaEntries, options);
-                        string[] consensusDbs = getConsensus(pileupDb, options);
-
-                        // dfmt off
-                        logJsonDebug(
-                            "pileupDb", pileupDb,
-                            "consensusDbs", consensusDbs.map!Json.array,
-                            "contigIds", refContigIds.map!Json.array,
-                        );
-                        // dfmt on
-
-                        foreach (consensusDb; consensusDbs)
-                        {
-                            auto consensusAlignments = getMappings(options.refDb,
-                                    consensusDb, options);
-                            auto consensusPileUps = buildPileUps(consensusAlignments);
-                            // Select the largest pile up if there are more than one
-                            auto consensusPileUp = consensusPileUps.maxElement!"a.length";
-                            consensusPileUp.sort!(Comparator!meanScore.gt);
-                            // dfmt off
-                            auto hitReadAlignment = consensusPileUp
-                                .filter!(readAlignment => !isGap || readAlignment.isGap)
-                                .front;
-
-                            if (consensusPileUps.length > 1)
-                                logJsonWarn(
-                                    "contigIds", refContigIds.map!Json.array,
-                                    "code", "ambiguousConsensusAlignment",
-                                    "message", "consensus has more than one pile up",
-                                );
-                            // dfmt on
-                            logFillingInfo!("findHits", "consensus")([consensusPileUp]);
-                            // dfmt off
-                            logJsonDebug(
-                                "contigIds", refContigIds.map!Json.array,
-                                "pileUp", consensusPileUp
-                                    .map!(readAlignment => Json([
-                                        "type": Json(getType(readAlignment).to!string),
-                                        "estimateSize": Json(getInsertionSize(readAlignment)),
-                                        "hitScore": Json(meanScore(readAlignment)),
-                                        "alignmentScores": Json(readAlignment.map!"a.score".map!Json.array),
-                                        "readId": Json(getReadId(readAlignment)),
-                                    ]))
-                                    .array,
-                            );
-                            // dfmt on
-
-                            // Mark best scoring read for later sequence insertion.
-                            catHits ~= Hit(hitReadAlignment, consensusDb);
-                        }
-                    }
-
-                    logJsonDiagnostic("state", "exit", "function", "djunctor.findHits");
-
-                    return this;
-                }
-
-                protected DJunctor insertHits()
-                {
-                    logJsonDiagnostic("state", "enter", "function", "djunctor.insertHits");
-                    foreach (hit; catHits)
-                    {
-                        insertHit(hit);
-                    }
-                    // dfmt off
-                    logJsonDiagnostic(
-                        "step", "djunctor.insertHits",
-                        "coordTransform", coordTransform.serializeToJson,
-                        "coordTransformPython", coordTransform.toString(),
-                    );
-                    // dfmt on
-                    // Clear `catHits` for next iteration.
-                    catHits.length = 0;
-                    logJsonDiagnostic("state", "exit", "function", "djunctor.insertHits");
-
-                    return this;
-                }
-
-                protected DJunctor insertHit(in Hit hit)
-                {
-                    logJsonDiagnostic("state", "enter", "function", "djunctor.insertHit");
-
-                    const(size_t)[] refContigIds = hit.alignments.map!"a.contigB.id".array;
-                    auto complement = hit.alignments[0].complement;
-                    size_t readId = hit.alignments[0].contigA.id;
-                    auto read = getFastaEntries(hit.dbFile, [readId], options)
-                        .front.parseFastaRecord;
-                    auto gapSequenceSlice = getHitSequenceSlice(hit);
-                    // dfmt off
-                    auto insertSequence = complement
-                        ? read.reverseComplement[gapSequenceSlice]
-                        : read[gapSequenceSlice];
-                    // dfmt on
-                    auto insertionInfo = getInsertionInfo(hit);
-                    auto trInsertionInfo = insertionInfo;
-                    trInsertionInfo.begin = T(insertionInfo.begin);
-                    trInsertionInfo.end = T(insertionInfo.end);
-                    auto refContigFastaEntries = refContigIds.map!(
-                            contigId => getReferenceFastaEntry(T(contigId))).array;
-                    auto endContigLength = refContigFastaEntries[$ - 1].length;
-                    // TODO update headers
-                    string newHeader = refContigFastaEntries[0].header;
-                    size_t newContigLength = trInsertionInfo.totalInsertionLength(endContigLength);
-                    immutable lineSep = typeof(refContigFastaEntries[0]).lineSep;
-                    auto fastaBuilder = appender!string;
-                    auto expectedFastaLength = newHeader.length + newContigLength
-                        + newContigLength / options.fastaLineWidth + 2;
-                    fastaBuilder.reserve(expectedFastaLength);
-
-                    fastaBuilder ~= newHeader;
-                    fastaBuilder ~= lineSep;
-
-                    with (CoordinateTransform.Insertion.Type)
-                    {
-                        final switch (insertionInfo.type)
-                        {
-                        case gap:
-                            // dfmt off
-                            auto joinedSequence = chain(
-                                refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx],
-                                insertSequence,
-                                refContigFastaEntries[1][trInsertionInfo.end.idx .. $],
-                            );
-                            // dfmt on
-                            fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth)
-                                .joiner(lineSep);
-                            break;
-                        case front:
-                            // dfmt off
-                            auto joinedSequence = chain(
-                                insertSequence,
-                                refContigFastaEntries[0][trInsertionInfo.end.idx .. $],
-                            );
-                            // dfmt on
-                            fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth)
-                                .joiner(lineSep);
-                            break;
-                        case back:
-                            // dfmt off
-                            auto joinedSequence = chain(
-                                refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx],
-                                insertSequence,
-                            );
-                            // dfmt on
-                            fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth)
-                                .joiner(lineSep);
-                            break;
-                        case relabel:
-                            assert(0, "invalid insertion");
-                        }
-                    }
-
-                    fastaBuilder ~= lineSep;
-
-                    auto overlayDb = buildDamFile([fastaBuilder.data], options);
-
-                    T ~= insertionInfo;
-                    referenceDb.addAlias(T(refContigIds[0]), overlayDb, 1);
-
-                    // dfmt off
-                    logJsonDebug(
-                        "step", "insertHits",
-                        "type", insertionInfo.type.to!string,
-                        "contigIds", refContigIds.map!Json.array,
-                        "readId", readId,
-                        "complement", complement.to!bool,
-                        "insertSequence", insertSequence.array.to!string,
-                        "insertionInfo", insertionInfo.serializeToJson(),
-                        "transformedInsertionInfo", trInsertionInfo.serializeToJson(),
-                        "overlayDb", overlayDb,
-                        "expectedFastaLength", expectedFastaLength,
-                        "newHeaderLength", newHeader.length,
-                        "newContigLength", newContigLength,
-                        "optionsFastaLineWidth", options.fastaLineWidth,
-                        "fastaBuilderDataLength", fastaBuilder.data.length,
-                    );
-                    // dfmt on
-                    debug assert(expectedFastaLength >= fastaBuilder.data.length,
-                            format!"avoid reallocation: expeceted %d but used %d"(
-                                expectedFastaLength, fastaBuilder.data.length));
-
-                    logJsonDiagnostic("state", "exit", "function", "djunctor.insertHit");
-
-                    return this;
-                }
-
-                protected auto getInsertionInfo(in Hit hit) pure
-                {
-                    if (hit.alignments.length == 1)
-                        return getInsertionInfoForExtension(hit);
-                    else if (hit.alignments.length == 2)
-                        return getInsertionInfoForGap(hit);
-                    else
-                        assert(0, "illegal alignments count in hit");
-                }
-
-                protected auto getInsertionInfoForExtension(in Hit hit) pure
-                {
-                    with (CoordinateTransform)
-                    {
-                        with (ReadAlignmentType)
-                        {
-                            auto alignment = hit.alignments[0];
-                            assert(hit.alignments.isValid && hit.alignments.isExtension);
-                            ReadAlignmentType extensionType = hit.alignments.getType;
-                            size_t refContigId = alignment.contigB.id;
-                            // dfmt off
-                            size_t idx = (extensionType == front) ^ alignment.complement
-                                ? alignment.first.contigB.begin
-                                : alignment.last.contigB.end;
-                            // dfmt on
-
-                            if (alignment.complement)
-                            {
-                                idx = alignment.contigB.length - idx;
-                            }
-                            auto extensionSequenceSlice = getHitSequenceSlice(hit);
-
-                            // dfmt off
-                            debug logJsonDebug(
-                                "alignment", alignment.serializeToJson,
-                                "refContigId", refContigId,
-                                "extensionType", extensionType.to!string,
-                                "idx", idx,
-                                "extensionSequenceSlice", extensionSequenceSlice.serializeToJson,
-                            );
-                            // dfmt on
-
-                            // dfmt off
-                            return Insertion.make(
-                                Coordinate(refContigId, idx),
-                                Coordinate(refContigId, idx),
-                                extensionSequenceSlice[1] - extensionSequenceSlice[0],
-                                extensionType,
-                            );
-                            // dfmt on
-                        }
-                    }
-                }
-
-                protected auto getInsertionInfoForGap(in Hit hit) pure
-                {
-                    size_t refContig1Id = hit.alignments[0].contigB.id;
-                    size_t refContig2Id = hit.alignments[1].contigB.id;
-
-                    size_t gapRefBegin;
-                    size_t gapRefEnd;
-
-                    if (hit.alignments[0].complement)
-                    {
-                        gapRefBegin = hit.alignments[0].contigB.length
-                            - hit.alignments[0].first.contigB.begin;
-                        gapRefEnd = hit.alignments[1].contigB.length
-                            - hit.alignments[1].last.contigB.end;
-                    }
-                    else
-                    {
-                        gapRefBegin = hit.alignments[0].last.contigB.end;
-                        gapRefEnd = hit.alignments[1].first.contigB.begin;
-                    }
-
-                    auto gapSequenceSlice = getHitSequenceSlice(hit);
-
-                    with (CoordinateTransform)
-                    {
-                        // dfmt off
-                        return Insertion.make(
-                            Coordinate(refContig1Id, gapRefBegin),
-                            Coordinate(refContig2Id, gapRefEnd),
-                            gapSequenceSlice[1] - gapSequenceSlice[0],
-                            ReadAlignmentType.gap,
-                        );
-                        // dfmt on
-                    }
-                }
-
-                protected static Tuple!(int, int) getHitSequenceSlice(in Hit hit) pure
-                {
-                    if (hit.alignments.length == 1)
-                        return getExtensionSequenceSlice(hit);
-                    else if (hit.alignments.length == 2)
-                        return getGapSequenceSlice(hit);
-                    else
-                        assert(0, "illegal alignments count in hit");
-                }
-
-                protected static Tuple!(int, int) getExtensionSequenceSlice(in Hit hit) pure
-                {
-                    auto alignment = hit.alignments[0];
-                    auto extensionType = hit.alignments.getType;
-                    size_t begin;
-                    size_t end;
-
-                    switch (extensionType)
-                    {
-                    case ReadAlignmentType.front:
-                        if (alignment.complement)
-                        {
-                            begin = alignment.last.contigA.end;
-                            end = alignment.contigA.length;
-                        }
-                        else
-                        {
-                            begin = 0;
-                            end = alignment.first.contigA.begin;
-                        }
-                        break;
-                    case ReadAlignmentType.back:
-                        if (alignment.complement)
-                        {
-                            begin = 0;
-                            end = alignment.first.contigA.begin;
-                        }
-                        else
-                        {
-                            begin = alignment.last.contigA.end;
-                            end = alignment.contigA.length;
-                        }
-                        break;
-                    default:
-                        assert(0);
-                    }
-
-                    return typeof(return)(begin.to!int, end.to!int);
-                }
-
-                protected static Tuple!(int, int) getGapSequenceSlice(in Hit hit) pure
-                {
-                    auto alignment1 = hit.alignments[0];
-                    auto alignment2 = hit.alignments[1];
-                    size_t begin;
-                    size_t end;
-
-                    if (alignment1.isBefore!"contigA"(alignment2))
-                    {
-                        begin = alignment1.last.contigA.end;
-                        end = alignment2.first.contigA.begin;
-                    }
-                    else
-                    {
-                        begin = alignment2.last.contigA.end;
-                        end = alignment1.first.contigA.begin;
-                    }
-
-                    return typeof(return)(begin.to!int, end.to!int);
-                }
-
-                protected auto getReferenceFastaEntry(in size_t contigId) const
-                {
-                    auto dbRef = referenceDb[contigId];
-
-                    return getReferenceFastaEntry(dbRef);
-                }
-
-                protected auto getReferenceFastaEntry(in DBUnion.DBReference dbRef) const
-                {
-                    return parseFastaRecord(getFastaEntries(dbRef.dbFile,
-                            [dbRef.contigId + 0], options).front);
-                }
-
-                protected DJunctor finish()
-                {
-                    logJsonDiagnostic("state", "enter", "function", "djunctor.finish");
-
-                    // dfmt off
-                    this
-                        .mergeOverlayDb
-                        .writeCoordTransform;
-                    // dfmt on
-
-                    logJsonDiagnostic("state", "exit", "function", "djunctor.finish");
-
-                    return this;
-                }
-
-                protected DJunctor mergeOverlayDb()
-                {
-                    size_t numReferenceContigs = getNumContigs(referenceDb.baseDb, options);
-                    // dfmt off
-                    auto contigSources = iota(1, numReferenceContigs + 1)
-                        .map!(contigId => T(contigId))
-                        .map!(trContigId => tuple(trContigId, referenceDb[trContigId]))
-                        .group!"a[0] == b[0]"
-                        .map!"a[0]";
-                    auto fastaEntries = contigSources
-                        .save
-                        .map!"a[1]"
-                        .map!(dbRef => getReferenceFastaEntry(dbRef));
-                    immutable lineSep = typeof(fastaEntries.front).lineSep;
-
-                    fastaEntries
-                        .map!(fastaEntry => fastaEntry.toFasta(options.fastaLineWidth))
-                        .joiner(lineSep)
-                        .write;
-                    // dfmt on
-
-                    // dfmt off
-                    logJsonDebug(
-                        "numReferenceContigs", numReferenceContigs,
-                        "contigSources", contigSources.array.serializeToJson,
-                    );
-                    // dfmt on
-
-                    foreach (newContigId, contigSource; contigSources.enumerate(1))
-                    {
-                        size_t oldContigId = contigSource[0];
-
-                        if (oldContigId != newContigId)
-                        {
-                            T ~= CoordinateTransform.Insertion.makeRelabel(oldContigId, newContigId);
-                            logJsonDebug("relabel", ["oldContigId": oldContigId, "newContigId": newContigId].serializeToJson);
-                        }
-                    }
-
-                    return this;
-                }
-
-                protected DJunctor writeCoordTransform()
-                {
-                    if (!(options.coordTransform is null))
-                    {
-                        auto coordTransformFile = File(options.coordTransform, "w");
-
-                        coordTransformFile.write(coordTransform.toString(CoordinateTransform.ExportLanguage.python));
-                    }
-
-                    return this;
-                }
-
-                private void logFillingInfo(string step, string readState)(in PileUp[] pileUpsByGap)
-                {
-                    static auto getGapInfo(in PileUp pileUp)
-                    {
-                        bool isGap = pileUp.isGap;
-                        auto type = isGap ? ReadAlignmentType.gap : pileUp[0].getType;
-
-                        alias lengthFilter = p => isGap ? p.length == 2 : p.length == 1;
-
-                        // dfmt off
-                        return Json([
-                            "type": Json(type.to!string),
-                            "contigIds": pileUp
-                                .filter!lengthFilter
-                                .map!(readAlignment => readAlignment
-                                    .map!"a.contigB.id"
-                                    .map!Json
-                                    .array)
-                                .front
-                                .Json,
-                            "estimateLengthMean": pileUp
-                                .filter!lengthFilter
-                                .map!getInsertionSize
-                                .array
-                                .mean
-                                .Json,
-                            "estimateLengthMedian": pileUp
-                                .filter!lengthFilter
-                                .map!getInsertionSize
-                                .array
-                                .median
-                                .Json,
-                            "numReads": Json(pileUp.length),
-                        ]);
-                        // dfmt on
-                    }
-
-                    // dfmt off
-                    logJsonDiagnostic(
-                        "step", step,
-                        "readState", readState,
-                        "numGaps", pileUpsByGap.length,
-                        "gapInfo", pileUpsByGap.map!getGapInfo.array,
-                    );
-                    // dfmt on
-                }
+    static immutable maxAbsoluteDiff = AlignmentChain.maxScore / 100; // 1% wrt. score
+    alias numEstimateUseless = (numCatUnsure, iteration) => (numCatUnsure - numCatUnsure / 20) / (
+            iteration + 1);
+
+    AlignmentContainer!(AlignmentChain[]) selfAlignment;
+    AlignmentContainer!(AlignmentChain[]) readsAlignment;
+    const Options options;
+    /// Set of read ids not to be considered in further processing.
+    size_t[] catUseless;
+    /// Set of alignments to be considered in further processing.
+    AlignmentContainer!(AlignmentChain[]) catCandidates;
+    /// Set of alignments to be used for gap filling.
+    Hit[] catHits;
+    /// Access contigs distributed over several DBs by ID.
+    DBUnion referenceDb;
+    /// Transform coordinates before insertions to coordinates after them.
+    CoordinateTransform coordTransform;
+    alias T = coordTransform;
+    size_t iteration;
+
+    this(in ref Options options)
+    {
+        this.options = options;
+        this.catUseless = [];
+        this.catHits = [];
+        this.iteration = 0;
+        this.referenceDb.baseDb = options.refDb;
+    }
+
+    DJunctor run()
+    {
+        logJsonDiagnostic("state", "enter", "function", "run");
+        // dfmt off
+        this
+            .init
+            .mainLoop
+            .finish;
+        // dfmt on
+        logJsonDiagnostic("state", "exit", "function", "run");
+
+        return this;
+    }
+
+    protected DJunctor init()
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.init");
+        selfAlignment = getLocalAlignments(options.refDb, options);
+        readsAlignment = getMappings(options.refDb, options.readsDb, options);
+        catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup,
+                readsAlignment.b2a.dup);
+        logJsonDiagnostic("state", "exit", "function", "djunctor.init");
+
+        return this;
+    }
+
+    unittest
+    {
+        auto options = Options();
+        auto djunctor = new DJunctor(options);
+
+        djunctor.init();
+
+        assert(getLocalAlignments.wasCalled);
+        assert(djunctor.selfAlignment == getLocalAlignments.returnValue);
+        getLocalAlignments.reset();
+        assert(getMappings.wasCalled);
+        assert(djunctor.readsAlignment == getMappings.returnValue);
+        getMappings.reset();
+    }
+
+    protected DJunctor mainLoop()
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.mainLoop");
+        do
+        {
+            filterUseless();
+            findHits();
+
+            // dfmt off
+            logJsonDiagnostic(
+                "iteration", iteration,
+                "numUseless", catUseless.length,
+                "numCandiatesA2b", catCandidates.a2b.length,
+                "numCandiatesB2a", catCandidates.b2a.length,
+                "numHits", catHits.length
+            );
+            // dfmt on
+
+            if (catHits.length > 0)
+            {
+                insertHits();
             }
 
-            /**
+            ++iteration;
+        }
+        while (catHits.length > 0 && iteration < maxLoops);
+        logJsonDiagnostic("state", "exit", "function", "djunctor.mainLoop");
+
+        return this;
+    }
+
+    protected DJunctor filterUseless()
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.filterUseless");
+
+        auto sizeReserve = numEstimateUseless(catCandidates.a2b.length, iteration);
+        if (sizeReserve == 0)
+        {
+            // dfmt off
+            logJsonDiagnostic(
+                "state", "exit",
+                "function", "djunctor.filterUseless",
+                "reason", "skipping: expecting zero useless reads",
+            );
+            // dfmt on
+
+            // Skip this step if we do not expect to find "useless" reads;
+            // it is not harmful to consider some "useless" reads as
+            // candidates (catCandidates).
+            return this;
+        }
+
+        auto uselessAcc = appender!(size_t[]);
+        auto candidatesAcc = appender!(AlignmentChain[]);
+        uselessAcc.reserve(sizeReserve);
+        alias isNotUseless = ac => !uselessAcc.data.canFind(ac.contigA.id);
+
+        foreach (alignmentsChunk; catCandidates.a2b.chunkBy!haveEqualIds)
+        {
+            auto alignments = alignmentsChunk.array;
+            alignments.sort!"a.score > b.score";
+
+            // Mark reads as useless if either: (s. issue #3)
+            // (a) The aligned read, ie. the alignment extened with the exceeding
+            //     read sequence on either end, is fully contained in a single
+            //     contig.
+            // (b) It aligns in multiple locations of one contig with
+            //     approximately equal quality.
+            if (alignments[0].isFullyContained || (alignments.length > 1
+                    && similarScore(alignments[0].score, alignments[1].score)))
+            {
+                uselessAcc ~= alignments[0].contigB.id;
+            }
+            else
+            {
+                candidatesAcc ~= alignments;
+            }
+        }
+        // dfmt off
+        logJsonDiagnostic(
+            "numUselessExpected", sizeReserve,
+            "numUselessFound", uselessAcc.data.length,
+        );
+        // dfmt on
+
+        this.catUseless ~= uselessAcc.data;
+        this.catCandidates.a2b = candidatesAcc.data;
+        this.catCandidates.b2a = this.catCandidates.b2a.filter!isNotUseless.array;
+        logJsonDiagnostic("state", "exit", "function", "djunctor.filterUseless");
+
+        return this;
+    }
+
+    protected static bool similarScore(size_t a, size_t b) pure
+    {
+        auto diff = a > b ? a - b : b - a;
+        auto magnitude = a > b ? a : b;
+
+        return diff < maxAbsoluteDiff || (diff * AlignmentChain.maxScore / magnitude) < maxRelativeDiff;
+    }
+
+    unittest
+    {
+        immutable eps = 1;
+        immutable refValueSmall = 2 * maxAbsoluteDiff;
+        immutable refValueLarge = AlignmentChain.maxScore / 2;
+
+        // test absolute part
+        assert(similarScore(refValueSmall, refValueSmall));
+        assert(similarScore(refValueSmall, refValueSmall + (maxAbsoluteDiff - 1)));
+        assert(similarScore(refValueSmall, refValueSmall - (maxAbsoluteDiff - 1)));
+        assert(!similarScore(refValueSmall, refValueSmall + (maxAbsoluteDiff + 1)));
+        assert(!similarScore(refValueSmall, refValueSmall - (maxAbsoluteDiff + 1)));
+        // test relative part
+        assert(similarScore(refValueLarge, refValueLarge));
+        assert(similarScore(refValueLarge,
+                refValueLarge + refValueLarge * maxRelativeDiff / AlignmentChain.maxScore));
+        assert(similarScore(refValueLarge,
+                refValueLarge - refValueLarge * maxRelativeDiff / AlignmentChain.maxScore) + eps);
+        assert(!similarScore(refValueLarge,
+                refValueLarge + refValueLarge * 2 * maxRelativeDiff / AlignmentChain.maxScore));
+        assert(!similarScore(refValueLarge,
+                refValueLarge - refValueLarge * 2 * maxRelativeDiff / AlignmentChain.maxScore));
+    }
+
+    protected DJunctor findHits()
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.findHits");
+
+        auto pileUps = buildPileUps(catCandidates);
+
+        logFillingInfo!("findHits", "raw")(pileUps);
+        logJsonDebug("pileUps", pileUps.serializeToJson);
+
+        alias getReadId = (reads) => reads[0].contigA.id;
+
+        foreach (pileUp; pileUps)
+        {
+            assert(pileUp.isValid, "ambiguous pile up");
+
+            bool isGap = pileUp.isGap;
+            const(size_t)[] refContigIds = pileUp[0].map!"a.contigB.id".array;
+            size_t[] readIds = pileUp.map!getReadId.array;
+            string[] fastaEntries = getFastaEntries(options.readsDb, readIds, options).array;
+            string pileupDb = buildDamFile(fastaEntries, options);
+            string[] consensusDbs = getConsensus(pileupDb, options);
+
+            // dfmt off
+            logJsonDebug(
+                "pileupDb", pileupDb,
+                "consensusDbs", consensusDbs.map!Json.array,
+                "contigIds", refContigIds.map!Json.array,
+            );
+            // dfmt on
+
+            foreach (consensusDb; consensusDbs)
+            {
+                auto consensusAlignments = getMappings(options.refDb, consensusDb, options);
+                auto consensusPileUps = buildPileUps(consensusAlignments);
+                // Select the largest pile up if there are more than one
+                auto consensusPileUp = consensusPileUps.maxElement!"a.length";
+                consensusPileUp.sort!(Comparator!meanScore.gt);
+                // dfmt off
+                auto hitReadAlignment = consensusPileUp
+                    .filter!(readAlignment => !isGap || readAlignment.isGap)
+                    .front;
+
+                if (consensusPileUps.length > 1)
+                    logJsonWarn(
+                        "contigIds", refContigIds.map!Json.array,
+                        "code", "ambiguousConsensusAlignment",
+                        "message", "consensus has more than one pile up",
+                    );
+                // dfmt on
+                logFillingInfo!("findHits", "consensus")([consensusPileUp]);
+                // dfmt off
+                logJsonDebug(
+                    "contigIds", refContigIds.map!Json.array,
+                    "pileUp", consensusPileUp
+                        .map!(readAlignment => Json([
+                            "type": Json(getType(readAlignment).to!string),
+                            "estimateSize": Json(getInsertionSize(readAlignment)),
+                            "hitScore": Json(meanScore(readAlignment)),
+                            "alignmentScores": Json(readAlignment.map!"a.score".map!Json.array),
+                            "readId": Json(getReadId(readAlignment)),
+                        ]))
+                        .array,
+                );
+                // dfmt on
+
+                // Mark best scoring read for later sequence insertion.
+                catHits ~= Hit(hitReadAlignment, consensusDb);
+            }
+        }
+
+        logJsonDiagnostic("state", "exit", "function", "djunctor.findHits");
+
+        return this;
+    }
+
+    protected DJunctor insertHits()
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.insertHits");
+        foreach (hit; catHits)
+        {
+            insertHit(hit);
+        }
+        // dfmt off
+        logJsonDiagnostic(
+            "step", "djunctor.insertHits",
+            "coordTransform", coordTransform.serializeToJson,
+            "coordTransformPython", coordTransform.toString(),
+        );
+        // dfmt on
+        // Clear `catHits` for next iteration.
+        catHits.length = 0;
+        logJsonDiagnostic("state", "exit", "function", "djunctor.insertHits");
+
+        return this;
+    }
+
+    protected DJunctor insertHit(in Hit hit)
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.insertHit");
+
+        const(size_t)[] refContigIds = hit.alignments.map!"a.contigB.id".array;
+        auto complement = hit.alignments[0].complement;
+        size_t readId = hit.alignments[0].contigA.id;
+        auto read = getFastaEntries(hit.dbFile, [readId], options).front.parseFastaRecord;
+        auto gapSequenceSlice = getHitSequenceSlice(hit);
+        // dfmt off
+        auto insertSequence = complement
+            ? read.reverseComplement[gapSequenceSlice]
+            : read[gapSequenceSlice];
+        // dfmt on
+        auto insertionInfo = getInsertionInfo(hit);
+        auto trInsertionInfo = insertionInfo;
+        trInsertionInfo.begin = T(insertionInfo.begin);
+        trInsertionInfo.end = T(insertionInfo.end);
+        auto refContigFastaEntries = refContigIds.map!(
+                contigId => getReferenceFastaEntry(T(contigId))).array;
+        auto endContigLength = refContigFastaEntries[$ - 1].length;
+        // TODO update headers
+        string newHeader = refContigFastaEntries[0].header;
+        size_t newContigLength = trInsertionInfo.totalInsertionLength(endContigLength);
+        immutable lineSep = typeof(refContigFastaEntries[0]).lineSep;
+        auto fastaBuilder = appender!string;
+        auto expectedFastaLength = newHeader.length + newContigLength
+            + newContigLength / options.fastaLineWidth + 2;
+        fastaBuilder.reserve(expectedFastaLength);
+
+        fastaBuilder ~= newHeader;
+        fastaBuilder ~= lineSep;
+
+        with (CoordinateTransform.Insertion.Type)
+        {
+            final switch (insertionInfo.type)
+            {
+            case gap:
+                // dfmt off
+                auto joinedSequence = chain(
+                    refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx],
+                    insertSequence,
+                    refContigFastaEntries[1][trInsertionInfo.end.idx .. $],
+                );
+                // dfmt on
+                fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth).joiner(lineSep);
+                break;
+            case front:
+                // dfmt off
+                auto joinedSequence = chain(
+                    insertSequence,
+                    refContigFastaEntries[0][trInsertionInfo.end.idx .. $],
+                );
+                // dfmt on
+                fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth).joiner(lineSep);
+                break;
+            case back:
+                // dfmt off
+                auto joinedSequence = chain(
+                    refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx],
+                    insertSequence,
+                );
+                // dfmt on
+                fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth).joiner(lineSep);
+                break;
+            case relabel:
+                assert(0, "invalid insertion");
+            }
+        }
+
+        fastaBuilder ~= lineSep;
+
+        auto overlayDb = buildDamFile([fastaBuilder.data], options);
+
+        T ~= insertionInfo;
+        referenceDb.addAlias(T(refContigIds[0]), overlayDb, 1);
+
+        // dfmt off
+        logJsonDebug(
+            "step", "insertHits",
+            "type", insertionInfo.type.to!string,
+            "contigIds", refContigIds.map!Json.array,
+            "readId", readId,
+            "complement", complement.to!bool,
+            "insertSequence", insertSequence.array.to!string,
+            "insertionInfo", insertionInfo.serializeToJson(),
+            "transformedInsertionInfo", trInsertionInfo.serializeToJson(),
+            "overlayDb", overlayDb,
+            "expectedFastaLength", expectedFastaLength,
+            "newHeaderLength", newHeader.length,
+            "newContigLength", newContigLength,
+            "optionsFastaLineWidth", options.fastaLineWidth,
+            "fastaBuilderDataLength", fastaBuilder.data.length,
+        );
+        // dfmt on
+        debug assert(expectedFastaLength >= fastaBuilder.data.length,
+                format!"avoid reallocation: expeceted %d but used %d"(expectedFastaLength,
+                    fastaBuilder.data.length));
+
+        logJsonDiagnostic("state", "exit", "function", "djunctor.insertHit");
+
+        return this;
+    }
+
+    protected auto getInsertionInfo(in Hit hit) pure
+    {
+        if (hit.alignments.length == 1)
+            return getInsertionInfoForExtension(hit);
+        else if (hit.alignments.length == 2)
+            return getInsertionInfoForGap(hit);
+        else
+            assert(0, "illegal alignments count in hit");
+    }
+
+    protected auto getInsertionInfoForExtension(in Hit hit) pure
+    {
+        with (CoordinateTransform)
+        {
+            with (ReadAlignmentType)
+            {
+                auto alignment = hit.alignments[0];
+                assert(hit.alignments.isValid && hit.alignments.isExtension);
+                ReadAlignmentType extensionType = hit.alignments.getType;
+                size_t refContigId = alignment.contigB.id;
+                // dfmt off
+                size_t idx = (extensionType == front) ^ alignment.complement
+                    ? alignment.first.contigB.begin
+                    : alignment.last.contigB.end;
+                // dfmt on
+
+                if (alignment.complement)
+                {
+                    idx = alignment.contigB.length - idx;
+                }
+                auto extensionSequenceSlice = getHitSequenceSlice(hit);
+
+                // dfmt off
+                debug logJsonDebug(
+                    "alignment", alignment.serializeToJson,
+                    "refContigId", refContigId,
+                    "extensionType", extensionType.to!string,
+                    "idx", idx,
+                    "extensionSequenceSlice", extensionSequenceSlice.serializeToJson,
+                );
+                // dfmt on
+
+                // dfmt off
+                return Insertion.make(
+                    Coordinate(refContigId, idx),
+                    Coordinate(refContigId, idx),
+                    extensionSequenceSlice[1] - extensionSequenceSlice[0],
+                    extensionType,
+                );
+                // dfmt on
+            }
+        }
+    }
+
+    protected auto getInsertionInfoForGap(in Hit hit) pure
+    {
+        size_t refContig1Id = hit.alignments[0].contigB.id;
+        size_t refContig2Id = hit.alignments[1].contigB.id;
+
+        size_t gapRefBegin;
+        size_t gapRefEnd;
+
+        if (hit.alignments[0].complement)
+        {
+            gapRefBegin = hit.alignments[0].contigB.length - hit.alignments[0].first.contigB.begin;
+            gapRefEnd = hit.alignments[1].contigB.length - hit.alignments[1].last.contigB.end;
+        }
+        else
+        {
+            gapRefBegin = hit.alignments[0].last.contigB.end;
+            gapRefEnd = hit.alignments[1].first.contigB.begin;
+        }
+
+        auto gapSequenceSlice = getHitSequenceSlice(hit);
+
+        with (CoordinateTransform)
+        {
+            // dfmt off
+            return Insertion.make(
+                Coordinate(refContig1Id, gapRefBegin),
+                Coordinate(refContig2Id, gapRefEnd),
+                gapSequenceSlice[1] - gapSequenceSlice[0],
+                ReadAlignmentType.gap,
+            );
+            // dfmt on
+        }
+    }
+
+    protected static Tuple!(int, int) getHitSequenceSlice(in Hit hit) pure
+    {
+        if (hit.alignments.length == 1)
+            return getExtensionSequenceSlice(hit);
+        else if (hit.alignments.length == 2)
+            return getGapSequenceSlice(hit);
+        else
+            assert(0, "illegal alignments count in hit");
+    }
+
+    protected static Tuple!(int, int) getExtensionSequenceSlice(in Hit hit) pure
+    {
+        auto alignment = hit.alignments[0];
+        auto extensionType = hit.alignments.getType;
+        size_t begin;
+        size_t end;
+
+        switch (extensionType)
+        {
+        case ReadAlignmentType.front:
+            if (alignment.complement)
+            {
+                begin = alignment.last.contigA.end;
+                end = alignment.contigA.length;
+            }
+            else
+            {
+                begin = 0;
+                end = alignment.first.contigA.begin;
+            }
+            break;
+        case ReadAlignmentType.back:
+            if (alignment.complement)
+            {
+                begin = 0;
+                end = alignment.first.contigA.begin;
+            }
+            else
+            {
+                begin = alignment.last.contigA.end;
+                end = alignment.contigA.length;
+            }
+            break;
+        default:
+            assert(0);
+        }
+
+        return typeof(return)(begin.to!int, end.to!int);
+    }
+
+    protected static Tuple!(int, int) getGapSequenceSlice(in Hit hit) pure
+    {
+        auto alignment1 = hit.alignments[0];
+        auto alignment2 = hit.alignments[1];
+        size_t begin;
+        size_t end;
+
+        if (alignment1.isBefore!"contigA"(alignment2))
+        {
+            begin = alignment1.last.contigA.end;
+            end = alignment2.first.contigA.begin;
+        }
+        else
+        {
+            begin = alignment2.last.contigA.end;
+            end = alignment1.first.contigA.begin;
+        }
+
+        return typeof(return)(begin.to!int, end.to!int);
+    }
+
+    protected auto getReferenceFastaEntry(in size_t contigId) const
+    {
+        auto dbRef = referenceDb[contigId];
+
+        return getReferenceFastaEntry(dbRef);
+    }
+
+    protected auto getReferenceFastaEntry(in DBUnion.DBReference dbRef) const
+    {
+        return parseFastaRecord(getFastaEntries(dbRef.dbFile, [dbRef.contigId + 0], options).front);
+    }
+
+    protected DJunctor finish()
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.finish");
+
+        // dfmt off
+        this
+            .mergeOverlayDb
+            .writeCoordTransform;
+        // dfmt on
+
+        logJsonDiagnostic("state", "exit", "function", "djunctor.finish");
+
+        return this;
+    }
+
+    protected DJunctor mergeOverlayDb()
+    {
+        size_t numReferenceContigs = getNumContigs(referenceDb.baseDb, options);
+        // dfmt off
+        auto contigSources = iota(1, numReferenceContigs + 1)
+            .map!(contigId => T(contigId))
+            .map!(trContigId => tuple(trContigId, referenceDb[trContigId]))
+            .group!"a[0] == b[0]"
+            .map!"a[0]";
+        auto fastaEntries = contigSources
+            .save
+            .map!"a[1]"
+            .map!(dbRef => getReferenceFastaEntry(dbRef));
+        immutable lineSep = typeof(fastaEntries.front).lineSep;
+
+        fastaEntries
+            .map!(fastaEntry => fastaEntry.toFasta(options.fastaLineWidth))
+            .joiner(lineSep)
+            .write;
+        // dfmt on
+
+        // dfmt off
+        logJsonDebug(
+            "numReferenceContigs", numReferenceContigs,
+            "contigSources", contigSources.array.serializeToJson,
+        );
+        // dfmt on
+
+        foreach (newContigId, contigSource; contigSources.enumerate(1))
+        {
+            size_t oldContigId = contigSource[0];
+
+            if (oldContigId != newContigId)
+            {
+                T ~= CoordinateTransform.Insertion.makeRelabel(oldContigId, newContigId);
+                logJsonDebug("relabel", ["oldContigId" : oldContigId,
+                        "newContigId" : newContigId].serializeToJson);
+            }
+        }
+
+        return this;
+    }
+
+    protected DJunctor writeCoordTransform()
+    {
+        if (!(options.coordTransform is null))
+        {
+            auto coordTransformFile = File(options.coordTransform, "w");
+
+            coordTransformFile.write(
+                    coordTransform.toString(CoordinateTransform.ExportLanguage.python));
+        }
+
+        return this;
+    }
+
+    private void logFillingInfo(string step, string readState)(in PileUp[] pileUpsByGap)
+    {
+        static auto getGapInfo(in PileUp pileUp)
+        {
+            bool isGap = pileUp.isGap;
+            auto type = isGap ? ReadAlignmentType.gap : pileUp[0].getType;
+
+            alias lengthFilter = p => isGap ? p.length == 2 : p.length == 1;
+
+            // dfmt off
+            return Json([
+                "type": Json(type.to!string),
+                "contigIds": pileUp
+                    .filter!lengthFilter
+                    .map!(readAlignment => readAlignment
+                        .map!"a.contigB.id"
+                        .map!Json
+                        .array)
+                    .front
+                    .Json,
+                "estimateLengthMean": pileUp
+                    .filter!lengthFilter
+                    .map!getInsertionSize
+                    .array
+                    .mean
+                    .Json,
+                "estimateLengthMedian": pileUp
+                    .filter!lengthFilter
+                    .map!getInsertionSize
+                    .array
+                    .median
+                    .Json,
+                "numReads": Json(pileUp.length),
+            ]);
+            // dfmt on
+        }
+
+        // dfmt off
+        logJsonDiagnostic(
+            "step", step,
+            "readState", readState,
+            "numGaps", pileUpsByGap.length,
+            "gapInfo", pileUpsByGap.map!getGapInfo.array,
+        );
+        // dfmt on
+    }
+}
+
+/**
                 This realizes a transform which translates coordinates before insertions
                 to coordinates after them. The insertions can be added sequentially. The
                 transform is fully functional at any point in time and can be converted
                 to a Python 2.7 script for external usage.
             */
-            struct CoordinateTransform
+struct CoordinateTransform
+{
+    static struct Coordinate
+    {
+        size_t contigId;
+        size_t idx;
+    }
+
+    static struct Insertion
+    {
+        enum Type
+        {
+            front,
+            gap,
+            back,
+            relabel,
+        }
+
+        Coordinate begin;
+        Coordinate end;
+        size_t length;
+
+        @disable this(Coordinate);
+        @disable this(Coordinate, Coordinate);
+        private this(Coordinate begin, Coordinate end, size_t length) pure nothrow
+        {
+            this.begin = begin;
+            this.end = end;
+            this.length = length;
+        }
+
+        static Insertion makeRelabel(size_t oldContigId, size_t newContigId) pure nothrow
+        {
+            return Insertion(Coordinate(newContigId), Coordinate(oldContigId), 0);
+        }
+
+        static Insertion make(Coordinate begin, Coordinate end, size_t length,
+                in ReadAlignmentType insertionType) pure nothrow
+        {
+            final switch (insertionType)
             {
-                static struct Coordinate
-                {
-                    size_t contigId;
-                    size_t idx;
-                }
+            case ReadAlignmentType.front:
+                begin.idx = 0;
+                break;
+            case ReadAlignmentType.gap:
+                break;
+            case ReadAlignmentType.back:
+                end.idx = begin.idx + length;
+                break;
+            }
 
-                static struct Insertion
-                {
-                    enum Type
-                    {
-                        front,
-                        gap,
-                        back,
-                        relabel,
-                    }
+            return Insertion(begin, end, length);
+        }
 
-                    Coordinate begin;
-                    Coordinate end;
-                    size_t length;
+        invariant
+        {
+            assert(begin != end || (begin.idx == end.idx && length > 0), "empty insertion");
+            if (begin.contigId == end.contigId)
+            {
+                assert(end.idx >= begin.idx,
+                        "insertion begin index should be before/equal to end index on same contig");
+                assert(length >= end.idx - begin.idx, "inserted sequence too small");
+            }
+        }
 
-                    @disable this(Coordinate);
-                    @disable this(Coordinate, Coordinate);
-                    private this(Coordinate begin, Coordinate end, size_t length) pure nothrow
-                    {
-                        this.begin = begin;
-                        this.end = end;
-                        this.length = length;
-                    }
+        @property isExtension() pure const nothrow
+        {
+            return begin.contigId == end.contigId;
+        }
 
-                    static Insertion makeRelabel(size_t oldContigId, size_t newContigId) pure nothrow
-                    {
-                        return Insertion(Coordinate(newContigId), Coordinate(oldContigId), 0);
-                    }
+        @property isFrontExtension() pure const nothrow
+        {
+            return isExtension && !isBackExtension;
+        }
 
-                    static Insertion make(Coordinate begin, Coordinate end, size_t length, in ReadAlignmentType insertionType) pure nothrow
-                    {
-                        final switch (insertionType)
-                        {
-                            case ReadAlignmentType.front:
-                                begin.idx = 0;
-                                break;
-                            case ReadAlignmentType.gap:
-                                break;
-                            case ReadAlignmentType.back:
-                                end.idx = begin.idx + length;
-                                break;
-                        }
+        @property isBackExtension() pure const nothrow
+        {
+            return isExtension && (begin.idx > 0 && end.idx == begin.idx + length);
+        }
 
-                        return Insertion(begin, end, length);
-                    }
+        @property isGap() pure const nothrow
+        {
+            return !isExtension && !isRelabel;
+        }
 
-                    invariant
-                    {
-                        assert(begin != end || (begin.idx == end.idx && length > 0),
-                                "empty insertion");
-                        if (begin.contigId == end.contigId)
-                        {
-                            assert(end.idx >= begin.idx, "insertion begin index should be before/equal to end index on same contig");
-                            assert(length >= end.idx - begin.idx, "inserted sequence too small");
-                        }
-                    }
+        @property isRelabel() pure const nothrow
+        {
+            return !isExtension && begin.idx == 0 && end.idx == 0 && length == 0;
+        }
 
-                    @property isExtension() pure const nothrow
-                    {
-                        return begin.contigId == end.contigId;
-                    }
+        @property type() pure const nothrow
+        {
+            if (isExtension)
+            {
+                return isFrontExtension ? Type.front : Type.back;
+            }
+            else if (isGap)
+            {
+                return Type.gap;
+            }
+            else
+            {
+                return Type.relabel;
+            }
+        }
 
-                    @property isFrontExtension() pure const nothrow
-                    {
-                        return isExtension && !isBackExtension;
-                    }
+        size_t totalInsertionLength(in size_t endContigLength) pure const nothrow
+        {
+            final switch (type)
+            {
+            case Type.gap:
+            case Type.front:
+            case Type.relabel:
+                return begin.idx + length + endContigLength - end.idx;
+            case Type.back:
+                return begin.idx + length;
+            }
+        }
+    }
 
-                    @property isBackExtension() pure const nothrow
-                    {
-                        return isExtension && (begin.idx > 0 && end.idx == begin.idx + length);
-                    }
+    static enum ExportLanguage
+    {
+        python,
+    }
 
-                    @property isGap() pure const nothrow
-                    {
-                        return !isExtension && !isRelabel;
-                    }
+    const(Insertion)[] insertions;
 
-                    @property isRelabel() pure const nothrow
-                    {
-                        return !isExtension && begin.idx == 0 && end.idx == 0 && length == 0;
-                    }
-
-                    @property type() pure const nothrow
-                    {
-                        if (isExtension)
-                        {
-                            return isFrontExtension ? Type.front : Type.back;
-                        }
-                        else if (isGap)
-                        {
-                            return Type.gap;
-                        }
-                        else
-                        {
-                            return Type.relabel;
-                        }
-                    }
-
-                    size_t totalInsertionLength(in size_t endContigLength) pure const nothrow
-                    {
-                        final switch (type)
-                        {
-                        case Type.gap:
-                        case Type.front:
-                        case Type.relabel:
-                            return begin.idx + length + endContigLength - end.idx;
-                        case Type.back:
-                            return begin.idx + length;
-                        }
-                    }
-                }
-
-                static enum ExportLanguage
-                {
-                    python,
-                }
-
-                const(Insertion)[] insertions;
-
-                /**
+    /**
         Transform a coordinate accordin to insertions. If the designated
         contig is not present in insertions then the original coordinate is
         returned. Otherwise the new coordinate is computed as follows:
@@ -3042,810 +3034,809 @@ alias Hit = Tuple!(
 
         Returns: transformed coordinate.
     */
-                Coordinate transform(in size_t contigId, in size_t idx) pure const
-                {
-                    return transform(Coordinate(contigId, idx));
-                }
+    Coordinate transform(in size_t contigId, in size_t idx) pure const
+    {
+        return transform(Coordinate(contigId, idx));
+    }
 
-                size_t transform(in size_t contigId) pure const
-                {
-                    return transform(Coordinate(contigId, 0)).contigId;
-                }
+    size_t transform(in size_t contigId) pure const
+    {
+        return transform(Coordinate(contigId, 0)).contigId;
+    }
 
-                /// ditto
-                Coordinate transform(in Coordinate input) pure const
-                {
-                    Coordinate result = input;
+    /// ditto
+    Coordinate transform(in Coordinate input) pure const
+    {
+        Coordinate result = input;
 
-                    // dfmt off
-                    auto insertionChain = insertions[]
-                        .retro
-                        .find!"a.end.contigId == b"(0 + input.contigId);
-                    // dfmt on
-                    size_t lastContigId = input.contigId;
+        // dfmt off
+        auto insertionChain = insertions[]
+            .retro
+            .find!"a.end.contigId == b"(0 + input.contigId);
+        // dfmt on
+        size_t lastContigId = input.contigId;
 
-                    foreach (insertion; insertionChain)
-                    {
-                        if (insertion.end.contigId != lastContigId)
-                        {
-                            break; // chain end reached
-                        }
+        foreach (insertion; insertionChain)
+        {
+            if (insertion.end.contigId != lastContigId)
+            {
+                break; // chain end reached
+            }
 
-                        // Note: reverse order of calculation to prevent negative
-                        // intermediate results
-                        result.idx += insertion.begin.idx; // (3)
-                        result.idx += insertion.length; // (2)
-                        result.idx -= insertion.end.idx; // (1)
-                        // Begin contig is the new reference
-                        result.contigId = insertion.begin.contigId;
-                        lastContigId = insertion.begin.contigId;
-                    }
+            // Note: reverse order of calculation to prevent negative
+            // intermediate results
+            result.idx += insertion.begin.idx; // (3)
+            result.idx += insertion.length; // (2)
+            result.idx -= insertion.end.idx; // (1)
+            // Begin contig is the new reference
+            result.contigId = insertion.begin.contigId;
+            lastContigId = insertion.begin.contigId;
+        }
 
-                    return result;
-                }
+        return result;
+    }
 
-                /// ditto
-                alias opCall = transform;
+    /// ditto
+    alias opCall = transform;
 
-                ///
-                unittest
-                {
-                    CoordinateTransform coordTransform;
-                    //           0        495 500 0   5  100   600
-                    // reference |----------+---| |---+--+-------|
-                    //                      |         |
-                    // insert               |---------|
-                    //                      0       100
-                    // dfmt off
-                    coordTransform.add(Insertion.make(
-                        Coordinate(1, 495),
-                        Coordinate(2, 5),
-                        100,
-                        ReadAlignmentType.gap,
-                    ));
-                    // dfmt on
+    ///
+    unittest
+    {
+        CoordinateTransform coordTransform;
+        //           0        495 500 0   5  100   600
+        // reference |----------+---| |---+--+-------|
+        //                      |         |
+        // insert               |---------|
+        //                      0       100
+        // dfmt off
+        coordTransform.add(Insertion.make(
+            Coordinate(1, 495),
+            Coordinate(2, 5),
+            100,
+            ReadAlignmentType.gap,
+        ));
+        // dfmt on
 
-                    auto inputCoord = Coordinate(2, 100);
-                    // dfmt off
-                    auto transformedCoord = Coordinate(
-                        1,
+        auto inputCoord = Coordinate(2, 100);
+        // dfmt off
+        auto transformedCoord = Coordinate(
+            1,
+            (
+                100
+                - 5    // coord on contig 2 relative to insertion point
+                + 100  // make relative to begin of insertion
+                + 495  // make relative to begin of contig 1
+            )
+        );
+        // dfmt on
+        assert(coordTransform.transform(inputCoord) == transformedCoord);
+        assert(coordTransform(inputCoord) == transformedCoord);
+    }
+
+    unittest
+    {
+        with (ReadAlignmentType)
+        {
+            CoordinateTransform coordTransform;
+            // dfmt off
+            coordTransform.add(Insertion.make(
+                Coordinate(100, 0),
+                Coordinate(101, 0),
+                0,
+                gap,
+            ));
+            coordTransform.add(Insertion.make(
+                Coordinate(1, 495),
+                Coordinate(2, 5),
+                100,
+                gap,
+            ));
+            coordTransform.add(Insertion.make(
+                Coordinate(2, 490),
+                Coordinate(5, 10),
+                150,
+                gap,
+            ));
+            coordTransform.add(Insertion.make(
+                Coordinate(5, 480),
+                Coordinate(3, 20),
+                200,
+                gap,
+            ));
+            coordTransform.add(Insertion.make(
+                Coordinate(102, 0),
+                Coordinate(103, 0),
+                0,
+                gap,
+            ));
+            coordTransform.add(Insertion.make(
+                Coordinate(200),
+                Coordinate(200, 5),
+                10,
+                front,
+            ));
+            coordTransform.add(Insertion.make(
+                Coordinate(201, 90),
+                Coordinate(201),
+                20,
+                back,
+            ));
+            coordTransform.add(Insertion.make(
+                Coordinate(202),
+                Coordinate(202, 15),
+                30,
+                front,
+            ));
+            coordTransform.add(Insertion.make(
+                Coordinate(202),
+                Coordinate(202, 20),
+                40,
+                front,
+            ));
+            coordTransform.add(Insertion.make(
+                Coordinate(203, 65),
+                Coordinate(203),
+                50,
+                back,
+            ));
+            coordTransform.add(Insertion.make(
+                Coordinate(203, 60),
+                Coordinate(203),
+                60,
+                back,
+            ));
+            coordTransform.add(Insertion.makeRelabel(
+                1024,
+                1000,
+            ));
+            // dfmt on
+
+            {
+                // Case: contig not present in insertions
+                auto inputCoord = Coordinate(1337, 42);
+                assert(coordTransform.transform(inputCoord) == inputCoord);
+            }
+            {
+                // Case: contig is never end of an insertions
+                auto inputCoord = Coordinate(1, 64);
+                assert(coordTransform.transform(inputCoord) == inputCoord);
+            }
+            {
+                // Case: contig is end of the last insertions of a reverse chain.
+                auto inputCoord = Coordinate(2, 64);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    1,
+                    (
+                          64   // last and only insertion in chain
+                        - 5    // (1)
+                        + 100  // (2)
+                        + 495  // (3)
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+            {
+                // Case: contig is end of an inner insertions, ie. there are
+                //       insertions before and after in the chain.
+                auto inputCoord = Coordinate(5, 64);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    1,
+                    (
                         (
-                            100
-                            - 5    // coord on contig 2 relative to insertion point
-                            + 100  // make relative to begin of insertion
-                            + 495  // make relative to begin of contig 1
-                        )
-                    );
-                    // dfmt on
-                    assert(coordTransform.transform(inputCoord) == transformedCoord);
-                    assert(coordTransform(inputCoord) == transformedCoord);
-                }
+                              64   // last insertion in chain
+                            - 5    // (1)
+                            + 100  // (2)
+                            + 495  // (3)
+                        )      // first insertion in chain
+                        - 10    // (1)
+                        + 150  // (2)
+                        + 490  // (3)
+                    )
 
-                unittest
-                {
-                    with (ReadAlignmentType)
-                    {
-                        CoordinateTransform coordTransform;
-                        // dfmt off
-                        coordTransform.add(Insertion.make(
-                            Coordinate(100, 0),
-                            Coordinate(101, 0),
-                            0,
-                            gap,
-                        ));
-                        coordTransform.add(Insertion.make(
-                            Coordinate(1, 495),
-                            Coordinate(2, 5),
-                            100,
-                            gap,
-                        ));
-                        coordTransform.add(Insertion.make(
-                            Coordinate(2, 490),
-                            Coordinate(5, 10),
-                            150,
-                            gap,
-                        ));
-                        coordTransform.add(Insertion.make(
-                            Coordinate(5, 480),
-                            Coordinate(3, 20),
-                            200,
-                            gap,
-                        ));
-                        coordTransform.add(Insertion.make(
-                            Coordinate(102, 0),
-                            Coordinate(103, 0),
-                            0,
-                            gap,
-                        ));
-                        coordTransform.add(Insertion.make(
-                            Coordinate(200),
-                            Coordinate(200, 5),
-                            10,
-                            front,
-                        ));
-                        coordTransform.add(Insertion.make(
-                            Coordinate(201, 90),
-                            Coordinate(201),
-                            20,
-                            back,
-                        ));
-                        coordTransform.add(Insertion.make(
-                            Coordinate(202),
-                            Coordinate(202, 15),
-                            30,
-                            front,
-                        ));
-                        coordTransform.add(Insertion.make(
-                            Coordinate(202),
-                            Coordinate(202, 20),
-                            40,
-                            front,
-                        ));
-                        coordTransform.add(Insertion.make(
-                            Coordinate(203, 65),
-                            Coordinate(203),
-                            50,
-                            back,
-                        ));
-                        coordTransform.add(Insertion.make(
-                            Coordinate(203, 60),
-                            Coordinate(203),
-                            60,
-                            back,
-                        ));
-                        coordTransform.add(Insertion.makeRelabel(
-                            1024,
-                            1000,
-                        ));
-                        // dfmt on
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+            {
+                // Case: contig is end of the first insertions of a reverse chain.
+                auto inputCoord = Coordinate(3, 64);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    1,
+                    (
+                        (
+                            (
+                                  64   // last insertion in chain
+                                - 5    // (1)
+                                + 100  // (2)
+                                + 495  // (3)
+                            )      // second insertion in chain
+                            - 10    // (1)
+                            + 150  // (2)
+                            + 490  // (3)
+                        )      // first insertion in chain
+                        - 20    // (1)
+                        + 200  // (2)
+                        + 480  // (3)
+                    )
 
-                        {
-                            // Case: contig not present in insertions
-                            auto inputCoord = Coordinate(1337, 42);
-                            assert(coordTransform.transform(inputCoord) == inputCoord);
-                        }
-                        {
-                            // Case: contig is never end of an insertions
-                            auto inputCoord = Coordinate(1, 64);
-                            assert(coordTransform.transform(inputCoord) == inputCoord);
-                        }
-                        {
-                            // Case: contig is end of the last insertions of a reverse chain.
-                            auto inputCoord = Coordinate(2, 64);
-                            // dfmt off
-                            auto transformedCoord = Coordinate(
-                                1,
-                                (
-                                      64   // last and only insertion in chain
-                                    - 5    // (1)
-                                    + 100  // (2)
-                                    + 495  // (3)
-                                )
-                            );
-                            // dfmt on
-                            assert(coordTransform.transform(inputCoord) == transformedCoord);
-                        }
-                        {
-                            // Case: contig is end of an inner insertions, ie. there are
-                            //       insertions before and after in the chain.
-                            auto inputCoord = Coordinate(5, 64);
-                            // dfmt off
-                            auto transformedCoord = Coordinate(
-                                1,
-                                (
-                                    (
-                                          64   // last insertion in chain
-                                        - 5    // (1)
-                                        + 100  // (2)
-                                        + 495  // (3)
-                                    )      // first insertion in chain
-                                    - 10    // (1)
-                                    + 150  // (2)
-                                    + 490  // (3)
-                                )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+            {
+                // Case: coordinate on rejected part of end contig, ie. `x < ie`.
+                auto inputCoord = Coordinate(2, 3);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    1,
+                    (
+                          3    // last and only insertion in chain
+                        - 5    // (1)
+                        + 100  // (2)
+                        + 495  // (3)
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
 
-                            );
-                            // dfmt on
-                            assert(coordTransform.transform(inputCoord) == transformedCoord);
-                        }
-                        {
-                            // Case: contig is end of the first insertions of a reverse chain.
-                            auto inputCoord = Coordinate(3, 64);
-                            // dfmt off
-                            auto transformedCoord = Coordinate(
-                                1,
-                                (
-                                    (
-                                        (
-                                              64   // last insertion in chain
-                                            - 5    // (1)
-                                            + 100  // (2)
-                                            + 495  // (3)
-                                        )      // second insertion in chain
-                                        - 10    // (1)
-                                        + 150  // (2)
-                                        + 490  // (3)
-                                    )      // first insertion in chain
-                                    - 20    // (1)
-                                    + 200  // (2)
-                                    + 480  // (3)
-                                )
+            {
+                // Case: simple front extension
+                auto inputCoord = Coordinate(200, 3);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    200,
+                    (
+                          3    // only extension (in chain)
+                        - 5    // (1)
+                        + 10   // (2)
+                        + 0    // (3)
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+            {
+                // Case: simple back extension
+                auto inputCoord = Coordinate(201, 3);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    201,
+                    (
+                          3    // only extension (in chain)
+                        - 110  // (1)
+                        + 20   // (2)
+                        + 90   // (3)
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+            {
+                // Case: double front extension
+                auto inputCoord = Coordinate(202, 3);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    202,
+                    (
+                        (
+                              3    // last extension (in chain)
+                            - 15   // (1)
+                            + 30   // (2)
+                            +  0   // (3)
+                        )     // first extension (in chain)
+                        - 20  // (1)
+                        + 40  // (2)
+                        +  0  // (3)
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+            {
+                // Case: double back extension
+                auto inputCoord = Coordinate(203, 3);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    203,
+                    (
+                        (
+                              3    // last extension (in chain)
+                            - 115  // (1)
+                            + 50   // (2)
+                            + 65   // (3)
+                        )      // first extension (in chain)
+                        - 120  // (1)
+                        + 60   // (2)
+                        + 60   // (3)
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+            {
+                // Case: relabel
+                auto inputCoord = Coordinate(1024, 3);
+                auto transformedCoord = Coordinate(1000, 3);
 
-                            );
-                            // dfmt on
-                            assert(coordTransform.transform(inputCoord) == transformedCoord);
-                        }
-                        {
-                            // Case: coordinate on rejected part of end contig, ie. `x < ie`.
-                            auto inputCoord = Coordinate(2, 3);
-                            // dfmt off
-                            auto transformedCoord = Coordinate(
-                                1,
-                                (
-                                      3    // last and only insertion in chain
-                                    - 5    // (1)
-                                    + 100  // (2)
-                                    + 495  // (3)
-                                )
-                            );
-                            // dfmt on
-                            assert(coordTransform.transform(inputCoord) == transformedCoord);
-                        }
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
 
-                        {
-                            // Case: simple front extension
-                            auto inputCoord = Coordinate(200, 3);
-                            // dfmt off
-                            auto transformedCoord = Coordinate(
-                                200,
-                                (
-                                      3    // only extension (in chain)
-                                    - 5    // (1)
-                                    + 10   // (2)
-                                    + 0    // (3)
-                                )
-                            );
-                            // dfmt on
-                            assert(coordTransform.transform(inputCoord) == transformedCoord);
-                        }
-                        {
-                            // Case: simple back extension
-                            auto inputCoord = Coordinate(201, 3);
-                            // dfmt off
-                            auto transformedCoord = Coordinate(
-                                201,
-                                (
-                                      3    // only extension (in chain)
-                                    - 110  // (1)
-                                    + 20   // (2)
-                                    + 90   // (3)
-                                )
-                            );
-                            // dfmt on
-                            assert(coordTransform.transform(inputCoord) == transformedCoord);
-                        }
-                        {
-                            // Case: double front extension
-                            auto inputCoord = Coordinate(202, 3);
-                            // dfmt off
-                            auto transformedCoord = Coordinate(
-                                202,
-                                (
-                                    (
-                                          3    // last extension (in chain)
-                                        - 15   // (1)
-                                        + 30   // (2)
-                                        +  0   // (3)
-                                    )     // first extension (in chain)
-                                    - 20  // (1)
-                                    + 40  // (2)
-                                    +  0  // (3)
-                                )
-                            );
-                            // dfmt on
-                            assert(coordTransform.transform(inputCoord) == transformedCoord);
-                        }
-                        {
-                            // Case: double back extension
-                            auto inputCoord = Coordinate(203, 3);
-                            // dfmt off
-                            auto transformedCoord = Coordinate(
-                                203,
-                                (
-                                    (
-                                          3    // last extension (in chain)
-                                        - 115  // (1)
-                                        + 50   // (2)
-                                        + 65   // (3)
-                                    )      // first extension (in chain)
-                                    - 120  // (1)
-                                    + 60   // (2)
-                                    + 60   // (3)
-                                )
-                            );
-                            // dfmt on
-                            assert(coordTransform.transform(inputCoord) == transformedCoord);
-                        }
-                        {
-                            // Case: relabel
-                            auto inputCoord = Coordinate(1024, 3);
-                            auto transformedCoord = Coordinate(1000, 3);
+            // dfmt off
+            coordTransform.add(Insertion.make(
+                Coordinate(203, 115),
+                Coordinate(202, 5),
+                50,
+                gap,
+            ));
+            // dfmt on
 
-                            assert(coordTransform.transform(inputCoord) == transformedCoord);
-                        }
+            {
+                // Case: double front extension + double back extension + gap spanned
+                auto inputCoord = Coordinate(202, 3);
+                // dfmt off
+                auto transformedCoord = Coordinate(
+                    203,
+                    (
+                        (
+                            (
+                                  3    // last front extension (in chain)
+                                - 15   // (1)
+                                + 30   // (2)
+                                +  0   // (3)
+                            )     // first front extension (in chain)
+                            - 20  // (1)
+                            + 40  // (2)
+                            +  0  // (3)
+                        )      // only gap (in chain)
+                        -   5  // (1)
+                        +  50  // (2)
+                        + 115  // (3)
+                    )
+                );
+                // dfmt on
+                assert(coordTransform.transform(inputCoord) == transformedCoord);
+            }
+        }
+    }
 
-                        // dfmt off
-                        coordTransform.add(Insertion.make(
-                            Coordinate(203, 115),
-                            Coordinate(202, 5),
-                            50,
-                            gap,
-                        ));
-                        // dfmt on
-
-                        {
-                            // Case: double front extension + double back extension + gap spanned
-                            auto inputCoord = Coordinate(202, 3);
-                            // dfmt off
-                            auto transformedCoord = Coordinate(
-                                203,
-                                (
-                                    (
-                                        (
-                                              3    // last front extension (in chain)
-                                            - 15   // (1)
-                                            + 30   // (2)
-                                            +  0   // (3)
-                                        )     // first front extension (in chain)
-                                        - 20  // (1)
-                                        + 40  // (2)
-                                        +  0  // (3)
-                                    )      // only gap (in chain)
-                                    -   5  // (1)
-                                    +  50  // (2)
-                                    + 115  // (3)
-                                )
-                            );
-                            // dfmt on
-                            assert(coordTransform.transform(inputCoord) == transformedCoord);
-                        }
-                    }
-                }
-
-                /**
+    /**
         Add an insertion to this transform.
 
         Returns: this tranform.
         See_Also: `CoordinateTransform.transform`.
     */
-                CoordinateTransform add(in Insertion newInsertion) pure
-                {
-                    size_t idx = getInsertionIndex(newInsertion);
+    CoordinateTransform add(in Insertion newInsertion) pure
+    {
+        size_t idx = getInsertionIndex(newInsertion);
 
-                    if (idx == 0)
-                    {
-                        insertions = [newInsertion] ~ insertions;
-                    }
-                    else if (idx == insertions.length)
-                    {
-                        insertions ~= newInsertion;
-                    }
-                    else
-                    {
-                        insertions = insertions[0 .. idx] ~ [newInsertion] ~ insertions[idx .. $];
-                    }
+        if (idx == 0)
+        {
+            insertions = [newInsertion] ~ insertions;
+        }
+        else if (idx == insertions.length)
+        {
+            insertions ~= newInsertion;
+        }
+        else
+        {
+            insertions = insertions[0 .. idx] ~ [newInsertion] ~ insertions[idx .. $];
+        }
 
-                    return this;
-                }
+        return this;
+    }
 
-                /// ditto
-                void opOpAssign(string op)(in Insertion newInsertion) pure
-                        if (op == "~")
-                {
-                    this.add(newInsertion);
-                }
+    /// ditto
+    void opOpAssign(string op)(in Insertion newInsertion) pure if (op == "~")
+    {
+        this.add(newInsertion);
+    }
 
-                unittest
-                {
-                    with (ReadAlignmentType)
-                    {
-                        Insertion getDummyInsertion(in size_t beginContigId, in size_t endContigId, in ReadAlignmentType insertionType = gap)
-                        {
-                            static immutable dummyLength = 42;
+    unittest
+    {
+        with (ReadAlignmentType)
+        {
+            Insertion getDummyInsertion(in size_t beginContigId,
+                    in size_t endContigId, in ReadAlignmentType insertionType = gap)
+            {
+                static immutable dummyLength = 42;
 
-                            return Insertion.make(Coordinate(beginContigId,
-                                    dummyLength / 2), Coordinate(endContigId,
-                                    dummyLength / 2), dummyLength, insertionType);
-                        }
+                return Insertion.make(Coordinate(beginContigId, dummyLength / 2),
+                        Coordinate(endContigId, dummyLength / 2), dummyLength, insertionType);
+            }
 
-                        CoordinateTransform getDummyTransform()
-                        {
-                            CoordinateTransform coordTransform;
+            CoordinateTransform getDummyTransform()
+            {
+                CoordinateTransform coordTransform;
 
-                            // dfmt off
-                            coordTransform.insertions = [
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                            ];
-                            // dfmt on
+                // dfmt off
+                coordTransform.insertions = [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ];
+                // dfmt on
 
-                            return coordTransform;
-                        }
+                return coordTransform;
+            }
 
-                        {
-                            auto coordTransform = getDummyTransform();
-                            // Case 1 (Gap): newInsertion fits between two existing insertions
-                            // dfmt off
-                            coordTransform.add(getDummyInsertion(2, 3));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(2, 3),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                            ]);
-                            coordTransform.add(getDummyInsertion(8, 6));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(2, 3),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(8, 6),
-                                getDummyInsertion(6, 5),
-                            ]);
-                            // dfmt on
-                        }
-                        {
-                            auto coordTransform = getDummyTransform();
-                            // Case 2* (Gap): newInsertion extends an existing insertion chain in the front
-                            // dfmt off
-                            coordTransform.add(getDummyInsertion(42, 1));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(42, 1),
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                            ]);
-                            // Case 2 (Gap): newInsertion extends an existing insertion chain in the front
-                            coordTransform.add(getDummyInsertion(42, 9));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(42, 1),
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(42, 9),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                            ]);
-                            // dfmt on
-                        }
-                        {
-                            auto coordTransform = getDummyTransform();
-                            // Case 2* (Extension): newInsertion extends an existing insertion chain in the front
-                            // dfmt off
-                            coordTransform.add(getDummyInsertion(1, 1, front));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 1, front),
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                            ]);
-                            coordTransform.add(getDummyInsertion(1, 1, front));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 1, front),
-                                getDummyInsertion(1, 1, front),
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                            ]);
-                            // Case 2 (Extension): newInsertion extends an existing insertion chain in the front
-                            coordTransform.add(getDummyInsertion(9, 9, front));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 1, front),
-                                getDummyInsertion(1, 1, front),
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(9, 9, front),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                            ]);
-                            coordTransform.add(getDummyInsertion(9, 9, front));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 1, front),
-                                getDummyInsertion(1, 1, front),
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(9, 9, front),
-                                getDummyInsertion(9, 9, front),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                            ]);
-                            // dfmt on
-                        }
-                        {
-                            auto coordTransform = getDummyTransform();
-                            // Case 3 (Gap): newInsertion extends an existing insertion chain in the back
-                            // dfmt off
-                            coordTransform.add(getDummyInsertion(4, 42));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(4, 42),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                            ]);
-                            coordTransform.add(getDummyInsertion(5, 42));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(4, 42),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                                getDummyInsertion(5, 42),
-                            ]);
-                            // dfmt on
-                        }
-                        {
-                            auto coordTransform = getDummyTransform();
-                            // Case 3 (Extension): newInsertion extends an existing insertion chain in the back
-                            // dfmt off
-                            coordTransform.add(getDummyInsertion(4, 4, back));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(4, 4, back),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                            ]);
-                            coordTransform.add(getDummyInsertion(4, 4, back));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(4, 4, back),
-                                getDummyInsertion(4, 4, back),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                            ]);
-                            coordTransform.add(getDummyInsertion(5, 5, back));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(4, 4, back),
-                                getDummyInsertion(4, 4, back),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                                getDummyInsertion(5, 5, back),
-                            ]);
-                            coordTransform.add(getDummyInsertion(5, 5, back));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(4, 4, back),
-                                getDummyInsertion(4, 4, back),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                                getDummyInsertion(5, 5, back),
-                                getDummyInsertion(5, 5, back),
-                            ]);
-                            // dfmt on
-                        }
-                        {
-                            auto coordTransform = getDummyTransform();
-                            // Case 4 (Gap): open new insertion chain
-                            // dfmt off
-                            coordTransform.add(getDummyInsertion(1337, 42));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                                getDummyInsertion(1337, 42),
-                            ]);
-                            coordTransform.add(getDummyInsertion(1337, 42));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                                getDummyInsertion(1337, 42),
-                                getDummyInsertion(1337, 42),
-                            ]);
-                            // dfmt on
-                        }
-                        {
-                            auto coordTransform = getDummyTransform();
-                            // Case 4 (Extension): open new insertion chain
-                            // dfmt off
-                            coordTransform.add(getDummyInsertion(1337, 1337, front));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                                getDummyInsertion(1337, 1337, front),
-                            ]);
-                            coordTransform.add(getDummyInsertion(42, 42, back));
-                            assert(coordTransform.insertions == [
-                                getDummyInsertion(1, 2),
-                                getDummyInsertion(3, 4),
-                                getDummyInsertion(9, 8),
-                                getDummyInsertion(6, 5),
-                                getDummyInsertion(1337, 1337, front),
-                                getDummyInsertion(42, 42, back),
-                            ]);
-                            // dfmt on
-                        }
-                        {
-                            CoordinateTransform emptyCoordTransform;
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 1 (Gap): newInsertion fits between two existing insertions
+                // dfmt off
+                coordTransform.add(getDummyInsertion(2, 3));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(2, 3),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                coordTransform.add(getDummyInsertion(8, 6));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(2, 3),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(8, 6),
+                    getDummyInsertion(6, 5),
+                ]);
+                // dfmt on
+            }
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 2* (Gap): newInsertion extends an existing insertion chain in the front
+                // dfmt off
+                coordTransform.add(getDummyInsertion(42, 1));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(42, 1),
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                // Case 2 (Gap): newInsertion extends an existing insertion chain in the front
+                coordTransform.add(getDummyInsertion(42, 9));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(42, 1),
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(42, 9),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                // dfmt on
+            }
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 2* (Extension): newInsertion extends an existing insertion chain in the front
+                // dfmt off
+                coordTransform.add(getDummyInsertion(1, 1, front));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 1, front),
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                coordTransform.add(getDummyInsertion(1, 1, front));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 1, front),
+                    getDummyInsertion(1, 1, front),
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                // Case 2 (Extension): newInsertion extends an existing insertion chain in the front
+                coordTransform.add(getDummyInsertion(9, 9, front));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 1, front),
+                    getDummyInsertion(1, 1, front),
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 9, front),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                coordTransform.add(getDummyInsertion(9, 9, front));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 1, front),
+                    getDummyInsertion(1, 1, front),
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 9, front),
+                    getDummyInsertion(9, 9, front),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                // dfmt on
+            }
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 3 (Gap): newInsertion extends an existing insertion chain in the back
+                // dfmt off
+                coordTransform.add(getDummyInsertion(4, 42));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(4, 42),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                coordTransform.add(getDummyInsertion(5, 42));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(4, 42),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion(5, 42),
+                ]);
+                // dfmt on
+            }
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 3 (Extension): newInsertion extends an existing insertion chain in the back
+                // dfmt off
+                coordTransform.add(getDummyInsertion(4, 4, back));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(4, 4, back),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                coordTransform.add(getDummyInsertion(4, 4, back));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(4, 4, back),
+                    getDummyInsertion(4, 4, back),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                ]);
+                coordTransform.add(getDummyInsertion(5, 5, back));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(4, 4, back),
+                    getDummyInsertion(4, 4, back),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion(5, 5, back),
+                ]);
+                coordTransform.add(getDummyInsertion(5, 5, back));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(4, 4, back),
+                    getDummyInsertion(4, 4, back),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion(5, 5, back),
+                    getDummyInsertion(5, 5, back),
+                ]);
+                // dfmt on
+            }
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 4 (Gap): open new insertion chain
+                // dfmt off
+                coordTransform.add(getDummyInsertion(1337, 42));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion(1337, 42),
+                ]);
+                coordTransform.add(getDummyInsertion(1337, 42));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion(1337, 42),
+                    getDummyInsertion(1337, 42),
+                ]);
+                // dfmt on
+            }
+            {
+                auto coordTransform = getDummyTransform();
+                // Case 4 (Extension): open new insertion chain
+                // dfmt off
+                coordTransform.add(getDummyInsertion(1337, 1337, front));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion(1337, 1337, front),
+                ]);
+                coordTransform.add(getDummyInsertion(42, 42, back));
+                assert(coordTransform.insertions == [
+                    getDummyInsertion(1, 2),
+                    getDummyInsertion(3, 4),
+                    getDummyInsertion(9, 8),
+                    getDummyInsertion(6, 5),
+                    getDummyInsertion(1337, 1337, front),
+                    getDummyInsertion(42, 42, back),
+                ]);
+                // dfmt on
+            }
+            {
+                CoordinateTransform emptyCoordTransform;
 
-                            // Case 4* (Gap): open new insertion chain
-                            assert(emptyCoordTransform.add(getDummyInsertion(1337,
-                                    42)).insertions == [getDummyInsertion(1337, 42)]);
-                        }
-                        {
-                            CoordinateTransform emptyCoordTransform;
+                // Case 4* (Gap): open new insertion chain
+                assert(emptyCoordTransform.add(getDummyInsertion(1337, 42))
+                        .insertions == [getDummyInsertion(1337, 42)]);
+            }
+            {
+                CoordinateTransform emptyCoordTransform;
 
-                            // Case 4* (Extension): open new insertion chain
-                            assert(emptyCoordTransform.add(getDummyInsertion(1337, 1337, front))
-                                    .insertions == [getDummyInsertion(1337, 1337, front)]);
-                        }
-                        {
-                            CoordinateTransform emptyCoordTransform;
+                // Case 4* (Extension): open new insertion chain
+                assert(emptyCoordTransform.add(getDummyInsertion(1337, 1337,
+                        front)).insertions == [getDummyInsertion(1337, 1337, front)]);
+            }
+            {
+                CoordinateTransform emptyCoordTransform;
 
-                            // Operator Style
-                            emptyCoordTransform ~= getDummyInsertion(1337, 42);
-                            assert(emptyCoordTransform.insertions == [getDummyInsertion(1337, 42)]);
-                        }
-                    }
-                }
+                // Operator Style
+                emptyCoordTransform ~= getDummyInsertion(1337, 42);
+                assert(emptyCoordTransform.insertions == [getDummyInsertion(1337, 42)]);
+            }
+        }
+    }
 
-                private size_t getInsertionIndex(in Insertion newInsertion) pure const
-                {
-                    // dfmt off
-                    if (
-                        // Case 4*: open new insertion chain
-                        insertions.length == 0 ||
-                        // Case 2*: newInsertion extends an existing insertion chain in the front
-                        newInsertion.end.contigId == insertions[0].begin.contigId
-                    )
-                    {
-                        return 0;
-                    }
-                    // dfmt on
-                    // Case 3*: newInsertion extends an existing insertion chain in the back
-                    // Case 4**: open new insertion chain
-                    else if (insertions.length == 1)
-                    {
-                        // Note: this case is needed in order for `slice(2)` to always yield
-                        //       pairs (of size two).
-                        return 1;
-                    }
+    private size_t getInsertionIndex(in Insertion newInsertion) pure const
+    {
+        // dfmt off
+        if (
+            // Case 4*: open new insertion chain
+            insertions.length == 0 ||
+            // Case 2*: newInsertion extends an existing insertion chain in the front
+            newInsertion.end.contigId == insertions[0].begin.contigId
+        )
+        {
+            return 0;
+        }
+        // dfmt on
+        // Case 3*: newInsertion extends an existing insertion chain in the back
+        // Case 4**: open new insertion chain
+        else if (insertions.length == 1)
+        {
+            // Note: this case is needed in order for `slice(2)` to always yield
+            //       pairs (of size two).
+            return 1;
+        }
 
-                    size_t case1Result = size_t.max;
-                    size_t case2Result = size_t.max;
-                    size_t case3Result = size_t.max;
+        size_t case1Result = size_t.max;
+        size_t case2Result = size_t.max;
+        size_t case3Result = size_t.max;
 
-                    foreach (i, insAB; insertions.slide(2).enumerate)
-                    {
-                        auto insA = insAB[0];
-                        auto insB = insAB[1];
+        foreach (i, insAB; insertions.slide(2).enumerate)
+        {
+            auto insA = insAB[0];
+            auto insB = insAB[1];
 
-                        // Case 1: newInsertion fits between two existing insertions; take first result
-                        if (case1Result == size_t.max && newInsertion.begin.contigId == insA.end.contigId && newInsertion.end.contigId == insB.begin.contigId)
-                        {
-                            case1Result = i + 1;
-                        }
+            // Case 1: newInsertion fits between two existing insertions; take first result
+            if (case1Result == size_t.max && newInsertion.begin.contigId == insA.end.contigId
+                    && newInsertion.end.contigId == insB.begin.contigId)
+            {
+                case1Result = i + 1;
+            }
 
-                        // Case 2: newInsertion extends an existing insertion chain in the front; take first result
-                        if (case2Result == size_t.max && newInsertion.begin.contigId != insA.end.contigId && newInsertion.end.contigId == insB.begin.contigId)
-                        {
-                            case2Result = i + 1;
-                        }
+            // Case 2: newInsertion extends an existing insertion chain in the front; take first result
+            if (case2Result == size_t.max && newInsertion.begin.contigId != insA.end.contigId
+                    && newInsertion.end.contigId == insB.begin.contigId)
+            {
+                case2Result = i + 1;
+            }
 
-                        // Case 3: newInsertion extends an existing insertion chain in the back; take last result
-                        if (newInsertion.begin.contigId == insA.end.contigId && newInsertion.end.contigId != insB.begin.contigId)
-                        {
-                            case3Result = i + 1;
-                        }
-                    }
+            // Case 3: newInsertion extends an existing insertion chain in the back; take last result
+            if (newInsertion.begin.contigId == insA.end.contigId
+                    && newInsertion.end.contigId != insB.begin.contigId)
+            {
+                case3Result = i + 1;
+            }
+        }
 
-                    if (case1Result != size_t.max)
-                        return case1Result;
-                    else if (case2Result != size_t.max)
-                        return case2Result;
-                    else if (case3Result != size_t.max)
-                        return case3Result;
+        if (case1Result != size_t.max)
+            return case1Result;
+        else if (case2Result != size_t.max)
+            return case2Result;
+        else if (case3Result != size_t.max)
+            return case3Result;
 
-                    // Case 4: open new insertion chain
-                    return insertions.length;
-                }
+        // Case 4: open new insertion chain
+        return insertions.length;
+    }
 
-                unittest
-                {
-                    Insertion getDummyInsertion(in size_t beginContigId, in size_t endContigId)
-                    {
-                        return Insertion(Coordinate(beginContigId, 0),
-                                Coordinate(endContigId, 0), 0);
-                    }
+    unittest
+    {
+        Insertion getDummyInsertion(in size_t beginContigId, in size_t endContigId)
+        {
+            return Insertion(Coordinate(beginContigId, 0), Coordinate(endContigId, 0), 0);
+        }
 
-                    CoordinateTransform coordTransform;
+        CoordinateTransform coordTransform;
 
-                    // dfmt off
-                    coordTransform.insertions = [
-                        getDummyInsertion(1, 2),
-                        getDummyInsertion(3, 4),
-                        getDummyInsertion(9, 8),
-                        getDummyInsertion(6, 5),
-                    ];
-                    // dfmt on
-                    {
-                        // Case 1: newInsertion fits between two existing insertions
-                        assert(coordTransform.getInsertionIndex(getDummyInsertion(2, 3)) == 1);
-                        assert(coordTransform.getInsertionIndex(getDummyInsertion(8, 6)) == 3);
-                    }
-                    {
-                        // Case 2*: newInsertion extends an existing insertion chain in the front
-                        assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 1)) == 0);
-                        // Case 2: newInsertion extends an existing insertion chain in the front
-                        assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 9)) == 2);
-                    }
-                    {
-                        // Case 3: newInsertion extends an existing insertion chain in the front
-                        assert(coordTransform.getInsertionIndex(getDummyInsertion(4, 42)) == 2);
-                        assert(coordTransform.getInsertionIndex(getDummyInsertion(5, 42)) == 4);
-                    }
-                    {
-                        // Case 4: open new insertion chain
-                        assert(coordTransform.getInsertionIndex(getDummyInsertion(1337, 42)) == 4);
-                        assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 1337)) == 4);
-                    }
-                    {
-                        CoordinateTransform emptyCoordTransform;
+        // dfmt off
+        coordTransform.insertions = [
+            getDummyInsertion(1, 2),
+            getDummyInsertion(3, 4),
+            getDummyInsertion(9, 8),
+            getDummyInsertion(6, 5),
+        ];
+        // dfmt on
+        {
+            // Case 1: newInsertion fits between two existing insertions
+            assert(coordTransform.getInsertionIndex(getDummyInsertion(2, 3)) == 1);
+            assert(coordTransform.getInsertionIndex(getDummyInsertion(8, 6)) == 3);
+        }
+        {
+            // Case 2*: newInsertion extends an existing insertion chain in the front
+            assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 1)) == 0);
+            // Case 2: newInsertion extends an existing insertion chain in the front
+            assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 9)) == 2);
+        }
+        {
+            // Case 3: newInsertion extends an existing insertion chain in the front
+            assert(coordTransform.getInsertionIndex(getDummyInsertion(4, 42)) == 2);
+            assert(coordTransform.getInsertionIndex(getDummyInsertion(5, 42)) == 4);
+        }
+        {
+            // Case 4: open new insertion chain
+            assert(coordTransform.getInsertionIndex(getDummyInsertion(1337, 42)) == 4);
+            assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 1337)) == 4);
+        }
+        {
+            CoordinateTransform emptyCoordTransform;
 
-                        // Case 4*: open new insertion chain
-                        assert(emptyCoordTransform.getInsertionIndex(getDummyInsertion(1337,
-                                42)) == 0);
-                        assert(emptyCoordTransform.getInsertionIndex(getDummyInsertion(42,
-                                1337)) == 0);
-                    }
-                    coordTransform.insertions = [getDummyInsertion(1, 2)];
-                    {
-                        // Case 3*: newInsertion extends an existing insertion chain in the front
-                        assert(coordTransform.getInsertionIndex(getDummyInsertion(2, 42)) == 1);
-                    }
-                    {
-                        // Case 4**: open new insertion chain
-                        assert(coordTransform.getInsertionIndex(getDummyInsertion(1337, 42)) == 1);
-                    }
-                }
+            // Case 4*: open new insertion chain
+            assert(emptyCoordTransform.getInsertionIndex(getDummyInsertion(1337, 42)) == 0);
+            assert(emptyCoordTransform.getInsertionIndex(getDummyInsertion(42, 1337)) == 0);
+        }
+        coordTransform.insertions = [getDummyInsertion(1, 2)];
+        {
+            // Case 3*: newInsertion extends an existing insertion chain in the front
+            assert(coordTransform.getInsertionIndex(getDummyInsertion(2, 42)) == 1);
+        }
+        {
+            // Case 4**: open new insertion chain
+            assert(coordTransform.getInsertionIndex(getDummyInsertion(1337, 42)) == 1);
+        }
+    }
 
-                string toString(in ExportLanguage lang = ExportLanguage.python) pure const
-                {
-                    immutable estimatePrefaceLength = 250;
-                    immutable estimateLengthPerInsertion = 100;
-                    immutable estimateEpilogueLength = 2000;
+    string toString(in ExportLanguage lang = ExportLanguage.python) pure const
+    {
+        immutable estimatePrefaceLength = 250;
+        immutable estimateLengthPerInsertion = 100;
+        immutable estimateEpilogueLength = 2000;
 
-                    auto result = appender!string;
-                    result.reserve(estimatePrefaceLength + estimateLengthPerInsertion
-                            * insertions.length + estimateEpilogueLength);
+        auto result = appender!string;
+        result.reserve(estimatePrefaceLength + estimateLengthPerInsertion
+                * insertions.length + estimateEpilogueLength);
 
-                    final switch (lang)
-                    {
-                    case ExportLanguage.python:
-                        buildPythonString(result);
-                        break;
-                    }
+        final switch (lang)
+        {
+        case ExportLanguage.python:
+            buildPythonString(result);
+            break;
+        }
 
-                    return result.data;
-                }
+        return result.data;
+    }
 
-                private void buildPythonString(out Appender!string builder) pure const
-                {
-                    immutable preface = q"EOF
+    private void buildPythonString(out Appender!string builder) pure const
+    {
+        immutable preface = q"EOF
             from __future__ import print_function
             from collections import namedtuple
             from sys import argv, exit
@@ -3855,7 +3846,7 @@ alias Hit = Tuple!(
 
             INSERTIONS = [
 EOF".outdent;
-                    immutable epilogue = q"EOF
+        immutable epilogue = q"EOF
             ]
 
 
@@ -3915,7 +3906,7 @@ EOF".outdent;
                 transformed = transform(contig_id, idx)
                 print("{} {}".format(transformed.contig_id, transformed.idx))
 EOF".outdent;
-                    immutable insertionTemplate = q"EOF
+        immutable insertionTemplate = q"EOF
             Insertion(
                 Coordinate(%d, %d),
                 Coordinate(%d, %d),
@@ -3923,88 +3914,88 @@ EOF".outdent;
             ),
 EOF".outdent.indent(4);
 
-                    builder ~= preface;
-                    foreach (insertion; insertions)
-                    {
-                        // dfmt off
-                        formattedWrite!insertionTemplate(
-                            builder,
-                            insertion.begin.contigId,
-                            insertion.begin.idx,
-                            insertion.end.contigId,
-                            insertion.end.idx,
-                            insertion.length,
-                        );
-                        // dfmt on
-                    }
-                    builder ~= epilogue;
-                }
-            }
+        builder ~= preface;
+        foreach (insertion; insertions)
+        {
+            // dfmt off
+            formattedWrite!insertionTemplate(
+                builder,
+                insertion.begin.contigId,
+                insertion.begin.idx,
+                insertion.end.contigId,
+                insertion.end.idx,
+                insertion.length,
+            );
+            // dfmt on
+        }
+        builder ~= epilogue;
+    }
+}
 
-            /// Access contigs distributed over various DBs by ID.
-            struct DBUnion
-            {
-                alias DBReference = Tuple!(string, "dbFile", size_t, "contigId");
+/// Access contigs distributed over various DBs by ID.
+struct DBUnion
+{
+    alias DBReference = Tuple!(string, "dbFile", size_t, "contigId");
 
-                string baseDb;
-                DBReference[size_t] overlayDbs;
+    string baseDb;
+    DBReference[size_t] overlayDbs;
 
-                /// Return the `dbFile` for `contigId`.
-                DBReference opIndex(in size_t contigId) pure const
-                {
-                    return overlayDbs.get(contigId, DBReference(baseDb, contigId));
-                }
+    /// Return the `dbFile` for `contigId`.
+    DBReference opIndex(in size_t contigId) pure const
+    {
+        return overlayDbs.get(contigId, DBReference(baseDb, contigId));
+    }
 
-                unittest
-                {
-                    auto dbQuery = DBUnion("baseDb");
-                    dbQuery.overlayDbs[42] = DBReference("overlayDb42", 1);
+    unittest
+    {
+        auto dbQuery = DBUnion("baseDb");
+        dbQuery.overlayDbs[42] = DBReference("overlayDb42", 1);
 
-                    assert(dbQuery[0] == DBReference("baseDb", 0));
-                    assert(dbQuery[7] == DBReference("baseDb", 7));
-                    assert(dbQuery[42] == DBReference("overlayDb42", 1));
-                }
+        assert(dbQuery[0] == DBReference("baseDb", 0));
+        assert(dbQuery[7] == DBReference("baseDb", 7));
+        assert(dbQuery[42] == DBReference("overlayDb42", 1));
+    }
 
-                /// Set the source for `contigId`.
-                void addAlias(in size_t contigId, in string dbFile, in size_t newContigId) pure
-                {
-                    addAlias(contigId, DBReference(dbFile, newContigId));
-                }
+    /// Set the source for `contigId`.
+    void addAlias(in size_t contigId, in string dbFile, in size_t newContigId) pure
+    {
+        addAlias(contigId, DBReference(dbFile, newContigId));
+    }
 
-                /// ditto
-                void addAlias(in size_t contigId, in DBReference dbRef) pure
-                {
-                    overlayDbs[contigId] = dbRef;
-                }
+    /// ditto
+    void addAlias(in size_t contigId, in DBReference dbRef) pure
+    {
+        overlayDbs[contigId] = dbRef;
+    }
 
-                unittest
-                {
-                    auto dbQuery = DBUnion("baseDb");
+    unittest
+    {
+        auto dbQuery = DBUnion("baseDb");
 
-                    assert(dbQuery[42] == DBReference("baseDb", 42));
+        assert(dbQuery[42] == DBReference("baseDb", 42));
 
-                    dbQuery.addAlias(42, DBReference("overlayDb42", 1));
+        dbQuery.addAlias(42, DBReference("overlayDb42", 1));
 
-                    assert(dbQuery[42] == DBReference("overlayDb42", 1));
-                }
-            }
+        assert(dbQuery[42] == DBReference("overlayDb42", 1));
+    }
+}
 
-            ///
-            unittest
-            {
-                auto dbQuery = DBUnion("baseDb");
+///
+unittest
+{
+    auto dbQuery = DBUnion("baseDb");
 
-                dbQuery.addAlias(42, "overlayDb42", 1);
+    dbQuery.addAlias(42, "overlayDb42", 1);
 
-                assert(dbQuery[0].dbFile == "baseDb");
-                assert(dbQuery[0].contigId == 0);
-                assert(dbQuery[7].dbFile == "baseDb");
-                assert(dbQuery[7].contigId == 7);
-                assert(dbQuery[42].dbFile == "overlayDb42");
-                assert(dbQuery[42].contigId == 1);
+    assert(dbQuery[0].dbFile == "baseDb");
+    assert(dbQuery[0].contigId == 0);
+    assert(dbQuery[7].dbFile == "baseDb");
+    assert(dbQuery[7].contigId == 7);
+    assert(dbQuery[42].dbFile == "overlayDb42");
+    assert(dbQuery[42].contigId == 1);
 
-                dbQuery.addAlias(7, "overlayDb7", 1);
+    dbQuery.addAlias(7, "overlayDb7", 1);
 
-                assert(dbQuery[7].dbFile == "overlayDb7");
-                assert(dbQuery[7].contigId == 1);
-            }
+    assert(dbQuery[7].dbFile == "overlayDb7");
+    assert(dbQuery[7].contigId == 1);
+}
