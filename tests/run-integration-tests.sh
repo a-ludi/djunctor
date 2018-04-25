@@ -48,7 +48,7 @@ function init_script()
 
 function parse_opts()
 {
-    while getopts "chDgTu" OPTION "${ARGV[@]}"; do
+    while getopts "chDgku" OPTION "${ARGV[@]}"; do
         case "$OPTION" in
             c)
                 BUILD_OPTS[${#BUILD_OPTS[*]}]='--build=cov'
@@ -64,9 +64,9 @@ function parse_opts()
                 usage
                 exit
                 ;;
-            T)
+            k)
                 KEEP_TEMP=true
-                DJUNCTOR_OPTS[${#DJUNCTOR_OPTS[*]}]='-T'
+                DJUNCTOR_OPTS[${#DJUNCTOR_OPTS[*]}]='-k'
                 ;;
             u)
                 SHOW_UNCOVERED_LINES=true
@@ -92,7 +92,7 @@ function usage()
     echo " -g        Open interactive gdb session and exit afterwards. Prints the "'`run`'" command"
     echo "           to be used in gdb"
     echo " -h        Prints this help."
-    echo " -T        Keep temporary files; this is forwarded to djunctor."
+    echo " -k        Keep temporary files; this is forwarded to djunctor."
     echo " -u[=NUM]  If -c is given report uncovered lines in coverage summary. If given print NUM"
     echo "           lines of context (default: 2)"
 }

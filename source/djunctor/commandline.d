@@ -168,7 +168,7 @@ struct Options
     @Help("use this method to provide the input files in the working directory")
     ProvideMethod provideMethod = ProvideMethod.symlink;
 
-    @Option("keep-temp", "T")
+    @Option("keep-temp", "k")
     @Help("keep the temporary files; outputs the exact location")
     OptionFlag keepTemp;
 
