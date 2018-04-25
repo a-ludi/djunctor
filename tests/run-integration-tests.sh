@@ -13,6 +13,7 @@ TEST_DATA_ARCHIVE="integration-tests.tar.gz"
 TEST_DATA_READS="integration-tests/reads"
 TEST_DATA_REF="integration-tests/reference"
 TEST_DATA_MODREF="integration-tests/reference_mod"
+COORD_TRANSFORM="coord-transform.py"
 GDB_INIT_SCRIPT="gdbinit"
 DJUNCTOR_OPTS=(-v -v -v --input-provide-method symlink)
 BUILD_OPTS=(--build=debug)
@@ -33,16 +34,25 @@ function init_script()
 
     TEST_ROOT="$(dirname "$(realpath "$0")")"
     LOG_COPY="./integration-tests.log"
+    RESULT_COPY="./integration-tests-result.fasta"
+    COORD_TRANSFORM_COPY="./coord-transform.py"
 
     parse_opts
 
     WORKDIR="$(mktemp --tmpdir -d djunctor-integration-tests.XXXXXX)"
 
+    DJUNCTOR_OPTS[${#DJUNCTOR_OPTS[*]}]="--coord-transform"
+    DJUNCTOR_OPTS[${#DJUNCTOR_OPTS[*]}]="$WORKDIR/$COORD_TRANSFORM"
+
     if $RUN_DJUNCTOR;
     then
         OUTPUT_LOG="$WORKDIR/output.log"
+        RESULT_FILE="$WORKDIR/result.fasta"
+        COORD_TRANSFORM="$WORKDIR/$COORD_TRANSFORM"
     else
         OUTPUT_LOG="$LOG_COPY"
+        RESULT_FILE="$RESULT_COPY"
+        COORD_TRANSFORM="$COORD_TRANSFORM_COPY"
     fi
 }
 
@@ -101,9 +111,13 @@ function clean_up()
 {
     if $RUN_DJUNCTOR && [[ -f "$OUTPUT_LOG" ]];
     then
-        cp "$OUTPUT_LOG" "$LOG_COPY"
         echo
+        cp "$OUTPUT_LOG" "$LOG_COPY"
         echo "output copied to $LOG_COPY"
+        cp "$RESULT_FILE" "$RESULT_COPY"
+        echo "result copied to $RESULT_COPY"
+        cp "$COORD_TRANSFORM" "$COORD_TRANSFORM_COPY"
+        echo "cord transform copied to $COORD_TRANSFORM_COPY"
     fi
 
     # remove coverage statistics of libraries
@@ -111,7 +125,9 @@ function clean_up()
 
     if $KEEP_TEMP;
     then
-        echo "keeping workdir '$WORKDIR'; please remove after inspection"
+        echo "keeping workdirs; please remove after inspection:"
+        echo "    $WORKDIR"
+        echo "    $DJUNCTOR_WORKDIR"
     else
         rm -rf "$WORKDIR"
     fi
@@ -145,7 +161,8 @@ function run_djunctor()
         if ! ./djunctor "${DJUNCTOR_OPTS[@]}" \
                         "$TEST_DATA_MODREF.dam" \
                         "$TEST_DATA_READS.dam" \
-                        &> "$OUTPUT_LOG";
+                        2> "$OUTPUT_LOG" \
+                        1> "$RESULT_FILE";
         then
             echo "Error while executing djunctor ($?); see log for details." >&2
 
@@ -190,6 +207,9 @@ function do_tests()
         do
             echo "    $failed_test_case"
         done
+
+        echo
+        echo "successes: $(( $NUM_TEST_CASES - ${#FAILURES[*]} )) failures: ${#FAILURES[*]} total: $NUM_TEST_CASES"
     fi
 }
 
@@ -264,11 +284,10 @@ function json_log()
 
 function expect_transformed_coord()
 {
-    local COORD_TRANSFORM="$1"
-    local IN_CONTIG="$2"
-    local IN_IDX="$3"
-    local OUT_CONTIG="$4"
-    local OUT_IDX="$5"
+    local IN_CONTIG="$1"
+    local IN_IDX="$2"
+    local OUT_CONTIG="$3"
+    local OUT_IDX="$4"
 
     local OBSERVED="$(python "$COORD_TRANSFORM" "$IN_CONTIG" "$IN_IDX")"
     local EXPECTED="$OUT_CONTIG $OUT_IDX"
@@ -406,25 +425,21 @@ function test_number_of_iterations()
 
 function test_coordinate_transform()
 {
-    local COORD_TRANSFORM="$WORKDIR/coord_transform.py"
-
-    json_log | jq --raw-output 'select(has("coordTransformPython")) | .coordTransformPython' > "$COORD_TRANSFORM" && \
-
-    expect_transformed_coord "$COORD_TRANSFORM" \
+    expect_transformed_coord \
         1 42 \
         1 $((42)) && \
-    expect_transformed_coord "$COORD_TRANSFORM" \
+    expect_transformed_coord \
         2 42 \
         1 $((42 - 0 + 4100 + 8300)) && \
-    expect_transformed_coord "$COORD_TRANSFORM" \
+    expect_transformed_coord \
         3 42 \
         1 $((42 - 0 + 8450 + 8350 - 0 + 4100 + 8300)) && \
-    expect_transformed_coord "$COORD_TRANSFORM" \
+    expect_transformed_coord \
         4 42 \
         1 $((42 - 0 + 5000 + 125700 - 0 + 8450 + 8350 - 0 + 4100 + 8300)) && \
-    expect_transformed_coord "$COORD_TRANSFORM" \
-        1337 42 \
-        1337 42
+    expect_transformed_coord \
+        5 42 \
+        2 $((42 - 0 + 2083))
 }
 
 
