@@ -115,6 +115,10 @@ struct Options
     string readsFile;
     string readsDb;
 
+    @Option("coord-transform", "T")
+    @Help("write a Python 2.7 compatible script which transform input coordinates to output coordinates")
+    string coordTransform = null;
+
     @Option("daligner-options")
     @Help("list of options to pass to `daligner`")
     string[] dalignerOptions = [];
@@ -284,6 +288,7 @@ private
     void verifyOptions(ref Options options)
     {
         verifyInputFiles(options);
+        verifyOutputFiles(options);
     }
 
     void verifyInputFiles(ref Options options)
@@ -312,6 +317,25 @@ private
                     throw new Exception(
                             format!"cannot open hidden database file `%s`"(hiddenDbFile));
                 }
+            }
+        }
+    }
+
+    void verifyOutputFiles(ref Options options)
+    {
+        import std.exception : ErrnoException;
+        import std.format : format;
+        import std.stdio : File;
+
+        if (!(options.coordTransform is null))
+        {
+            try
+            {
+                auto coordTransformScript = File(options.coordTransform, "a");
+            }
+            catch (ErrnoException e)
+            {
+                throw new Exception(format!"cannot write coord transform file `%s`: %s"(options.coordTransform, e));
             }
         }
     }

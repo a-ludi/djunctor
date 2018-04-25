@@ -26,7 +26,7 @@ import std.format : format, formattedWrite;
 import std.math : abs, sgn;
 import std.range : assumeSorted, chain, chunks, ElementType, enumerate,
     isForwardRange, only, retro, slide, SortedRange, walkLength;
-import std.stdio : writeln;
+import std.stdio : File, write, writeln;
 import std.string : outdent;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
 import vibe.data.json : Json, serializeToJson;
@@ -2718,7 +2718,25 @@ alias Hit = Tuple!(
                 protected DJunctor finish()
                 {
                     logJsonDiagnostic("state", "enter", "function", "djunctor.finish");
+
+                    // dfmt off
+                    this
+                        .writeCoordTransform;
+                    // dfmt on
+
                     logJsonDiagnostic("state", "exit", "function", "djunctor.finish");
+
+                    return this;
+                }
+
+                protected DJunctor writeCoordTransform()
+                {
+                    if (!(options.coordTransform is null))
+                    {
+                        auto coordTransformFile = File(options.coordTransform, "w");
+
+                        coordTransformFile.write(coordTransform.toString(CoordinateTransform.ExportLanguage.python));
+                    }
 
                     return this;
                 }
