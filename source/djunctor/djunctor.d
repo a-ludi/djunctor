@@ -1741,6 +1741,7 @@ bool belongToSamePile(in ReadAlignment a, in ReadAlignment b) pure nothrow
     assert(isInReferenceOrder(a) && isInReferenceOrder(b),
             "gap alignment chains must be in reference order");
 
+    // dfmt off
     debug logJsonDebug(
         "aIsBackExtension", a.isBackExtension,
         "aIsFrontExtension", a.isFrontExtension,
@@ -1751,6 +1752,7 @@ bool belongToSamePile(in ReadAlignment a, in ReadAlignment b) pure nothrow
         "bIsGap", b.isGap,
         "bMapAContigBIDMapJsonArray", b.map!"a.contigB.id".map!Json.array,
     );
+    // dfmt on
 
     // dfmt off
     return any(only(
@@ -2050,6 +2052,7 @@ unittest
                     getDummyRead(c3, -1, c3, 10, Complement.no),  // #22
                 ],
             ];
+            // dfmt on
 
             foreach (i, group1; totalOrderingGroups.enumerate)
             {
@@ -2175,11 +2178,11 @@ alias Hit = Tuple!(
                 {
                     logJsonDiagnostic("state", "enter", "function", "run");
                     // dfmt off
-        this
-            .init
-            .mainLoop
-            .finish;
-        // dfmt on
+                    this
+                        .init
+                        .mainLoop
+                        .finish;
+                    // dfmt on
                     logJsonDiagnostic("state", "exit", "function", "run");
 
                     return this;
@@ -2221,14 +2224,14 @@ alias Hit = Tuple!(
                         findHits();
 
                         // dfmt off
-            logJsonDiagnostic(
-                "iteration", iteration,
-                "numUseless", catUseless.length,
-                "numCandiatesA2b", catCandidates.a2b.length,
-                "numCandiatesB2a", catCandidates.b2a.length,
-                "numHits", catHits.length
-            );
-            // dfmt on
+                        logJsonDiagnostic(
+                            "iteration", iteration,
+                            "numUseless", catUseless.length,
+                            "numCandiatesA2b", catCandidates.a2b.length,
+                            "numCandiatesB2a", catCandidates.b2a.length,
+                            "numHits", catHits.length
+                        );
+                        // dfmt on
 
                         if (catHits.length > 0)
                         {
@@ -2251,12 +2254,12 @@ alias Hit = Tuple!(
                     if (sizeReserve == 0)
                     {
                         // dfmt off
-            logJsonDiagnostic(
-                "state", "exit",
-                "function", "djunctor.filterUseless",
-                "reason", "skipping: expecting zero useless reads",
-            );
-            // dfmt on
+                        logJsonDiagnostic(
+                            "state", "exit",
+                            "function", "djunctor.filterUseless",
+                            "reason", "skipping: expecting zero useless reads",
+                        );
+                        // dfmt on
 
                         // Skip this step if we do not expect to find "useless" reads;
                         // it is not harmful to consider some "useless" reads as
@@ -2291,11 +2294,11 @@ alias Hit = Tuple!(
                         }
                     }
                     // dfmt off
-        logJsonDiagnostic(
-            "numUselessExpected", sizeReserve,
-            "numUselessFound", uselessAcc.data.length,
-        );
-        // dfmt on
+                    logJsonDiagnostic(
+                        "numUselessExpected", sizeReserve,
+                        "numUselessFound", uselessAcc.data.length,
+                    );
+                    // dfmt on
 
                     this.catUseless ~= uselessAcc.data;
                     this.catCandidates.a2b = candidatesAcc.data;
@@ -2829,7 +2832,8 @@ alias Hit = Tuple!(
 
                     invariant
                     {
-                        assert(begin != end || (begin.idx == end.idx && length > 0), "empty insertion");
+                        assert(begin != end || (begin.idx == end.idx && length > 0),
+                                "empty insertion");
                         if (begin.contigId == end.contigId)
                         {
                             assert(end.idx >= begin.idx, "insertion begin index should be before/equal to end index on same contig");
