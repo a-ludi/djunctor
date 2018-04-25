@@ -689,10 +689,9 @@ AlignmentContainer!(string[]) getLasFiles(in string dbA, in string dbB, in strin
         }
     }
 
-    immutable singleFileTemplate = "%s/%s.las";
-    immutable twoFileTemplate = "%s/%s.%s.las";
+    immutable fileTemplate = "%s/%s.%s.las";
     auto aOptions = InferredParams(dbA);
-    auto bOptions = InferredParams(dbB);
+    auto bOptions = dbB == null ? aOptions : InferredParams(dbB);
     size_t numLasFilesPerList = aOptions.numBlocks * max(1, bOptions.numBlocks);
     AlignmentContainer!(string[]) fileLists;
 
@@ -700,20 +699,12 @@ AlignmentContainer!(string[]) getLasFiles(in string dbA, in string dbB, in strin
     fileLists.b2a.length = numLasFilesPerList;
     foreach (size_t i; 0 .. aOptions.numBlocks)
     {
-        if (bOptions.numBlocks > 0)
+        foreach (size_t j; 0 .. bOptions.numBlocks)
         {
-            foreach (size_t j; 0 .. bOptions.numBlocks)
-            {
-                fileLists.a2b[i * bOptions.numBlocks + j] = format!twoFileTemplate(baseDirectory,
-                        aOptions.fileNamePart(i), bOptions.fileNamePart(j));
-                fileLists.b2a[i * bOptions.numBlocks + j] = format!twoFileTemplate(baseDirectory,
-                        bOptions.fileNamePart(j), aOptions.fileNamePart(i));
-            }
-        }
-        else
-        {
-            fileLists.a2b[i] = fileLists.b2a[i] = format!singleFileTemplate(baseDirectory,
-                    aOptions.fileNamePart(i));
+            fileLists.a2b[i * bOptions.numBlocks + j] = format!fileTemplate(baseDirectory,
+                    aOptions.fileNamePart(i), bOptions.fileNamePart(j));
+            fileLists.b2a[i * bOptions.numBlocks + j] = format!fileTemplate(baseDirectory,
+                    bOptions.fileNamePart(j), aOptions.fileNamePart(i));
         }
     }
 
@@ -764,15 +755,17 @@ private
 
     void dalign(in string refDam, in string readsDam, in string[] dalignerOpts, in string workdir)
     {
-        executeScript(chain(only("HPC.daligner"), dalignerOpts,
-                only(refDam.relativeToWorkdir(workdir)),
-                only(readsDam.relativeToWorkdir(workdir))), workdir);
+        auto additionalOptions = only(readsDam is null ? "-I" : null);
+        auto secondInputFile = readsDam is null ? refDam : readsDam;
+        auto inputFiles = only(refDam.relativeToWorkdir(workdir), secondInputFile.relativeToWorkdir(workdir));
+
+        executeCommand(chain(only("daligner"), additionalOptions, dalignerOpts, inputFiles), workdir);
     }
 
     void damapper(in string refDam, in string readsDam, in string[] damapperOpts, in string workdir)
     {
-        executeScript(chain(only("HPC.damapper", "-C"), damapperOpts,
-                only(refDam.relativeToWorkdir(workdir)), only(readsDam.relativeToWorkdir(workdir))), workdir);
+        executeCommand(chain(only("damapper", "-C"), damapperOpts,
+                only(refDam.relativeToWorkdir(workdir), readsDam.relativeToWorkdir(workdir))), workdir);
     }
 
     string daccord(in string dbFile, in string lasFile, in string[] daccordOpts, in string workdir)
@@ -1064,6 +1057,7 @@ private
                 .lineSplitter
                 .map!Json
                 .array,
+            "exitStatus", result.status,
             "state", "post",
         );
         // dfmt on
@@ -1079,7 +1073,7 @@ private
 
     string buildScriptLine(in string[] command)
     {
-        return escapeShellCommand(command) ~ " | sh -sv";
+        return escapeShellCommand(command) ~ " | sh -sve";
     }
 
     string relativeToWorkdir(in string fileName, in string workdir)

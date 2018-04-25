@@ -349,11 +349,11 @@ function test_gaps_found()
 {
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
-        '.[0].gapInfo | map(select(.type == "gap")) | length == 3 and map(.contigIds) == [[1, 2], [2, 3], [3, 4]] and map(.estimateLengthMean) == [4156, 8561, 5064] and map(.numReads) == [71, 81, 64]' \
+        '.[0].gapInfo | map(select(.type == "gap")) | length == 3 and map(.contigIds) == [[1, 2], [2, 3], [3, 4]] and map(.estimateLengthMean) == [4156, 8561, 5064] and map(.numReads) == [71, 81, 63]' \
         '.[0].gapInfo | map(select(.type == "gap"))' && \
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "consensus"' \
-        '(map(select(.gapInfo | length == 1 and .[0].type == "gap") | .gapInfo) | flatten) | length == 3 and map(.contigIds) == [[1, 2], [2, 3], [3, 4]] and map(.estimateLengthMean) == [4100, 8449, 5000] and map(.numReads) == [71, 81, 64]' \
+        '(map(select(.gapInfo | length == 1 and .[0].type == "gap") | .gapInfo) | flatten) | length == 3 and map(.contigIds) == [[1, 2], [2, 3], [3, 4]] and map(.estimateLengthMean) == [4100, 8449, 5000] and map(.numReads) == [71, 81, 62]' \
         '(map(select(.gapInfo | length == 1 and .[0].type == "gap") | .gapInfo) | flatten)'
 }
 
@@ -373,7 +373,7 @@ function test_gaps_filled()
 {
     expect_json \
         '.type == "gap" and .step == "insertHits" and has("readId")' \
-        'length == 3 and map(.readId) == [17, 6, 2] and map(.contigIds) == [[1, 2], [2, 3], [3, 4]]' \
+        'length == 3 and map(.readId) == [17, 6, 21] and map(.contigIds) == [[1, 2], [2, 3], [3, 4]]' \
         '{ readIds: map(.readId), contigIds: map(.contigIds) }'
 }
 
