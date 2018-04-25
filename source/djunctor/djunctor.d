@@ -16,8 +16,8 @@ import djunctor.util.math : mean, median;
 import djunctor.util.range : Comparator;
 import djunctor.util.string : indent;
 import core.exception : AssertError;
-import std.algorithm : all, any, canFind, chunkBy, each, equal, filter, find, fold,
-    group, isSorted, joiner, map, max, maxElement, min, sort, sum, swap;
+import std.algorithm : all, any, canFind, chunkBy, each, equal, filter, find,
+    fold, group, isSorted, joiner, map, max, maxElement, min, sort, sum, swap;
 import std.array : appender, Appender, array;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
@@ -25,7 +25,7 @@ import std.exception : assertNotThrown, assertThrown;
 import std.format : format, formattedWrite;
 import std.math : abs, sgn;
 import std.range : assumeSorted, chain, chunks, ElementType, enumerate,
-    isForwardRange, only, retro, slide, SortedRange, walkLength;
+    iota, isForwardRange, only, retro, slide, SortedRange, walkLength;
 import std.stdio : File, write, writeln;
 import std.string : outdent;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
@@ -36,7 +36,7 @@ version (unittest)
     import djunctor.util.testing : MockCallable;
     import djunctor.dazzler : origGetLocalAlignments = getLocalAlignments,
         origGetMappings = getMappings;
-    import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries;
+    import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries, getNumContigs;
 
     MockCallable!(AlignmentContainer!(AlignmentChain[]), const string, const Options) getLocalAlignments;
     MockCallable!(origGetMappings!Options) getMappings;
@@ -44,7 +44,7 @@ version (unittest)
 else
 {
     import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
-        getLocalAlignments, getMappings;
+        getLocalAlignments, getMappings, getNumContigs;
 }
 
 /// General container for alignment data.
@@ -2370,6 +2370,7 @@ alias Hit = Tuple!(
 
                         // dfmt off
                         logJsonDebug(
+                            "pileupDb", pileupDb,
                             "consensusDbs", consensusDbs.map!Json.array,
                             "contigIds", refContigIds.map!Json.array,
                         );
@@ -2461,8 +2462,9 @@ alias Hit = Tuple!(
                     trInsertionInfo.begin = T(insertionInfo.begin);
                     trInsertionInfo.end = T(insertionInfo.end);
                     auto refContigFastaEntries = refContigIds.map!(
-                            contigId => getReferenceFastaEntry(contigId)).array;
+                            contigId => getReferenceFastaEntry(T(contigId))).array;
                     auto endContigLength = refContigFastaEntries[$ - 1].length;
+                    // TODO update headers
                     string newHeader = refContigFastaEntries[0].header;
                     size_t newContigLength = trInsertionInfo.totalInsertionLength(endContigLength);
                     immutable lineSep = typeof(refContigFastaEntries[0]).lineSep;
@@ -2474,7 +2476,7 @@ alias Hit = Tuple!(
                     fastaBuilder ~= newHeader;
                     fastaBuilder ~= lineSep;
 
-                    with (ReadAlignmentType)
+                    with (CoordinateTransform.Insertion.Type)
                     {
                         final switch (insertionInfo.type)
                         {
@@ -2509,6 +2511,8 @@ alias Hit = Tuple!(
                             fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth)
                                 .joiner(lineSep);
                             break;
+                        case relabel:
+                            assert(0, "invalid insertion");
                         }
                     }
 
@@ -2516,9 +2520,8 @@ alias Hit = Tuple!(
 
                     auto overlayDb = buildDamFile([fastaBuilder.data], options);
 
-                    referenceDb.addAlias(insertionInfo.begin.contigId, overlayDb, 1);
-                    referenceDb.addAlias(insertionInfo.end.contigId, overlayDb, 1);
                     T ~= insertionInfo;
+                    referenceDb.addAlias(T(refContigIds[0]), overlayDb, 1);
 
                     // dfmt off
                     logJsonDebug(
@@ -2627,10 +2630,11 @@ alias Hit = Tuple!(
                     with (CoordinateTransform)
                     {
                         // dfmt off
-                        return Insertion.make!(ReadAlignmentType.gap)(
+                        return Insertion.make(
                             Coordinate(refContig1Id, gapRefBegin),
                             Coordinate(refContig2Id, gapRefEnd),
                             gapSequenceSlice[1] - gapSequenceSlice[0],
+                            ReadAlignmentType.gap,
                         );
                         // dfmt on
                     }
@@ -2711,8 +2715,13 @@ alias Hit = Tuple!(
                 {
                     auto dbRef = referenceDb[contigId];
 
+                    return getReferenceFastaEntry(dbRef);
+                }
+
+                protected auto getReferenceFastaEntry(in DBUnion.DBReference dbRef) const
+                {
                     return parseFastaRecord(getFastaEntries(dbRef.dbFile,
-                            [dbRef.contigId], options).front);
+                            [dbRef.contigId + 0], options).front);
                 }
 
                 protected DJunctor finish()
@@ -2721,10 +2730,53 @@ alias Hit = Tuple!(
 
                     // dfmt off
                     this
+                        .squashOverlayDb
                         .writeCoordTransform;
                     // dfmt on
 
                     logJsonDiagnostic("state", "exit", "function", "djunctor.finish");
+
+                    return this;
+                }
+
+                protected DJunctor squashOverlayDb()
+                {
+                    size_t numReferenceContigs = getNumContigs(referenceDb.baseDb, options);
+                    // dfmt off
+                    auto contigSources = iota(1, numReferenceContigs + 1)
+                        .map!(contigId => T(contigId))
+                        .map!(trContigId => tuple(trContigId, referenceDb[trContigId]))
+                        .group!"a[0] == b[0]"
+                        .map!"a[0]";
+                    auto fastaEntries = contigSources
+                        .save
+                        .map!"a[1]"
+                        .map!(dbRef => getReferenceFastaEntry(dbRef));
+                    immutable lineSep = typeof(fastaEntries.front).lineSep;
+
+                    fastaEntries
+                        .map!(fastaEntry => fastaEntry.toFasta(options.fastaLineWidth))
+                        .joiner(lineSep)
+                        .write;
+                    // dfmt on
+
+                    // dfmt off
+                    logJsonDebug(
+                        "numReferenceContigs", numReferenceContigs,
+                        "contigSources", contigSources.array.serializeToJson,
+                    );
+                    // dfmt on
+
+                    foreach (newContigId, contigSource; contigSources.enumerate(1))
+                    {
+                        size_t oldContigId = contigSource[0];
+
+                        if (oldContigId != newContigId)
+                        {
+                            T ~= CoordinateTransform.Insertion.makeRelabel(oldContigId, newContigId);
+                            logJsonDebug("relabel", ["oldContigId": oldContigId, "newContigId": newContigId].serializeToJson);
+                        }
+                    }
 
                     return this;
                 }
@@ -2805,6 +2857,14 @@ alias Hit = Tuple!(
 
                 static struct Insertion
                 {
+                    enum Type
+                    {
+                        front,
+                        gap,
+                        back,
+                        relabel,
+                    }
+
                     Coordinate begin;
                     Coordinate end;
                     size_t length;
@@ -2818,34 +2878,26 @@ alias Hit = Tuple!(
                         this.length = length;
                     }
 
-                    // TODO eliminate
-                    static typeof(this) make(ReadAlignmentType insertionType)(
-                            Coordinate begin, Coordinate end, size_t length) pure nothrow
+                    static Insertion makeRelabel(size_t oldContigId, size_t newContigId) pure nothrow
                     {
-                        static if (insertionType == ReadAlignmentType.front)
-                        {
-                            begin.idx = 0;
-                        }
-                        else static if (insertionType == ReadAlignmentType.back)
-                        {
-                            end.idx = begin.idx + length;
-                        }
-
-                        return typeof(this)(begin, end, length);
+                        return Insertion(Coordinate(newContigId), Coordinate(oldContigId), 0);
                     }
 
-                    static typeof(this) make(Coordinate begin, Coordinate end,
-                            size_t length, in ReadAlignmentType insertionType) pure nothrow
+                    static Insertion make(Coordinate begin, Coordinate end, size_t length, in ReadAlignmentType insertionType) pure nothrow
                     {
                         final switch (insertionType)
                         {
-                        case ReadAlignmentType.gap:
-                            return make!(ReadAlignmentType.gap)(begin, end, length);
-                        case ReadAlignmentType.front:
-                            return make!(ReadAlignmentType.front)(begin, end, length);
-                        case ReadAlignmentType.back:
-                            return make!(ReadAlignmentType.back)(begin, end, length);
+                            case ReadAlignmentType.front:
+                                begin.idx = 0;
+                                break;
+                            case ReadAlignmentType.gap:
+                                break;
+                            case ReadAlignmentType.back:
+                                end.idx = begin.idx + length;
+                                break;
                         }
+
+                        return Insertion(begin, end, length);
                     }
 
                     invariant
@@ -2876,22 +2928,27 @@ alias Hit = Tuple!(
 
                     @property isGap() pure const nothrow
                     {
-                        return !isExtension;
+                        return !isExtension && !isRelabel;
+                    }
+
+                    @property isRelabel() pure const nothrow
+                    {
+                        return !isExtension && begin.idx == 0 && end.idx == 0 && length == 0;
                     }
 
                     @property type() pure const nothrow
                     {
-                        if (isGap)
+                        if (isExtension)
                         {
-                            return ReadAlignmentType.gap;
+                            return isFrontExtension ? Type.front : Type.back;
                         }
-                        else if (isFrontExtension)
+                        else if (isGap)
                         {
-                            return ReadAlignmentType.front;
+                            return Type.gap;
                         }
                         else
                         {
-                            return ReadAlignmentType.back;
+                            return Type.relabel;
                         }
                     }
 
@@ -2899,10 +2956,11 @@ alias Hit = Tuple!(
                     {
                         final switch (type)
                         {
-                        case ReadAlignmentType.gap:
-                        case ReadAlignmentType.front:
+                        case Type.gap:
+                        case Type.front:
+                        case Type.relabel:
                             return begin.idx + length + endContigLength - end.idx;
-                        case ReadAlignmentType.back:
+                        case Type.back:
                             return begin.idx + length;
                         }
                     }
@@ -2988,6 +3046,11 @@ alias Hit = Tuple!(
                     return transform(Coordinate(contigId, idx));
                 }
 
+                size_t transform(in size_t contigId) pure const
+                {
+                    return transform(Coordinate(contigId, 0)).contigId;
+                }
+
                 /// ditto
                 Coordinate transform(in Coordinate input) pure const
                 {
@@ -3033,10 +3096,11 @@ alias Hit = Tuple!(
                     // insert               |---------|
                     //                      0       100
                     // dfmt off
-                    coordTransform.add(Insertion.make!(ReadAlignmentType.gap)(
+                    coordTransform.add(Insertion.make(
                         Coordinate(1, 495),
                         Coordinate(2, 5),
                         100,
+                        ReadAlignmentType.gap,
                     ));
                     // dfmt on
 
@@ -3062,60 +3126,75 @@ alias Hit = Tuple!(
                     {
                         CoordinateTransform coordTransform;
                         // dfmt off
-                        coordTransform.add(Insertion.make!gap(
+                        coordTransform.add(Insertion.make(
                             Coordinate(100, 0),
                             Coordinate(101, 0),
                             0,
+                            gap,
                         ));
-                        coordTransform.add(Insertion.make!gap(
+                        coordTransform.add(Insertion.make(
                             Coordinate(1, 495),
                             Coordinate(2, 5),
                             100,
+                            gap,
                         ));
-                        coordTransform.add(Insertion.make!gap(
+                        coordTransform.add(Insertion.make(
                             Coordinate(2, 490),
                             Coordinate(5, 10),
                             150,
+                            gap,
                         ));
-                        coordTransform.add(Insertion.make!gap(
+                        coordTransform.add(Insertion.make(
                             Coordinate(5, 480),
                             Coordinate(3, 20),
                             200,
+                            gap,
                         ));
-                        coordTransform.add(Insertion.make!gap(
+                        coordTransform.add(Insertion.make(
                             Coordinate(102, 0),
                             Coordinate(103, 0),
                             0,
+                            gap,
                         ));
-                        coordTransform.add(Insertion.make!front(
+                        coordTransform.add(Insertion.make(
                             Coordinate(200),
                             Coordinate(200, 5),
                             10,
+                            front,
                         ));
-                        coordTransform.add(Insertion.make!back(
+                        coordTransform.add(Insertion.make(
                             Coordinate(201, 90),
                             Coordinate(201),
                             20,
+                            back,
                         ));
-                        coordTransform.add(Insertion.make!front(
+                        coordTransform.add(Insertion.make(
                             Coordinate(202),
                             Coordinate(202, 15),
                             30,
+                            front,
                         ));
-                        coordTransform.add(Insertion.make!front(
+                        coordTransform.add(Insertion.make(
                             Coordinate(202),
                             Coordinate(202, 20),
                             40,
+                            front,
                         ));
-                        coordTransform.add(Insertion.make!back(
+                        coordTransform.add(Insertion.make(
                             Coordinate(203, 65),
                             Coordinate(203),
                             50,
+                            back,
                         ));
-                        coordTransform.add(Insertion.make!back(
+                        coordTransform.add(Insertion.make(
                             Coordinate(203, 60),
                             Coordinate(203),
                             60,
+                            back,
+                        ));
+                        coordTransform.add(Insertion.makeRelabel(
+                            1024,
+                            1000,
                         ));
                         // dfmt on
 
@@ -3286,12 +3365,20 @@ alias Hit = Tuple!(
                             // dfmt on
                             assert(coordTransform.transform(inputCoord) == transformedCoord);
                         }
+                        {
+                            // Case: relabel
+                            auto inputCoord = Coordinate(1024, 3);
+                            auto transformedCoord = Coordinate(1000, 3);
+
+                            assert(coordTransform.transform(inputCoord) == transformedCoord);
+                        }
 
                         // dfmt off
-                        coordTransform.add(Insertion.make!gap(
+                        coordTransform.add(Insertion.make(
                             Coordinate(203, 115),
                             Coordinate(202, 5),
                             50,
+                            gap,
                         ));
                         // dfmt on
 
@@ -3361,14 +3448,13 @@ alias Hit = Tuple!(
                 {
                     with (ReadAlignmentType)
                     {
-                        Insertion getDummyInsertion(ReadAlignmentType insertionType = gap)(
-                                in size_t beginContigId, in size_t endContigId)
+                        Insertion getDummyInsertion(in size_t beginContigId, in size_t endContigId, in ReadAlignmentType insertionType = gap)
                         {
                             static immutable dummyLength = 42;
 
-                            return Insertion.make!insertionType(Coordinate(beginContigId,
+                            return Insertion.make(Coordinate(beginContigId,
                                     dummyLength / 2), Coordinate(endContigId,
-                                    dummyLength / 2), dummyLength);
+                                    dummyLength / 2), dummyLength, insertionType);
                         }
 
                         CoordinateTransform getDummyTransform()
@@ -3438,42 +3524,42 @@ alias Hit = Tuple!(
                             auto coordTransform = getDummyTransform();
                             // Case 2* (Extension): newInsertion extends an existing insertion chain in the front
                             // dfmt off
-                            coordTransform.add(getDummyInsertion!front(1, 1));
+                            coordTransform.add(getDummyInsertion(1, 1, front));
                             assert(coordTransform.insertions == [
-                                getDummyInsertion!front(1, 1),
+                                getDummyInsertion(1, 1, front),
                                 getDummyInsertion(1, 2),
                                 getDummyInsertion(3, 4),
                                 getDummyInsertion(9, 8),
                                 getDummyInsertion(6, 5),
                             ]);
-                            coordTransform.add(getDummyInsertion!front(1, 1));
+                            coordTransform.add(getDummyInsertion(1, 1, front));
                             assert(coordTransform.insertions == [
-                                getDummyInsertion!front(1, 1),
-                                getDummyInsertion!front(1, 1),
+                                getDummyInsertion(1, 1, front),
+                                getDummyInsertion(1, 1, front),
                                 getDummyInsertion(1, 2),
                                 getDummyInsertion(3, 4),
                                 getDummyInsertion(9, 8),
                                 getDummyInsertion(6, 5),
                             ]);
                             // Case 2 (Extension): newInsertion extends an existing insertion chain in the front
-                            coordTransform.add(getDummyInsertion!front(9, 9));
+                            coordTransform.add(getDummyInsertion(9, 9, front));
                             assert(coordTransform.insertions == [
-                                getDummyInsertion!front(1, 1),
-                                getDummyInsertion!front(1, 1),
+                                getDummyInsertion(1, 1, front),
+                                getDummyInsertion(1, 1, front),
                                 getDummyInsertion(1, 2),
                                 getDummyInsertion(3, 4),
-                                getDummyInsertion!front(9, 9),
+                                getDummyInsertion(9, 9, front),
                                 getDummyInsertion(9, 8),
                                 getDummyInsertion(6, 5),
                             ]);
-                            coordTransform.add(getDummyInsertion!front(9, 9));
+                            coordTransform.add(getDummyInsertion(9, 9, front));
                             assert(coordTransform.insertions == [
-                                getDummyInsertion!front(1, 1),
-                                getDummyInsertion!front(1, 1),
+                                getDummyInsertion(1, 1, front),
+                                getDummyInsertion(1, 1, front),
                                 getDummyInsertion(1, 2),
                                 getDummyInsertion(3, 4),
-                                getDummyInsertion!front(9, 9),
-                                getDummyInsertion!front(9, 9),
+                                getDummyInsertion(9, 9, front),
+                                getDummyInsertion(9, 9, front),
                                 getDummyInsertion(9, 8),
                                 getDummyInsertion(6, 5),
                             ]);
@@ -3506,43 +3592,43 @@ alias Hit = Tuple!(
                             auto coordTransform = getDummyTransform();
                             // Case 3 (Extension): newInsertion extends an existing insertion chain in the back
                             // dfmt off
-                            coordTransform.add(getDummyInsertion!back(4, 4));
+                            coordTransform.add(getDummyInsertion(4, 4, back));
                             assert(coordTransform.insertions == [
                                 getDummyInsertion(1, 2),
                                 getDummyInsertion(3, 4),
-                                getDummyInsertion!back(4, 4),
+                                getDummyInsertion(4, 4, back),
                                 getDummyInsertion(9, 8),
                                 getDummyInsertion(6, 5),
                             ]);
-                            coordTransform.add(getDummyInsertion!back(4, 4));
+                            coordTransform.add(getDummyInsertion(4, 4, back));
                             assert(coordTransform.insertions == [
                                 getDummyInsertion(1, 2),
                                 getDummyInsertion(3, 4),
-                                getDummyInsertion!back(4, 4),
-                                getDummyInsertion!back(4, 4),
+                                getDummyInsertion(4, 4, back),
+                                getDummyInsertion(4, 4, back),
                                 getDummyInsertion(9, 8),
                                 getDummyInsertion(6, 5),
                             ]);
-                            coordTransform.add(getDummyInsertion!back(5, 5));
+                            coordTransform.add(getDummyInsertion(5, 5, back));
                             assert(coordTransform.insertions == [
                                 getDummyInsertion(1, 2),
                                 getDummyInsertion(3, 4),
-                                getDummyInsertion!back(4, 4),
-                                getDummyInsertion!back(4, 4),
+                                getDummyInsertion(4, 4, back),
+                                getDummyInsertion(4, 4, back),
                                 getDummyInsertion(9, 8),
                                 getDummyInsertion(6, 5),
-                                getDummyInsertion!back(5, 5),
+                                getDummyInsertion(5, 5, back),
                             ]);
-                            coordTransform.add(getDummyInsertion!back(5, 5));
+                            coordTransform.add(getDummyInsertion(5, 5, back));
                             assert(coordTransform.insertions == [
                                 getDummyInsertion(1, 2),
                                 getDummyInsertion(3, 4),
-                                getDummyInsertion!back(4, 4),
-                                getDummyInsertion!back(4, 4),
+                                getDummyInsertion(4, 4, back),
+                                getDummyInsertion(4, 4, back),
                                 getDummyInsertion(9, 8),
                                 getDummyInsertion(6, 5),
-                                getDummyInsertion!back(5, 5),
-                                getDummyInsertion!back(5, 5),
+                                getDummyInsertion(5, 5, back),
+                                getDummyInsertion(5, 5, back),
                             ]);
                             // dfmt on
                         }
@@ -3573,22 +3659,22 @@ alias Hit = Tuple!(
                             auto coordTransform = getDummyTransform();
                             // Case 4 (Extension): open new insertion chain
                             // dfmt off
-                            coordTransform.add(getDummyInsertion!front(1337, 1337));
+                            coordTransform.add(getDummyInsertion(1337, 1337, front));
                             assert(coordTransform.insertions == [
                                 getDummyInsertion(1, 2),
                                 getDummyInsertion(3, 4),
                                 getDummyInsertion(9, 8),
                                 getDummyInsertion(6, 5),
-                                getDummyInsertion!front(1337, 1337),
+                                getDummyInsertion(1337, 1337, front),
                             ]);
-                            coordTransform.add(getDummyInsertion!back(42, 42));
+                            coordTransform.add(getDummyInsertion(42, 42, back));
                             assert(coordTransform.insertions == [
                                 getDummyInsertion(1, 2),
                                 getDummyInsertion(3, 4),
                                 getDummyInsertion(9, 8),
                                 getDummyInsertion(6, 5),
-                                getDummyInsertion!front(1337, 1337),
-                                getDummyInsertion!back(42, 42),
+                                getDummyInsertion(1337, 1337, front),
+                                getDummyInsertion(42, 42, back),
                             ]);
                             // dfmt on
                         }
@@ -3603,8 +3689,8 @@ alias Hit = Tuple!(
                             CoordinateTransform emptyCoordTransform;
 
                             // Case 4* (Extension): open new insertion chain
-                            assert(emptyCoordTransform.add(getDummyInsertion!front(1337, 1337))
-                                    .insertions == [getDummyInsertion!front(1337, 1337)]);
+                            assert(emptyCoordTransform.add(getDummyInsertion(1337, 1337, front))
+                                    .insertions == [getDummyInsertion(1337, 1337, front)]);
                         }
                         {
                             CoordinateTransform emptyCoordTransform;
@@ -3638,25 +3724,40 @@ alias Hit = Tuple!(
                         return 1;
                     }
 
+                    size_t case1Result = size_t.max;
+                    size_t case2Result = size_t.max;
+                    size_t case3Result = size_t.max;
+
                     foreach (i, insAB; insertions.slide(2).enumerate)
                     {
                         auto insA = insAB[0];
                         auto insB = insAB[1];
 
-                        // dfmt off
-                        if (any(only(
-                            // Case 1: newInsertion fits between two existing insertions
-                            newInsertion.begin.contigId == insA.end.contigId && newInsertion.end.contigId == insB.begin.contigId,
-                            // Case 2: newInsertion extends an existing insertion chain in the front
-                            newInsertion.begin.contigId != insA.end.contigId && newInsertion.end.contigId == insB.begin.contigId,
-                            // Case 3: newInsertion extends an existing insertion chain in the back
-                            newInsertion.begin.contigId == insA.end.contigId && newInsertion.end.contigId != insB.begin.contigId,
-                        )))
+                        // Case 1: newInsertion fits between two existing insertions; take first result
+                        if (case1Result == size_t.max && newInsertion.begin.contigId == insA.end.contigId && newInsertion.end.contigId == insB.begin.contigId)
                         {
-                            return i + 1;
+                            case1Result = i + 1;
                         }
-                        // dfmt on
+
+                        // Case 2: newInsertion extends an existing insertion chain in the front; take first result
+                        if (case2Result == size_t.max && newInsertion.begin.contigId != insA.end.contigId && newInsertion.end.contigId == insB.begin.contigId)
+                        {
+                            case2Result = i + 1;
+                        }
+
+                        // Case 3: newInsertion extends an existing insertion chain in the back; take last result
+                        if (newInsertion.begin.contigId == insA.end.contigId && newInsertion.end.contigId != insB.begin.contigId)
+                        {
+                            case3Result = i + 1;
+                        }
                     }
+
+                    if (case1Result != size_t.max)
+                        return case1Result;
+                    else if (case2Result != size_t.max)
+                        return case2Result;
+                    else if (case3Result != size_t.max)
+                        return case3Result;
 
                     // Case 4: open new insertion chain
                     return insertions.length;

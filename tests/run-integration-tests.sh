@@ -416,6 +416,13 @@ function test_gap_3_4_nicely_filled()
     # this is the true sequence
 }
 
+function test_merged_result()
+{
+    expect_json \
+        '. | has("numReferenceContigs")' \
+        '.[0] | .numReferenceContigs == 5 and (.contigSources | map(.[0]) == [1, 5] and .[0][1].dbFile != .[1][1].dbFile)'
+}
+
 function test_number_of_iterations()
 {
     expect_json \
