@@ -14,5 +14,6 @@ djunctor-test-*
 *.obj
 *.lst
 *.log
+*.fasta
 *~
 .gdbinit
