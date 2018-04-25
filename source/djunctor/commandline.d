@@ -270,7 +270,6 @@ private
         {
             // dfmt off
             options.dalignerOptions = [
-                "-s126", // prevent integer overflow in trace point procedure
             ];
             // dfmt on
         }
@@ -279,7 +278,6 @@ private
         {
             // dfmt off
             options.damapperOptions = options.dalignerOptions ~ [
-                "-n.9", // get more hits
             ];
             // dfmt on
         }
