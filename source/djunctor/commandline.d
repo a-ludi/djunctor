@@ -73,7 +73,7 @@ ReturnCode runDjunctorCommandline(string[] args)
     }
     catch (Exception e)
     {
-        writeln(e);
+        logError(e.to!string);
 
         return ReturnCode.djunctorError;
     }
