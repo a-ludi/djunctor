@@ -9,7 +9,7 @@
 module djunctor.djunctor;
 
 import djunctor.commandline : Options;
-import djunctor.util.fasta : PacBioHeader, parseFasta, parseFastaRecord, reverseComplement;
+import djunctor.util.fasta : parseFasta, parseFastaRecord, parsePacBioHeader, reverseComplement;
 import djunctor.util.log;
 import djunctor.util.math : ceil, floor, mean, median;
 import djunctor.util.range : Comparator;
@@ -3025,10 +3025,16 @@ class DJunctor
                 bestInsertionComplement = complementaryReadAlignment[0].complement;
             }
 
+            auto croppedLength = readCroppingSlice[1] - readCroppingSlice[0];
+            auto headerBuilder = parsePacBioHeader(rawFastaEntry.header);
+            headerBuilder.qualityRegionBegin = 0;
+            headerBuilder.qualityRegionBegin = croppedLength;
+            auto newHeader = headerBuilder.to!string;
+            auto expectedFastaLength = newHeader.length + croppedLength + croppedLength / options.fastaLineWidth + 2;
             auto croppedFastaEntry = appender!string;
-            croppedFastaEntry.reserve(rawFastaEntry.data.length);  // TODO reserve only needed memory
+            croppedFastaEntry.reserve(expectedFastaLength);
 
-            croppedFastaEntry ~= rawFastaEntry.header;
+            croppedFastaEntry ~= newHeader;
             croppedFastaEntry ~= lineSep;
             // dfmt off
             auto croppedSequence = complementaryReadAlignment[0].complement
@@ -3210,6 +3216,10 @@ class DJunctor
         auto joinedSequence = chain(beforeInsertSequence, insertSequence, afterInsertSequence);
         fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth).joiner(lineSep);
         fastaBuilder ~= lineSep;
+
+        debug assert(expectedFastaLength >= fastaBuilder.data.length,
+                format!"avoid reallocation: expected %d but used %d"(expectedFastaLength,
+                    fastaBuilder.data.length));
 
         auto overlayDb = buildDamFile([fastaBuilder.data], options);
 
