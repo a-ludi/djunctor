@@ -309,24 +309,6 @@ EOF".outdent;
     assert(fastaRecord[0 .. 5].equal("CTAAC"));
 }
 
-/// Build a `FastaRecord!T` from header and sequence.
-FastaRecord!T buildFastaRecord(T)(in T header, in T sequence) if (isSomeString!T)
-{
-    immutable lineSep = FastaRecord!T.lineSep;
-    auto builder = appender!T;
-
-    builder.reserve(header.length + sequence.length + 2 * lineSep.length);
-
-    builder ~= header;
-    builder ~= lineSep;
-    builder ~= sequence;
-    builder ~= lineSep;
-
-    return typeof(return)(builder.data);
-}
-
-// TODO test
-
 template PacBioHeader(T) if (isSomeString!T)
 {
     struct PacBioHeader

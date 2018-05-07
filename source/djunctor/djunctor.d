@@ -9,8 +9,7 @@
 module djunctor.djunctor;
 
 import djunctor.commandline : Options;
-import djunctor.util.fasta : buildFastaRecord, PacBioHeader, parseFasta,
-    parseFastaRecord, reverseComplement;
+import djunctor.util.fasta : PacBioHeader, parseFasta, parseFastaRecord, reverseComplement;
 import djunctor.util.log;
 import djunctor.util.math : ceil, floor, mean, median;
 import djunctor.util.range : Comparator;
