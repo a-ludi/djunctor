@@ -43,7 +43,7 @@ ElementType!Range median(Range)(Range values) if (__traits(compiles, sort(values
     auto sortedValues = values.sort;
 
     if (useAverage)
-        return (sortedValues[middleIdx] + sortedValues[middleIdx + 1]) / 2;
+        return (sortedValues[middleIdx - 1] + sortedValues[middleIdx]) / 2;
     else
         return values[middleIdx];
 }
@@ -55,8 +55,20 @@ unittest
         assert(values.median == 4);
     }
     {
+        auto values = [4, 3, 2, 8];
+        assert(values.median == 3);
+    }
+    {
+        auto values = [4, 6, 2, 8];
+        assert(values.median == 5);
+    }
+    {
         auto values = [2, 1, 3, 0, 4, 9, 8, 5, 6, 3, 9];
         assert(values.median == 4);
+    }
+    {
+        auto values = [2.0, 1.0, 4.0, 3.0];
+        assert(values.median == 2.5);
     }
     {
         auto values = [2.0, 1.0, 4.0, 3.0, 5.0];
