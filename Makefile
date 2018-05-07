@@ -9,3 +9,6 @@ format:
 
 clean:
 	dub clean
+
+todos:
+	grep --color -noPR '\b(TODO|FIXME)\b.*$$' ./source ./tests
