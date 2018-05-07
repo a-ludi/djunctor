@@ -70,7 +70,6 @@ void logJsonError(T...)(lazy T args) nothrow
 void logJson(T...)(LogLevel level, lazy T args) nothrow
 {
     import djunctor.util.range : Chunks, chunks;
-    import core.time : ClockType;
     import std.datetime.systime : Clock;
     import std.traits : isSomeString;
     import vibe.data.json : Json;
@@ -89,16 +88,7 @@ void logJson(T...)(LogLevel level, lazy T args) nothrow
             static assert(isSomeString!(KeyValuePair.chunks[0]), "missing name");
         }
 
-        with (ClockType)
-        {
-            // dfmt off
-            json[timestampKey] = [
-                "process": Clock!processCPUTime.currStdTime,
-                "thread": Clock!threadCPUTime.currStdTime,
-                "user": Clock!normal.currStdTime,
-            ];
-            // dfmt on
-        }
+        json[timestampKey] = Clock.currStdTime;
 
         foreach (keyValuePair; args.chunks!2)
         {
@@ -117,6 +107,7 @@ void logJson(T...)(LogLevel level, lazy T args) nothrow
 ///
 unittest
 {
+    import std.regex : ctRegex, matchFirst;
     import std.stdio : File, stderr;
 
     auto origStderr = stderr;
@@ -125,10 +116,10 @@ unittest
     logJsonError("error", "mysterious observation", "secret", 42);
 
     stderr.rewind();
-    auto expected = `{"secret":42,"error":"mysterious observation"}` ~ '\n';
+    auto expected = ctRegex!(`\{"secret":42,"error":"mysterious observation","timestamp":[0-9]+\}` ~ '\n');
     auto observed = stderr.readln;
 
-    assert(observed == expected, "got unexpected output `" ~ observed ~ "`");
+    assert(matchFirst(observed, expected), "got unexpected output `" ~ observed ~ "`");
 }
 
 /**
