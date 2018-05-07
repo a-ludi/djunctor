@@ -70,8 +70,12 @@ void logJsonError(T...)(lazy T args) nothrow
 void logJson(T...)(LogLevel level, lazy T args) nothrow
 {
     import djunctor.util.range : Chunks, chunks;
+    import core.time : ClockType;
+    import std.datetime.systime : Clock;
     import std.traits : isSomeString;
     import vibe.data.json : Json;
+
+    immutable timestampKey = "timestamp";
 
     if (level < minLevel)
         return;
@@ -83,6 +87,17 @@ void logJson(T...)(LogLevel level, lazy T args) nothrow
         static foreach (KeyValuePair; Chunks!(2, T))
         {
             static assert(isSomeString!(KeyValuePair.chunks[0]), "missing name");
+        }
+
+        with (ClockType)
+        {
+            // dfmt off
+            json[timestampKey] = [
+                "process": Clock!processCPUTime.currStdTime,
+                "thread": Clock!threadCPUTime.currStdTime,
+                "user": Clock!normal.currStdTime,
+            ];
+            // dfmt on
         }
 
         foreach (keyValuePair; args.chunks!2)
