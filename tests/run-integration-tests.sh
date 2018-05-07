@@ -104,7 +104,7 @@ function usage()
 
 function clean_up()
 {
-    if $RUN_DJUNCTOR;
+    if $RUN_DJUNCTOR && ! $RUN_GDB;
     then
         backup_results
         echo "results saved in $RESULTS_ARCHIVE"
@@ -172,9 +172,6 @@ function run_djunctor()
     if $RUN_GDB;
     then
         build_gdb_init_script > "$WORKDIR/$GDB_INIT_SCRIPT"
-        echo '------------------------------------'
-        echo 'type `djunctor` to start the program'
-        echo '------------------------------------'
 
         "$GDB" "${GDBFLAGS[@]}" -x "$WORKDIR/$GDB_INIT_SCRIPT" djunctor
         exit
@@ -201,6 +198,10 @@ function build_gdb_init_script()
     echo 'define djunctor'
     echo run "${DJUNCTOR_OPTS[@]}" "$TEST_DATA_MODREF.dam" "$TEST_DATA_READS.dam"
     echo 'end'
+    echo
+    echo 'echo ------------------------------------\n'
+    echo 'echo type `djunctor` to start the program\n'
+    echo 'echo ------------------------------------\n'
 }
 
 function prepare_tests()
