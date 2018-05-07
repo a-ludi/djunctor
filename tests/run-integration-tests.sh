@@ -133,6 +133,7 @@ function backup_results()
     pushd "$WORKDIR" > /dev/null
     find . -print0 > "$FILE_LIST"
     tar -czf "$RESULTS_ARCHIVE" \
+        --exclude='*.fasta' \
         --verbatim-files-from \
         --null \
         -T "$FILE_LIST"
@@ -298,7 +299,7 @@ function main()
 
 function expect_json()
 {
-    local OBSERVED="$(json_log | jq --sort-keys --slurp "$JQ_DEFS map(select($1))")"
+    local OBSERVED="$(json_log "$4" | jq --sort-keys --slurp "$JQ_DEFS map(select($1))")"
 
     if ! jq --exit-status "$JQ_DEFS $2" > /dev/null <<<"$OBSERVED";
     then
@@ -316,7 +317,12 @@ function expect_json()
 
 function json_log()
 {
-    grep --text '^{' "$OUTPUT_LOG"
+    if [[ -z "$1" ]]; then
+        grep --text '^{' "$OUTPUT_LOG"
+    else
+        grep --text '^{' "$OUTPUT_LOG" | grep "$1"
+    fi
+
 }
 
 function expect_transformed_coord()
@@ -404,7 +410,8 @@ function test_front_extension_found()
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
         '.[0].gapInfo | map(select(.type == "front")) | length == 1 and map(.contigIds) == [[5]] and map(.estimateLengthMean) == [4538] and map(.numReads) == [15]' \
-        '.[0].gapInfo | map(select(.type == "front"))'
+        '.[0].gapInfo | map(select(.type == "front"))' \
+        'gapInfo'
 }
 
 function test_gaps_found()
@@ -412,7 +419,8 @@ function test_gaps_found()
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
         '.[0].gapInfo | map(select(.type == "gap")) | length == 3 and map(.contigIds) == [[1, 2], [2, 3], [3, 4]] and map(.estimateLengthMean) == [4156, 8561, 5064] and map(.numReads) == [71, 81, 63]' \
-        '.[0].gapInfo | map(select(.type == "gap"))'
+        '.[0].gapInfo | map(select(.type == "gap"))' \
+        'gapInfo'
 }
 
 function test_back_extension_found()
@@ -420,7 +428,8 @@ function test_back_extension_found()
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
         '.[0].gapInfo | map(select(.type == "back")) | length == 0' \
-        '.[0].gapInfo | map(select(.type == "back"))'
+        '.[0].gapInfo | map(select(.type == "back"))' \
+        'gapInfo'
 }
 
 function test_front_extensions_filled()
@@ -430,7 +439,8 @@ function test_front_extensions_filled()
     expect_json \
         '.type == "front" and .step == "insertHits" and has("readId")' \
         'length == 1 and map(.readId) == [9] and map(.insertionInfo) == ['"$INSINFO1"']' \
-        '{ readIds: map(.readId), insertionInfos: map(.insertionInfo) }'
+        '{ readIds: map(.readId), insertionInfos: map(.insertionInfo) }' \
+        'insertionInfo'
 }
 
 function test_gaps_filled()
@@ -442,7 +452,8 @@ function test_gaps_filled()
     expect_json \
         '.type == "gap" and .step == "insertHits" and has("readId")' \
         'length == 3 and map(.readId) == [51, 36, 17] and map(.insertionInfo) == ['"$INSINFO1, $INSINFO2, $INSINFO3"']' \
-        '{ readIds: map(.readId), insertionInfos: map(.insertionInfo) }'
+        '{ readIds: map(.readId), insertionInfos: map(.insertionInfo) }' \
+        'insertionInfo'
 }
 
 function test_contig_5_nicely_extended()
@@ -450,7 +461,8 @@ function test_contig_5_nicely_extended()
     expect_json \
         '.contigIds == [5, 5] and has("transformedInsertionInfo")' \
         '.[0].transformedInsertionInfo | (.begin.idx == 0 and .end.idx == 1200 and .length == 8239)' \
-        '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' && \
+        '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' \
+        'transformedInsertionInfo' && \
     expect_insert_sequence_ends \
         5 5 \
         'cctctgtgctcctgtgcatggaggaggaaaccaaggcttccagccccgga' \
@@ -463,7 +475,8 @@ function test_gap_1_2_nicely_filled()
     expect_json \
         '.contigIds == [1, 2] and has("transformedInsertionInfo")' \
         '.[0].transformedInsertionInfo | (.begin.idx == 8000 and .end.idx == 200 and .length == 4600)' \
-        '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' && \
+        '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' \
+        'transformedInsertionInfo' && \
     expect_insert_sequence_ends \
         1 2 \
         'accccacaggctaagggctcagtcctaggaatacacgtcatgccccttgt' \
@@ -476,7 +489,8 @@ function test_gap_2_3_nicely_filled()
     expect_json \
         '.contigIds == [2, 3] and has("transformedInsertionInfo")' \
         '.[0].transformedInsertionInfo | (.begin.idx == 20600 and .end.idx == 100 and .length == 8700)' \
-        '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' && \
+        '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' \
+        'transformedInsertionInfo' && \
     expect_insert_sequence_ends \
         2 3 \
         'cgtgattcatgaaccattcctttgccgaaataaactccgcttaaatttat' \
@@ -489,7 +503,8 @@ function test_gap_3_4_nicely_filled()
     expect_json \
         '.contigIds == [3, 4] and has("transformedInsertionInfo")' \
         '.[0].transformedInsertionInfo | (.begin.idx == 152200 and .end.idx == 100 and .length == 7800)' \
-        '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' && \
+        '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' \
+        'transformedInsertionInfo' && \
     expect_insert_sequence_ends \
         3 4 \
         'caggtctacctccacacagccttggaggggcgtcctgggggtagattacg' \
@@ -501,7 +516,9 @@ function test_merged_result()
 {
     expect_json \
         '. | has("numReferenceContigs")' \
-        '.[0] | .numReferenceContigs == 5 and (.contigSources | map(.[0]) == [1, 5] and .[0][1].dbFile != .[1][1].dbFile)'
+        '.[0] | .numReferenceContigs == 5 and (.contigSources | map(.[0]) == [1, 5] and .[0][1].dbFile != .[1][1].dbFile)' \
+        'map(.numReferenceContigs)' \
+        'numReferenceContigs'
 }
 
 function test_result_contig_1_properly_aligns_to_reference()
@@ -518,7 +535,9 @@ function test_number_of_iterations()
 {
     expect_json \
         '. | has("iteration")' \
-        '. | max_by(.iteration).iteration == 0'
+        '. | max_by(.iteration).iteration == 0' \
+        'map(.iteration)' \
+        'iteration'
 }
 
 function test_coordinate_transform__contig_1()
