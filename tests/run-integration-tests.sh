@@ -253,6 +253,13 @@ function list_test_cases()
     declare -F | grep -oP "(?<=^declare -f )test_.*$" | sort
 }
 
+function show_run_time_summary()
+{
+    local RUN_TIME="$(json_log 'function' | jq -rs 'map(select(.function == "run") | .timestamp) | (.[1] - .[0])/10000000')"
+
+    echo "djunctor run time: $RUN_TIME seconds"
+}
+
 function show_coverage_summary()
 {
     echo "Coverage percentages per file:"
@@ -284,6 +291,7 @@ function main()
     else
         restore_results
     fi
+    show_run_time_summary
     do_tests
 
     if $SHOW_COVERAGE;
