@@ -11,6 +11,7 @@ module djunctor.util.math;
 import std.algorithm : sort, sum;
 import std.conv : to;
 import std.range : ElementType, isForwardRange, walkLength;
+import std.traits : isIntegral;
 
 /// Caluclate the mean of range.
 ElementType!Range mean(Range)(Range values) if (isForwardRange!Range)
@@ -61,4 +62,46 @@ unittest
         auto values = [2.0, 1.0, 4.0, 3.0, 5.0];
         assert(values.median == 3.0);
     }
+}
+
+/**
+    Round x upward according to base, ie. returns the next integer larger or
+    equal to x which is divisible by base.
+
+    Returns: x rounded upward according to base.
+*/
+Integer ceil(Integer)(in Integer x, in Integer base) pure nothrow if (isIntegral!Integer)
+{
+    // dfmt off
+    return x % base == 0
+        ? x
+        : (x / base + 1) * base;
+    // dfmt on
+}
+
+///
+unittest
+{
+    assert(ceil(8, 10) == 10);
+    assert(ceil(32, 16) == 32);
+    assert(ceil(101, 100) == 200);
+}
+
+/**
+    Round x downward according to base, ie. returns the next integer smaller or
+    equal to x which is divisible by base.
+
+    Returns: x rounded downward according to base.
+*/
+Integer floor(Integer)(in Integer x, in Integer base) pure nothrow if (isIntegral!Integer)
+{
+    return (x / base) * base;
+}
+
+///
+unittest
+{
+    assert(floor(8, 10) == 0);
+    assert(floor(32, 16) == 32);
+    assert(floor(101, 100) == 100);
 }
