@@ -9,7 +9,7 @@
 # Authors: Arne Ludwig <arne.ludwig@posteo.de>
 #-----------------------------------------------------------------------------
 
-TEST_DATA_ARCHIVE="integration-tests.tar.gz"
+TEST_DATA_ARCHIVE="integration-tests.tar.xz"
 TEST_DATA_READS="integration-tests/reads"
 TEST_DATA_REF="integration-tests/reference"
 TEST_DATA_MODREF="integration-tests/reference_mod"
@@ -144,7 +144,7 @@ function backup_results()
 function restore_results()
 {
     pushd "$WORKDIR" > /dev/null
-    tar -xzf "$RESULTS_ARCHIVE"
+    tar -xf "$RESULTS_ARCHIVE"
     popd > /dev/null
     set_test_data_paths
 }
@@ -153,7 +153,7 @@ function provide_test_data()
 {
     pushd "$WORKDIR" > /dev/null
     cp "$TEST_ROOT/data/$TEST_DATA_ARCHIVE" ./
-    tar -xzf "$TEST_DATA_ARCHIVE"
+    tar -xf "$TEST_DATA_ARCHIVE"
     rm "$TEST_DATA_ARCHIVE"
     popd > /dev/null
     set_test_data_paths
