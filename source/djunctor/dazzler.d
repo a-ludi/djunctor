@@ -13,9 +13,9 @@ import djunctor.djunctor : AlignmentChain, AlignmentContainer;
 import djunctor.util.log;
 import djunctor.util.range : arrayChunks;
 import djunctor.util.tempfile : mkstemp;
-import std.algorithm : endsWith, equal, filter, map, joiner, sort, splitter,
-    startsWith, SwapStrategy;
-import std.array : array;
+import std.algorithm : canFind, endsWith, equal, filter, isSorted, joiner, map,
+    min, sort, splitter, startsWith, SwapStrategy, uniq;
+import std.array : appender, Appender, array;
 import std.conv : to;
 import std.file : remove;
 import std.format : format, formattedRead;
@@ -24,13 +24,13 @@ import std.path : absolutePath, baseName, buildPath, dirName, relativePath,
     stripExtension, withExtension;
 import std.process : Config, escapeShellCommand, kill, pipeProcess,
     ProcessPipes, Redirect, wait;
-import std.range : chain, drop, only;
+import std.range : chain, drop, only, take;
 import std.range.primitives : ElementType, empty, isForwardRange, isInputRange;
 import std.stdio : File, writeln;
 import std.string : lineSplitter, outdent;
 import std.traits : hasMember, isIntegral, isSomeChar, isSomeString, Unqual;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
-import vibe.data.json : Json;
+import vibe.data.json : Json, serializeToJson;
 
 /// File suffixes of hidden DB files.
 private immutable hiddenDbFileSuffixes = [".bps", ".hdr", ".idx"];
@@ -142,7 +142,8 @@ private auto processGeneratedLasFiles(Options)(in string dbA, in string dbB, in 
             // dfmt off
             auto alignmentChains =
                 lasFileList
-                    .map!(lasFile => ladump(lasFile, dbFiles.expand, options.ladumpOptions, options.workdir))
+                    .map!(lasFile => ladump(lasFile, dbFiles.expand,
+                            options.ladumpOptions, options.workdir))
                     .map!(lasDump => readAlignmentList(lasDump))
                     .joiner
                     .array;
@@ -155,6 +156,14 @@ private auto processGeneratedLasFiles(Options)(in string dbA, in string dbB, in 
     return results;
 }
 
+private enum ChainPartType
+{
+    start = '>',
+    continuation = '-',
+    alternateStart = '+',
+    noChainInFile = '.',
+}
+
 private auto readAlignmentList(S)(in S lasDump) if (isSomeString!S)
 {
     import std.algorithm : chunkBy, count, filter;
@@ -163,13 +172,6 @@ private auto readAlignmentList(S)(in S lasDump) if (isSomeString!S)
     immutable recordSeparator = ';';
     immutable chainPartFormat = "P %d %d %c %c;L %d %d;C %d %d %d %d;D %d";
     immutable numChainPartLines = chainPartFormat.count(recordSeparator) + 1;
-    enum ChainPartType
-    {
-        start = '>',
-        continuation = '-',
-        alternateStart = '+',
-        noChainInFile = '.',
-    }
     // dfmt off
     alias RawChainPart = Tuple!(
         AlignmentChain.Contig, "contigA",
@@ -221,9 +223,20 @@ private auto readAlignmentList(S)(in S lasDump) if (isSomeString!S)
         part1.contigB.id == part2.contigB.id;
     /// Returns true iff part1 and part2 belong to the same chain.
     alias isChainContinuation = (part1, part2) =>
-        part1.chainPartType == ChainPartType.start && part2.chainPartType == ChainPartType.continuation ||
-        part1.chainPartType == ChainPartType.alternateStart && part2.chainPartType == ChainPartType.continuation ||
-        part1.chainPartType == ChainPartType.continuation && part2.chainPartType == ChainPartType.continuation;
+        (
+            part1.chainPartType == ChainPartType.start &&
+            part2.chainPartType == ChainPartType.continuation
+        )
+        ||
+        (
+            part1.chainPartType == ChainPartType.alternateStart &&
+            part2.chainPartType == ChainPartType.continuation
+        )
+        ||
+        (
+            part1.chainPartType == ChainPartType.continuation &&
+            part2.chainPartType == ChainPartType.continuation
+        );
     /// Make sure the complement flag is the same for all parts of a chain.
     alias assertSameComplementValue = (chainPart1, chainPart2) => {
         assert(chainPart1.complement == chainPart2.complement);
@@ -408,6 +421,543 @@ EOF".outdent;
                 );
                 // dfmt on
             }
+}
+
+void attachTracePoints(Options)(AlignmentChain*[] alignmentChains, in string dbA,
+        in string dbB, in string[] dazzlerOptions, in Options options)
+        if (hasOption!(Options, "workdir", isSomeString)
+            && hasOption!(Options, "ladumpTraceOptions", isOptionsList))
+{
+    auto lasFileList = getLasFiles(dbA, dbB, options.workdir).a2b;
+    // NOTE: dump only for matching A reads; better would be for matching
+    //       B reads but that is not possible with `LAdump`.
+    auto aReadIds = alignmentChains.map!"a.contigA.id".uniq.array;
+
+    // dfmt off
+    auto tracePointDumps =
+        lasFileList
+            .map!(lasFile => ladump(lasFile, dbA, dbB, aReadIds,
+                    options.ladumpTraceOptions, options.workdir))
+            .map!(lasDump => readTracePointList(lasDump))
+            .joiner
+            .array;
+    // dfmt on
+    tracePointDumps.sort!("a < b", SwapStrategy.stable);
+    assert(isSorted!"*a < *b"(alignmentChains), "alignmentChains must be sorted");
+
+    auto numAttached = alignmentChains.attachTracePointDumps(tracePointDumps,
+            getTracePointDistance(dazzlerOptions));
+    assert(numAttached == alignmentChains.length,
+            "missing trace point lists for some alignment chains");
+
+    foreach (idx, alignmentChain; alignmentChains)
+    {
+        assert(alignmentChain.tracePointDistance > 0);
+
+        foreach (localAlignment; alignmentChain.localAlignments)
+        {
+            assert(localAlignment.tracePoints.length > 0);
+        }
+    }
+}
+
+// dfmt off
+private alias TracePointDump = Tuple!(
+    size_t, "contigAId",
+    size_t, "contigBId",
+    size_t, "contigABegin",
+    size_t, "contigBBegin",
+    size_t, "contigAEnd",
+    size_t, "contigBEnd",
+    AlignmentChain.LocalAlignment.TracePoint[][], "tracePointLists",
+);
+// dfmt on
+
+private TracePointDump[] readTracePointList(S)(in S lasDump) if (isSomeString!S)
+{
+    alias TracePoint = AlignmentChain.LocalAlignment.TracePoint;
+
+    debug auto nextLineTypes = "+%@";
+    size_t contigAId;
+    size_t contigBId;
+    size_t contigAFirstBegin;
+    size_t contigBFirstBegin;
+    size_t contigALastEnd;
+    size_t contigBLastEnd;
+    bool collectingChainParts = false;
+    bool chainContinuation = false;
+    bool collectingTracePoints = false;
+    Appender!(TracePoint[]) tracePointList;
+    Appender!(TracePoint[][]) tracePointLists;
+    auto tracePointDumps = appender!(TracePointDump[]);
+
+    void startTracePointList(size_t numTracePoints)
+    {
+        tracePointList = appender!(TracePoint[]);
+        tracePointList.reserve(numTracePoints);
+        collectingTracePoints = true;
+    }
+
+    void finishTracePointList()
+    {
+        if (collectingTracePoints)
+        {
+            tracePointLists ~= tracePointList.data;
+            collectingTracePoints = false;
+        }
+    }
+
+    void startChain()
+    {
+        tracePointLists = appender!(TracePoint[][]);
+        collectingChainParts = true;
+    }
+
+    void nextChainPart()
+    {
+        finishTracePointList();
+        chainContinuation = true;
+    }
+
+    void finishChain()
+    {
+        if (collectingChainParts)
+        {
+            finishTracePointList();
+            // dfmt off
+            tracePointDumps ~= TracePointDump(
+                contigAId,
+                contigBId,
+                contigAFirstBegin,
+                contigBFirstBegin,
+                contigALastEnd,
+                contigBLastEnd,
+                tracePointLists.data,
+            );
+            // dfmt on
+            collectingChainParts = false;
+        }
+        chainContinuation = false;
+    }
+
+    foreach (dumpLine; lasDump.lineSplitter)
+    {
+        if (dumpLine.length == 0)
+            continue;
+
+        debug assert(nextLineTypes.canFind(dumpLine[0 .. 1]));
+        switch (dumpLine[0])
+        {
+        case '+':
+            if (dumpLine[2] == 'T')
+            {
+                size_t numTotalTracePoints;
+
+                auto numMatches = dumpLine.formattedRead!"+ T %d"(numTotalTracePoints);
+                assert(numMatches == 1);
+
+                tracePointDumps.reserve(numTotalTracePoints);
+                debug nextLineTypes = "P+%@";
+            }
+            break;
+        case 'P':
+            size_t nextContigAId;
+            size_t nextContigBId;
+            char complement;
+            char chainPartType;
+
+            // dfmt off
+                auto numMatches = dumpLine.formattedRead!"P %d %d %c %c"(
+                    nextContigAId,
+                    nextContigBId,
+                    complement,
+                    chainPartType,
+                );
+                // dfmt on
+            assert(numMatches == 4);
+
+            final switch (chainPartType.to!ChainPartType)
+            {
+            case ChainPartType.start:
+            case ChainPartType.alternateStart:
+            case ChainPartType.noChainInFile:
+                finishChain();
+                contigAId = nextContigAId;
+                contigBId = nextContigBId;
+                startChain();
+                break;
+            case ChainPartType.continuation:
+                if (contigAId == nextContigAId && contigBId == nextContigBId)
+                {
+                    nextChainPart();
+                }
+                else
+                {
+                    // NOTE: This is a work-around for a bug in LAdump: if the
+                    //       beginning of a chain is not a "proper overlap" but
+                    //       a continuation is then LAdump will print the
+                    //       continuation only. Thus, a part marked as
+                    //       continuation still may be a chain start.
+                    finishChain();
+                    contigAId = nextContigAId;
+                    contigBId = nextContigBId;
+                    startChain();
+                }
+                break;
+            }
+            debug nextLineTypes = "C";
+            break;
+        case 'C':
+            size_t contigABegin;
+            size_t contigBBegin;
+            size_t contigAEnd;
+            size_t contigBEnd;
+
+            // dfmt off
+                auto numMatches = dumpLine.formattedRead!"C %d %d %d %d"(
+                    contigABegin,
+                    contigAEnd,
+                    contigBBegin,
+                    contigBEnd,
+                );
+                // dfmt on
+            assert(numMatches == 4);
+
+            if (chainContinuation)
+            {
+                contigALastEnd = contigAEnd;
+                contigBLastEnd = contigBEnd;
+            }
+            else
+            {
+                contigAFirstBegin = contigABegin;
+                contigBFirstBegin = contigBBegin;
+                contigALastEnd = contigAEnd;
+                contigBLastEnd = contigBEnd;
+            }
+
+            debug nextLineTypes = "T";
+            break;
+        case 'T':
+            size_t numTracePoints;
+
+            auto numMatches = dumpLine.formattedRead!"T %d"(numTracePoints);
+            assert(numMatches == 1);
+
+            startTracePointList(numTracePoints);
+            debug nextLineTypes = " ";
+            break;
+        case ' ':
+            if (collectingTracePoints)
+            {
+                TracePoint tracePoint;
+
+                auto numMatches = dumpLine.formattedRead!"   %d %d"(tracePoint.numDiffs,
+                        tracePoint.numBasePairs);
+                assert(numMatches == 2);
+
+                tracePointList ~= tracePoint;
+            }
+            debug nextLineTypes = " P";
+            break;
+        default:
+            break; // ignore
+        }
+    }
+
+    finishChain();
+
+    return tracePointDumps.data;
+}
+
+unittest
+{
+    immutable testLasDump = q"EOF
+        + P 3
+        % P 42
+        + T 9
+        % T 42
+        @ T 42
+        P 1 1 n >
+        C 0 1337 0 42
+        T 3
+           2 102
+           3 101
+           4 104
+        P 1 1 c +
+        C 0 1338 0 43
+        T 3
+           3 101
+           4 104
+           2 102
+        P 1 2 n >
+        C 0 1339 0 44
+        T 4
+           6 105
+           1 101
+           2 100
+           3  97
+        P 1 2 n -
+        C 0 1340 0 45
+        T 2
+           0   2
+           2 102
+EOF".outdent;
+
+    with (AlignmentChain.LocalAlignment)
+    {
+        auto tracePointDumps = readTracePointList(testLasDump).array;
+        // dfmt off
+        auto expectedResult = [
+            TracePointDump(1, 1, 0, 0, 1337, 42, [[
+                TracePoint(2, 102),
+                TracePoint(3, 101),
+                TracePoint(4, 104),
+            ]]),
+            TracePointDump(1, 1, 0, 0, 1338, 43, [[
+                TracePoint(3, 101),
+                TracePoint(4, 104),
+                TracePoint(2, 102),
+            ]]),
+            TracePointDump(1, 2, 0, 0, 1340, 45, [
+                [
+                    TracePoint(6, 105),
+                    TracePoint(1, 101),
+                    TracePoint(2, 100),
+                    TracePoint(3, 97),
+                ],
+                [
+                    TracePoint(0, 2),
+                    TracePoint(2, 102),
+                ]
+            ]),
+        ];
+        // dfmt on
+
+        assert(tracePointDumps == expectedResult);
+    }
+}
+
+auto fingerprint(AlignmentChain* alignmentChain) pure nothrow
+{
+    // dfmt off
+    return tuple(
+        alignmentChain.contigA.id,
+        alignmentChain.contigB.id,
+        alignmentChain.first.contigA.begin + 0,
+        alignmentChain.first.contigB.begin + 0,
+        alignmentChain.last.contigA.end + 0,
+        alignmentChain.last.contigB.end + 0,
+    );
+    // dfmt on
+}
+
+auto fingerprint(TracePointDump* tracePointDump) pure nothrow
+{
+    // dfmt off
+    return tuple(
+        tracePointDump.contigAId,
+        tracePointDump.contigBId,
+        tracePointDump.contigABegin,
+        tracePointDump.contigBBegin,
+        tracePointDump.contigAEnd,
+        tracePointDump.contigBEnd,
+    );
+    // dfmt on
+}
+
+private size_t attachTracePointDumps(AlignmentChain*[] alignmentChains,
+        TracePointDump[] tracePointDumps, in size_t tracePointDistance) pure
+{
+    assert(tracePointDistance > 0);
+    assert(isSorted!"*a < *b"(alignmentChains));
+
+    size_t numAlignmentChainsAffected = 0;
+    size_t numLoops = 0;
+    size_t i = 0;
+    size_t j = 0;
+
+    while (i < alignmentChains.length && j < tracePointDumps.length
+            && numLoops < alignmentChains.length + tracePointDumps.length)
+    {
+        auto alignmentChain = alignmentChains[i];
+        auto tracePointDump = &tracePointDumps[j];
+        auto acFingerprint = alignmentChain.fingerprint;
+        auto tpdFingerprint = tracePointDump.fingerprint;
+
+        // dfmt off
+        debug logJsonDebug(
+            "acFingerprint", acFingerprint.serializeToJson,
+            "tpdFingerprint", tpdFingerprint.serializeToJson,
+        );
+        // dfmt on
+
+        if (acFingerprint == tpdFingerprint)
+        {
+            foreach (k, ref localAlignment; alignmentChain.localAlignments)
+            {
+                localAlignment.tracePoints = tracePointDump.tracePointLists[k];
+            }
+            alignmentChain.tracePointDistance = tracePointDistance;
+            numAlignmentChainsAffected = i + 1;
+            ++i;
+        }
+        else if (tpdFingerprint < acFingerprint)
+        {
+            ++j;
+        }
+        else
+        {
+            assert(tpdFingerprint > acFingerprint);
+            throw new Exception(
+                    format!"missing trace point data for alignment chain: %s"(*alignmentChain));
+        }
+
+        ++numLoops;
+    }
+
+    return numAlignmentChainsAffected;
+}
+
+unittest
+{
+    with (AlignmentChain) with (LocalAlignment)
+        {
+            // dfmt off
+        auto alignmentChains = [
+            new AlignmentChain(
+                1,
+                Contig(1, 1337),
+                Contig(1, 42),
+                Complement.no,
+                [
+                    LocalAlignment(Locus(0, 1337), Locus(0, 42), 0),
+                ],
+            ),
+            new AlignmentChain(
+                2,
+                Contig(1, 1338),
+                Contig(1, 43),
+                Complement.no,
+                [
+                    LocalAlignment(Locus(0, 1338), Locus(0, 43), 0),
+                ],
+            ),
+            new AlignmentChain(
+                3,
+                Contig(1, 1340),
+                Contig(3, 45),
+                Complement.no,
+                [
+                    LocalAlignment(Locus(0, 1339), Locus(0, 44), 0),
+                    LocalAlignment(Locus(0, 1340), Locus(0, 45), 0),
+                ],
+            ),
+        ];
+        auto tracePointDumps = [
+            TracePointDump(1, 1, 0, 0, 1337, 42, [[
+                TracePoint(1, 102),
+                TracePoint(2, 101),
+                TracePoint(3, 104),
+            ]]),
+            TracePointDump(1, 1, 0, 0, 1338, 43, [[
+                TracePoint(4, 101),
+                TracePoint(5, 104),
+                TracePoint(6, 102),
+            ]]),
+            TracePointDump(1, 2, 0, 0, 1, 2, [[]]),
+            TracePointDump(1, 2, 0, 0, 3, 4, [[]]),
+            TracePointDump(1, 3, 0, 0, 1340, 45, [
+                [
+                    TracePoint(7, 105),
+                    TracePoint(8, 101),
+                    TracePoint(9, 100),
+                    TracePoint(10, 97),
+                ],
+                [
+                    TracePoint(11, 2),
+                    TracePoint(12, 102),
+                ],
+            ]),
+        ];
+        auto expectedAlignmentChains = [
+            AlignmentChain(
+                1,
+                Contig(1, 1337),
+                Contig(1, 42),
+                Complement.no,
+                [
+                    LocalAlignment(Locus(0, 1337), Locus(0, 42), 0, [
+                        TracePoint(1, 102),
+                        TracePoint(2, 101),
+                        TracePoint(3, 104),
+                    ]),
+                ],
+                101
+            ),
+            AlignmentChain(
+                2,
+                Contig(1, 1338),
+                Contig(1, 43),
+                Complement.no,
+                [
+                    LocalAlignment(Locus(0, 1338), Locus(0, 43), 0, [
+                        TracePoint(4, 101),
+                        TracePoint(5, 104),
+                        TracePoint(6, 102),
+                    ]),
+                ],
+                101
+            ),
+            AlignmentChain(
+                3,
+                Contig(1, 1340),
+                Contig(3, 45),
+                Complement.no,
+                [
+                    LocalAlignment(Locus(0, 1339), Locus(0, 44), 0, [
+                        TracePoint(7, 105),
+                        TracePoint(8, 101),
+                        TracePoint(9, 100),
+                        TracePoint(10, 97),
+                    ]),
+                    LocalAlignment(Locus(0, 1340), Locus(0, 45), 0, [
+                        TracePoint(11, 2),
+                        TracePoint(12, 102),
+                    ]),
+                ],
+                101
+            ),
+        ];
+        // dfmt on
+
+            assert(alignmentChains.attachTracePointDumps(tracePointDumps, 101) == 3);
+            assert(alignmentChains.map!"*a".array == expectedAlignmentChains);
+        }
+}
+
+size_t getTracePointDistance(in string[] dazzlerOptions) pure
+{
+    immutable defaultTracePointDistance = 100;
+
+    foreach (option; dazzlerOptions)
+    {
+        if (option.startsWith("-s"))
+        {
+            return option[2 .. $].to!size_t;
+        }
+    }
+
+    return defaultTracePointDistance;
+}
+
+unittest
+{
+    assert(getTracePointDistance([]) == 100);
+    assert(getTracePointDistance(["-I"]) == 100);
+    assert(getTracePointDistance(["-s42", "-e.8", "-I"]) == 42);
+    assert(getTracePointDistance(["-I", "-s42", "-e.8"]) == 42);
+    assert(getTracePointDistance(["-e.8", "-I", "-s42"]) == 42);
 }
 
 /**
@@ -860,9 +1410,24 @@ private
     string ladump(in string lasFile, in string dbA, in string dbB,
             in string[] ladumpOpts, in string workdir)
     {
-        return executeCommand(chain(only("LAdump"), ladumpOpts,
-                only(dbA.relativeToWorkdir(workdir)), only(dbB.relativeToWorkdir(workdir)),
-                only(lasFile.relativeToWorkdir(workdir))), workdir);
+        return ladump(lasFile, dbA, dbB, [], ladumpOpts, workdir);
+    }
+
+    string ladump(in string lasFile, in string dbA, in string dbB, in size_t[] readIds,
+            in string[] ladumpOpts, in string workdir)
+    {
+        // dfmt off
+        return executeCommand(chain(
+            only("LAdump"),
+            ladumpOpts,
+            only(
+                dbA.relativeToWorkdir(workdir),
+                dbB.relativeToWorkdir(workdir),
+                lasFile.relativeToWorkdir(workdir)
+            ),
+            readIds.map!(to!string),
+        ), workdir);
+        // dfmt on
     }
 
     auto dbdump(Range)(in string dbFile, Range recordNumbers,

@@ -139,13 +139,23 @@ struct Options
     @Help("list of options to pass to `DBsplit`")
     size_t fastaLineWidth = 50;
 
-    /// List of options to pass to `LAdump`
+    /// List of options to pass to `LAdump` for simple dump.
     @Option()
     // dfmt off
     string[] ladumpOptions = [
         "-c", // output alignment coordinates
         "-d", // output number of differences for each local alignment
         "-l", // output lengths of the contigs
+        "-o", // output proper overlaps only
+    ];
+    // dfmt on
+
+    /// List of options to pass to `LAdump` for trace point dump.
+    @Option()
+    // dfmt off
+    string[] ladumpTraceOptions = [
+        "-c", // output alignment coordinates
+        "-t", // output number of differences for each local alignment
         "-o", // output proper overlaps only
     ];
     // dfmt on
