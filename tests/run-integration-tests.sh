@@ -241,9 +241,10 @@ function do_tests()
             echo "    $failed_test_case"
         done
 
-        echo
-        echo "successes: $(( $NUM_TEST_CASES - ${#FAILURES[*]} )) failures: ${#FAILURES[*]} total: $NUM_TEST_CASES"
     fi
+
+    echo
+    echo "successes: $(( $NUM_TEST_CASES - ${#FAILURES[*]} )) failures: ${#FAILURES[*]} total: $NUM_TEST_CASES"
 }
 
 function list_test_cases()
