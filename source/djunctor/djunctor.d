@@ -12,24 +12,25 @@ import djunctor.commandline : Options;
 import djunctor.util.fasta : buildFastaRecord, PacBioHeader, parseFasta,
     parseFastaRecord, reverseComplement;
 import djunctor.util.log;
-import djunctor.util.math : mean, median;
+import djunctor.util.math : ceil, floor, mean, median;
 import djunctor.util.range : Comparator;
 import djunctor.util.string : indent;
 import core.exception : AssertError;
 import std.algorithm : all, any, canFind, chunkBy, each, equal, filter, find,
-    fold, group, isSorted, joiner, map, max, maxElement, min, sort, sum, swap;
+    fold, group, isSorted, joiner, map, max, maxElement, min, sort, sum, swap,
+    SwapStrategy;
 import std.array : appender, Appender, array;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
 import std.exception : assertNotThrown, assertThrown;
 import std.format : format, formattedWrite;
-import std.math : abs, sgn;
+import std.math : abs, floor, sgn;
 import std.range : assumeSorted, chain, chunks, ElementType, enumerate, iota,
-    isForwardRange, only, retro, slide, SortedRange, walkLength;
+    isForwardRange, only, refRange, retro, slide, SortedRange, tail, take, walkLength, zip;
 import std.stdio : File, write, writeln;
 import std.string : outdent;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
-import vibe.data.json : Json, serializeToJson;
+import vibe.data.json : Json, toJson = serializeToJson;
 
 version (unittest)
 {
@@ -37,7 +38,7 @@ version (unittest)
     import djunctor.dazzler : origGetLocalAlignments = getLocalAlignments,
         origGetMappings = getMappings;
     import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
-        getNumContigs;
+        getNumContigs, getTracePointDistance, attachTracePoints;
 
     MockCallable!(AlignmentContainer!(AlignmentChain[]), const string, const Options) getLocalAlignments;
     MockCallable!(origGetMappings!Options) getMappings;
@@ -45,7 +46,8 @@ version (unittest)
 else
 {
     import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
-        getLocalAlignments, getMappings, getNumContigs;
+        getLocalAlignments, getMappings, getNumContigs, getTracePointDistance,
+        attachTracePoints;
 }
 
 /// General container for alignment data.
@@ -100,15 +102,22 @@ struct AlignmentChain
 {
     static struct LocalAlignment
     {
-        struct Locus
+        static struct Locus
         {
             size_t begin;
             size_t end;
         }
 
+        static struct TracePoint
+        {
+            size_t numDiffs;
+            size_t numBasePairs;
+        }
+
         Locus contigA;
         Locus contigB;
         size_t numDiffs;
+        TracePoint[] tracePoints;
     }
 
     static struct Contig
@@ -130,6 +139,7 @@ struct AlignmentChain
     Contig contigB;
     Complement complement;
     LocalAlignment[] localAlignments;
+    size_t tracePointDistance;
 
     invariant
     {
@@ -140,6 +150,18 @@ struct AlignmentChain
                     && la.contigA.end <= contigA.length, "non-sense alignment of contigA");
             assert(0 <= la.contigB.begin && la.contigB.begin < la.contigB.end
                     && la.contigB.end <= contigB.length, "non-sense alignment of contigB");
+
+            assert(tracePointDistance == 0 || la.tracePoints.length > 0,
+                    "missing trace points");
+            if (tracePointDistance > 0)
+            {
+                size_t traceLength = la.tracePoints.map!"a.numBasePairs".sum;
+                size_t traceDiffs = la.tracePoints.map!"a.numDiffs".sum;
+
+                assert(la.numDiffs == traceDiffs, "missing trace points");
+                assert(la.contigB.end - la.contigB.begin == traceLength,
+                        "trace distance does not match alignment");
+            }
         }
     }
 
@@ -168,7 +190,7 @@ struct AlignmentChain
             }
     }
 
-    @property auto ref LocalAlignment first() const pure nothrow
+    @property ref const(LocalAlignment) first() const pure nothrow
     {
         return localAlignments[0];
     }
@@ -185,7 +207,7 @@ struct AlignmentChain
             }
     }
 
-    @property auto ref LocalAlignment last() const pure nothrow
+    @property ref const(LocalAlignment) last() const pure nothrow
     {
         return localAlignments[$ - 1];
     }
@@ -698,7 +720,7 @@ bool isInReferenceOrder(in ReadAlignment readAlignment) pure nothrow
             readAlignment[1]) != readAlignment[0].complement;
 }
 
-/// Start the `djunctor` alorithm with preprocessed options.
+/// Start the `djunctor` algorithm with preprocessed options.
 void runWithOptions(in ref Options options)
 {
     new DJunctor(options).run();
@@ -769,13 +791,13 @@ bool isExtension(in ReadAlignment readAlignment) pure nothrow
     ---
     Case 1 (complement alignment):
 
-                      0  rx
-        ref           |--+-<-+-<--<--<--|
+              0             ry lr
+        ref   |--<--<--<-+-<-+--|
                          | | |
-        read  |-->-->-->-+->-+--|
-              0          ax
+        read          |--+->-+->-->-->--|
+                      0     ay         la
 
-    Case 1 (complement alignment):
+    Case 2 (non-complement alignment):
 
                       0  rx
         ref           |--+->-+->-->-->--|
@@ -816,13 +838,13 @@ bool isFrontExtension(in ReadAlignment readAlignment) pure nothrow
     ---
     Case 1 (complement alignment):
 
-              0             ry lr
-        ref   |--<--<--<-+-<-+--|
+                      0  rx
+        ref           |--+-<-+-<--<--<--|
                          | | |
-        read          |--+->-+->-->-->--|
-                      0     ay         la
+        read  |-->-->-->-+->-+--|
+              0          ax
 
-    Case 1 (complement alignment):
+    Case 2 (non-complement alignment):
 
               0             ry lr
         ref   |-->-->-->-+->-+--|
@@ -858,7 +880,7 @@ bool isBackExtension(in ReadAlignment readAlignment) pure nothrow
 
 /**
     Returns true iff the read alignment spans a gap, ie. two alignments on
-    different reference contigs with different indivdual extension type are
+    different reference contigs with different individual extension type are
     involved.
 
     ---
@@ -884,7 +906,10 @@ bool isGap(in ReadAlignment readAlignment) pure nothrow
     // dfmt off
     return readAlignment.length == 2 &&
         readAlignment[0].contigB.id != readAlignment[1].contigB.id &&
-        readAlignment[0 .. 1].getType != readAlignment[1 .. 2].getType;
+        (
+            (readAlignment[0 .. 1].isBackExtension && readAlignment[1 .. 2].isFrontExtension) ||
+            (readAlignment[0 .. 1].isFrontExtension && readAlignment[1 .. 2].isBackExtension)
+        );
     // dfmt on
 }
 
@@ -1654,7 +1679,7 @@ size_t meanScore(in ReadAlignment readAlignment) pure
 }
 
 /**
-    A pile of read alignments beloning to the same gap/contig end.
+    A pile of read alignments belonging to the same gap/contig end.
 
     See_Also: Hit
 */
@@ -1701,7 +1726,8 @@ PileUp[] buildPileUps(AlignmentContainer!(AlignmentChain[]) candidates) pure
         .b2a
         .chunkBy!isSameRead
         .map!array
-        .filter!isValid
+        .filter!isValid // TODO: this might discard "good" reads which span
+                        //       a whole contig extending it on both ends.
         .map!sortGapAlignment
         .array;
     // dfmt on
@@ -2085,6 +2111,28 @@ unittest
         }
 }
 
+/**
+    Get the type of the read alignment.
+
+    See_Also: `isFrontExtension`, `isBackExtension`, `isGap`
+*/
+ReadAlignmentType getType(in PileUp pileUp) pure nothrow
+{
+    assert(pileUp.isValid, "invalid read alignment");
+
+    if (pileUp.isGap)
+    {
+        return ReadAlignmentType.gap;
+    }
+    else
+    {
+        assert(pileUp.isExtension);
+        return pileUp[0].isFrontExtension
+            ? ReadAlignmentType.front
+            : ReadAlignmentType.back;
+    }
+}
+
 bool isValid(in PileUp pileUp) pure nothrow
 {
     return pileUp.isExtension ^ pileUp.isGap;
@@ -2111,10 +2159,556 @@ bool isGap(in PileUp pileUp) pure nothrow
     return pileUp.any!(readAlignment => readAlignment.isGap);
 }
 
-/// A read consenus alignment deemed true and the source of the sequence.
+/// Returns a pile up with the complementary order alignment chains.
+PileUp getComplementaryOrder(in PileUp pileUp, AlignmentChain[] complementaryAlignmentChains) pure
+{
+    assert(complementaryAlignmentChains.isSorted);
+    auto sortedComplementaryAlignmentChains = assumeSorted(complementaryAlignmentChains);
+    auto complementaryPileUp = appender!PileUp;
+    complementaryPileUp.reserve(pileUp.length);
+    Appender!ReadAlignment complementaryReadAlignment;
+
+    foreach (readAlignment; pileUp)
+    {
+        complementaryReadAlignment = appender!ReadAlignment;
+        complementaryReadAlignment.reserve(readAlignment.length);
+
+        foreach (alignmentChain; readAlignment)
+        {
+            auto needle = alignmentChain.getComplementaryOrder();
+            auto complementaryCandidates = sortedComplementaryAlignmentChains.equalRange(needle);
+            if (complementaryCandidates.empty)
+            {
+                throw new Exception("missing complementary alignment chain");
+            }
+
+            complementaryReadAlignment ~= complementaryCandidates.front;
+        }
+
+        complementaryPileUp ~= complementaryReadAlignment.data;
+    }
+
+    return complementaryPileUp.data;
+}
+
+unittest
+{
+    alias Complement = AlignmentChain.Complement;
+    AlignmentChain getDummyAC(size_t contigB, size_t contigA, AlignmentChain.Complement complement, size_t contigABegin, size_t contigAEnd, size_t contigBBegin, size_t contigBEnd)
+    {
+        immutable contigLength = 100;
+        // dfmt off
+        AlignmentChain dummy = {
+            contigA: AlignmentChain.Contig(contigA, contigLength),
+            contigB: AlignmentChain.Contig(contigB, contigLength),
+            complement: complement,
+            localAlignments: [AlignmentChain.LocalAlignment(
+                AlignmentChain.LocalAlignment.Locus(contigABegin, contigAEnd),
+                AlignmentChain.LocalAlignment.Locus(contigBBegin, contigBEnd),
+            )],
+        };
+        // dfmt on
+
+        return dummy;
+    }
+
+    // dfmt off
+    auto inPileUp = [
+        [  // read 1 spans gap from 1 to 2
+            getDummyAC(1, 1, Complement.no,   0,  10,  90, 100),
+            getDummyAC(1, 2, Complement.no,  90, 100,   0,  10),
+        ],
+        [  // read 2 extends begin contig 3
+            getDummyAC(2, 3, Complement.no,  90, 100,   0,  10),
+        ],
+        [  // read 3 extends end contig 3
+            getDummyAC(3, 3, Complement.no,   0,  10,  90, 100),
+        ],
+        [  // read 4 spans gap from 4 to 5 (complement)
+            getDummyAC(4, 4, Complement.yes,   0,  10,  90, 100),
+            getDummyAC(4, 5, Complement.yes,  90, 100,   0,  10),
+        ],
+        [  // read 5 extends begin contig 6 (complement)
+            getDummyAC(5, 6, Complement.yes,  90, 100,   0,  10),
+        ],
+        [  // read 6 extends end contig 6 (complement)
+            getDummyAC(6, 6, Complement.yes,   0,  10,  90, 100),
+        ],
+    ];
+    auto complementaryAlignmentChains = [
+        getDummyAC(1, 1, Complement.no,  90, 100,   0,  10),
+        getDummyAC(2, 1, Complement.no,   0,  10,  90, 100),
+        getDummyAC(3, 2, Complement.no,   0,  10,  90, 100),
+        getDummyAC(3, 3, Complement.no,  90, 100,   0,  10),
+        getDummyAC(4, 4, Complement.yes,   0,  10,  90, 100),
+        getDummyAC(5, 4, Complement.yes,  90, 100,   0,  10),
+        getDummyAC(6, 5, Complement.yes,  90, 100,   0,  10),
+        getDummyAC(6, 6, Complement.yes,   0,  10,  90, 100),
+    ];
+    // dfmt on
+
+    auto complementaryPileUp = inPileUp.getComplementaryOrder(complementaryAlignmentChains);
+
+    // dfmt off
+    assert(complementaryPileUp == [
+        [  // read 1 spans gap from 1 to 2
+            getDummyAC(1, 1, Complement.no,  90, 100,   0,  10),
+            getDummyAC(2, 1, Complement.no,   0,  10,  90, 100),
+        ],
+        [  // read 2 extends begin contig 3
+            getDummyAC(3, 2, Complement.no,   0,  10,  90, 100),
+        ],
+        [  // read 3 extends end contig 3
+            getDummyAC(3, 3, Complement.no,  90, 100,   0,  10),
+        ],
+        [  // read 4 spans gap from 4 to 5 (complement)
+            getDummyAC(4, 4, Complement.yes,   0,  10,  90, 100),
+            getDummyAC(5, 4, Complement.yes,  90, 100,   0,  10),
+        ],
+        [  // read 5 extends begin contig 6 (complement)
+            getDummyAC(6, 5, Complement.yes,  90, 100,   0,  10),
+        ],
+        [  // read 6 extends end contig 6 (complement)
+            getDummyAC(6, 6, Complement.yes,   0,  10,  90, 100),
+        ],
+    ]);
+    // dfmt on
+}
+
+AlignmentChain getComplementaryOrder(in AlignmentChain alignmentChain) pure
+{
+    AlignmentChain complementary = {
+        contigA: alignmentChain.contigB,
+        contigB: alignmentChain.contigA,
+        complement: alignmentChain.complement,
+        localAlignments: [AlignmentChain.LocalAlignment(
+            AlignmentChain.LocalAlignment.Locus(
+                alignmentChain.first.contigB.begin,
+                alignmentChain.last.contigB.end,
+            ),
+            AlignmentChain.LocalAlignment.Locus(
+                alignmentChain.first.contigA.begin,
+                alignmentChain.last.contigA.end,
+            ),
+        )],
+    };
+    // dfmt on
+
+    if (complementary.complement)
+    {
+        static foreach (contig; ["contigA", "contigB"])
+        {
+            static foreach (coord; ["begin", "end"])
+                mixin("complementary.localAlignments[0]."~contig~"."~coord~" = complementary."~contig~".length - complementary.localAlignments[0]."~contig~"."~coord~";");
+            mixin("swap(complementary.localAlignments[0]."~contig~".begin, complementary.localAlignments[0]."~contig~".end);");
+        }
+
+    }
+
+    return complementary;
+}
+
+
+/// Returns a list of pointers to all involved alignment chains.
+AlignmentChain*[] getAlignmentChainRefs(PileUp pileUp) pure nothrow
+{
+    auto alignmentChainsAcc = appender!(AlignmentChain*[]);
+    alignmentChainsAcc.reserve(pileUp.map!"a.length".length);
+
+    foreach (ref readAlignment; pileUp)
+    {
+        foreach (ref alignmentChain; readAlignment)
+        {
+            alignmentChainsAcc ~= &alignmentChain;
+        }
+    }
+
+    return alignmentChainsAcc.data;
+}
+
+///
+unittest
+{
+    auto pileUp = [[AlignmentChain(), AlignmentChain()], [AlignmentChain()]];
+    auto allAlignmentChains = pileUp.getAlignmentChainRefs();
+
+    assert(allAlignmentChains.length == 3);
+    assert(pileUp[0][0].id == 0);
+    assert(pileUp[0][1].id == 0);
+    assert(pileUp[1][0].id == 0);
+
+    allAlignmentChains[0].id = 1;
+    allAlignmentChains[1].id = 2;
+    allAlignmentChains[2].id = 3;
+
+    assert(pileUp[0][0].id == 1);
+    assert(pileUp[0][1].id == 2);
+    assert(pileUp[1][0].id == 3);
+}
+
+// dfmt off
+alias CroppingSlice = Tuple!(
+    size_t, "begin",
+    size_t, "end",
+);
+alias CroppingRefPosition = Tuple!(
+    size_t, "frontIdx",
+    size_t, "frontContigId",
+    size_t, "backIdx",
+    size_t, "backContigId",
+);
+// dfmt on
+
+CroppingSlice intersection(in CroppingSlice aSlice, in CroppingSlice bSlice) pure nothrow
+{
+    return CroppingSlice(max(aSlice[0], bSlice[0]), min(aSlice[1], bSlice[1]));
+}
+
+CroppingRefPosition getCroppingRefPositions(const PileUp pileUp, in size_t tracePointDistance) pure nothrow
+{
+    // dfmt off
+    auto frontAlignments = pileUp
+        .filter!(readAlignment => readAlignment.isFrontExtension || readAlignment.isGap)
+        .map!"a[$ - 1]"
+        .array;
+    auto backAlignments = pileUp
+        .filter!(readAlignment => readAlignment.isBackExtension || readAlignment.isGap)
+        .map!"a[0]"
+        .array;
+    // dfmt on
+    auto commonFrontTracePoint = frontAlignments.getCommonFrontTracePoint(tracePointDistance);
+    auto commonBackTracePoint = backAlignments.getCommonBackTracePoint(tracePointDistance);
+    size_t frontContig;
+    size_t backContig;
+
+    if (frontAlignments.length > 0 && backAlignments.length > 0)
+    {
+        frontContig = frontAlignments[0].contigB.id;
+        backContig = backAlignments[0].contigB.id;
+    }
+    else if (frontAlignments.length > 0)
+    {
+        frontContig = backContig = frontAlignments[0].contigB.id;
+    }
+    else if (backAlignments.length > 0)
+    {
+        backContig = frontContig = backAlignments[0].contigB.id;
+    }
+    else
+    {
+        assert(0, "empty pile up");
+    }
+
+    // dfmt off
+    return CroppingRefPosition(
+        commonFrontTracePoint,
+        frontContig,
+        commonBackTracePoint,
+        backContig,
+    );
+    // dfmt on
+}
+
+CroppingSlice getCroppingSlice(const AlignmentChain alignmentChain, in CroppingRefPosition croppingRefPosition) pure
+{
+    auto tracePointDistance = alignmentChain.tracePointDistance;
+    auto alignmentType = [alignmentChain.getComplementaryOrder].getType;
+    // dfmt off
+    auto refPos = alignmentType == ReadAlignmentType.front
+        ? croppingRefPosition.frontIdx
+        : croppingRefPosition.backIdx;
+    // dfmt on
+    auto openInterval = alignmentType == ReadAlignmentType.front;
+    size_t readCroppingPos;
+
+    foreach (localAlignment; alignmentChain.localAlignments)
+    {
+        auto firstTracePointRefPos = ceil(localAlignment.contigA.begin, tracePointDistance);
+        auto numTracePoints = localAlignment.tracePoints.length;
+        assert(refPos >= firstTracePointRefPos);
+        auto tracePointIdx = (refPos - firstTracePointRefPos) / tracePointDistance;
+
+        if (tracePointIdx < numTracePoints)
+        {
+            auto endIdx = tracePointIdx + (openInterval ? 0 : 1);
+            // dfmt off
+            readCroppingPos =
+                localAlignment.contigB.begin +
+                localAlignment
+                    .tracePoints[0 .. endIdx]
+                    .map!"a.numBasePairs"
+                    .sum;
+            // dfmt on
+            break;
+        }
+    }
+
+    // dfmt off
+    return alignmentType == ReadAlignmentType.front
+        ? CroppingSlice(0, readCroppingPos)
+        : CroppingSlice(readCroppingPos, alignmentChain.contigB.length);
+    // dfmt on
+}
+
+/**
+    Returns a back "common" trace points wrt. contigB. The returned
+    trace point is not necessarily common to *all* alignment chains, ie. the
+    alignment intervals are incrementally intersected reject those that would
+    cause an empty intersection. The intervals are ordered descending by
+    end point and starting point. Example:
+
+    ---
+    :....:....:....:....:....:....:....:....:
+    :    :    :    :    |----+--------------|
+    :    :    :    |---------+--------------|
+    :    :    :    :    :  |-+---------|    :
+    :    :    :    :    :   |+--------|:    :
+    :    :    :    :    :|---+-------| :    :
+    :    : |-----------|:    :    :    :    :
+    |---------|    :    :    :    :    :    :
+
+     :  = trace point
+     +  = "common" trace point
+    |-| = alignment interval
+    ---
+*/
+size_t getCommonBackTracePoint(const AlignmentChain[] alignmentChains, in size_t tracePointDistance) pure nothrow
+{
+    // dfmt off
+    auto alignmentSlices = alignmentChains
+        .map!(ac => ac.complement
+            ? tuple(
+                ac.contigB.length - ac.first.contigB.begin + 0,
+                ac.contigB.length - ac.last.contigB.end + 0,
+            )
+            : tuple(
+                ac.last.contigB.end + 0,
+                ac.first.contigB.begin + 0,
+            ))
+        .array;
+    // dfmt on
+
+    foreach (alignmentSlice; alignmentSlices)
+    {
+        assert(alignmentSlice[0] > alignmentSlice[1]);
+    }
+    // dfmt off
+    debug logJsonDebug(
+        "alignmentSlices", alignmentSlices.map!"[a[0], a[1]]".array.toJson,
+        "contigBIds", alignmentChains.map!"a.contigB.id".array.toJson,
+        "type", "back",
+    );
+    // dfmt on
+
+    return getCommonBackTracePoint(alignmentSlices, tracePointDistance);
+}
+
+private size_t getCommonBackTracePoint(Tuple!(size_t, size_t)[] alignmentSlices, in size_t tracePointDistance) pure nothrow
+{
+    if (alignmentSlices.length == 0)
+        return 0;
+
+    alignmentSlices.sort!"a > b";
+    auto commonSlice = tuple(0UL, size_t.max);
+    auto lastCommonSlice = commonSlice;
+
+    foreach (alignmentSlice; alignmentSlices)
+    {
+        commonSlice[0] = ceil(max(commonSlice[0], alignmentSlice[1]), tracePointDistance);
+        commonSlice[1] = floor(min(commonSlice[1], alignmentSlice[0]), tracePointDistance);
+
+        if (commonSlice[1] < commonSlice[0])
+        {
+            break;
+        }
+
+        lastCommonSlice = commonSlice;
+    }
+
+    return lastCommonSlice[0];
+}
+
+unittest
+{
+    immutable tracePointDistance = 5UL;
+    // dfmt off
+    // 0    5   10   15   20   25
+    // :....:....:....:....:....:
+    // |---------+--------------|
+    //      |----+--------------|
+    //         |-+---------|
+    //       |---+-------|
+    //          |+--------|
+    auto alignmentSlices1 = [
+        tuple(25UL,  0UL),
+        tuple(25UL,  5UL),
+        tuple(20UL,  8UL),
+        tuple(18UL,  6UL),
+        tuple(19UL,  9UL),
+    ];
+    // dfmt on
+    auto commonBackTracePoint1 = getCommonBackTracePoint(alignmentSlices1, tracePointDistance);
+
+    assert(commonBackTracePoint1 == 10);
+
+    // dfmt off
+    // 0    5   10   15   20   25
+    // :....:....:....:....:....:
+    // |-------------|
+    //               |+----|
+    //            |---+-------|
+    //              |-+---------|
+    auto alignmentSlices2 = [
+        tuple(14UL,  0UL),
+        tuple(20UL, 14UL),
+        tuple(23UL, 11UL),
+        tuple(25UL, 13UL),
+    ];
+    // dfmt on
+    auto commonBackTracePoint2 = getCommonBackTracePoint(alignmentSlices2, tracePointDistance);
+
+    assert(commonBackTracePoint2 == 15);
+
+    Tuple!(size_t, size_t)[] alignmentSlices3;
+    auto commonBackTracePoint3 = getCommonBackTracePoint(alignmentSlices3, tracePointDistance);
+
+    assert(commonBackTracePoint3 == 0);
+}
+
+/**
+    Returns a back "common" trace points wrt. contigB. The returned
+    trace point is not necessarily common to *all* alignment chains, ie. the
+    alignment intervals are incrementally intersected reject those that would
+    cause an empty intersection. The intervals are ordered ascending by
+    starting point and end point. Example:
+
+    ---
+    :....:....:....:....:....:....:....:....:
+    |--------------+----|    :    :    :    :
+    |--------------+---------|    :    :    :
+    :    |---------+-|  :    :    :    :    :
+    :    :|--------+|   :    :    :    :    :
+    :    : |-------+---|:    :    :    :    :
+    :    :    :    :    :|-----------| :    :
+    :    :    :    :    :    :    |---------|
+
+     :  = trace point
+     +  = "common" trace point
+    |-| = alignment interval
+    ---
+*/
+size_t getCommonFrontTracePoint(const AlignmentChain[] alignmentChains, in size_t tracePointDistance) pure nothrow
+{
+    // dfmt off
+    auto alignmentSlices = alignmentChains
+        .map!(ac => ac.complement
+            ? tuple(
+                ac.contigB.length - ac.last.contigB.end + 0,
+                ac.contigB.length - ac.first.contigB.begin + 0,
+            )
+            : tuple(
+                ac.first.contigB.begin + 0,
+                ac.last.contigB.end + 0,
+            ))
+        .array;
+    // dfmt on
+
+    foreach (alignmentSlice; alignmentSlices)
+    {
+        assert(alignmentSlice[0] < alignmentSlice[1]);
+    }
+    // dfmt off
+    debug logJsonDebug(
+        "alignmentSlices", alignmentSlices.map!"[a[0], a[1]]".array.toJson,
+        "contigBIds", alignmentChains.map!"a.contigB.id".array.toJson,
+        "type", "front",
+    );
+    // dfmt on
+
+    return getCommonFrontTracePoint(alignmentSlices, tracePointDistance);
+}
+
+private size_t getCommonFrontTracePoint(Tuple!(size_t, size_t)[] alignmentSlices, in size_t tracePointDistance) pure nothrow
+{
+    if (alignmentSlices.length == 0)
+        return size_t.max;
+
+    alignmentSlices.sort!"a < b";
+    auto commonSlice = tuple(0UL, size_t.max);
+    auto lastCommonSlice = commonSlice;
+
+    foreach (alignmentSlice; alignmentSlices)
+    {
+        commonSlice[0] = max(commonSlice[0], alignmentSlice[0]);
+        commonSlice[0] = ceil(commonSlice[0], tracePointDistance);
+        commonSlice[1] = min(commonSlice[1], alignmentSlice[1]);
+        commonSlice[1] = floor(commonSlice[1], tracePointDistance);
+
+        if (commonSlice[1] < commonSlice[0])
+        {
+            break;
+        }
+
+        lastCommonSlice = commonSlice;
+    }
+
+    return lastCommonSlice[1];
+}
+
+///
+unittest
+{
+    immutable tracePointDistance = 5UL;
+    // dfmt off
+    // 0    5   10   15   20   25
+    // :....:....:....:....:....:
+    // |--------------+---------|
+    // |--------------+----|
+    //      |---------+-|
+    //        |-------+---|
+    //       |--------+|
+    auto alignmentSlices1 = [
+        tuple( 0UL, 25UL),
+        tuple( 0UL, 20UL),
+        tuple( 5UL, 17UL),
+        tuple( 7UL, 19UL),
+        tuple( 6UL, 16UL),
+    ];
+    // dfmt on
+    auto commonFrontTracePoint1 = getCommonFrontTracePoint(alignmentSlices1, tracePointDistance);
+
+    assert(commonFrontTracePoint1 == 15);
+
+    // dfmt off
+    // 0    5   10   15   20   25
+    // :....:....:....:....:....:
+    //            |-------------|
+    //      |----+|
+    //   |-------+---|
+    // |---------+-|
+    auto alignmentSlices2 = [
+        tuple(11UL, 25UL),
+        tuple( 5UL, 11UL),
+        tuple( 2UL, 14UL),
+        tuple( 0UL, 12UL),
+    ];
+    // dfmt on
+    auto commonFrontTracePoint2 = getCommonFrontTracePoint(alignmentSlices2, tracePointDistance);
+
+    assert(commonFrontTracePoint2 == 10);
+
+    Tuple!(size_t, size_t)[] alignmentSlices3;
+    auto commonFrontTracePoint3 = getCommonFrontTracePoint(alignmentSlices3, tracePointDistance);
+
+    assert(commonFrontTracePoint3 == size_t.max);
+}
+
+/// This characterizes an insertion.
 // dfmt off
 alias Hit = Tuple!(
-    ReadAlignment, "alignments",
+    CoordinateTransform.Insertion, "insertion",
+    size_t, "readId",
+    AlignmentChain.Complement, "complement",
     string, "dbFile",
 );
 // dfmt on
@@ -2124,7 +2718,7 @@ class DJunctor
     /// Stop after maxLoops `mainLoop`s at the latest.
     static immutable maxLoops = 1;
     /**
-        Two scores are condsidered similar if the relative "error" of them is
+        Two scores are considered similar if the relative "error" of them is
         smaller than defaulMaxRelativeDiff.
 
         The relative error is defined as:
@@ -2137,7 +2731,7 @@ class DJunctor
     */
     static immutable maxRelativeDiff = AlignmentChain.maxScore / 20; // 5% of larger value
     /**
-        Two scores are condsidered similar if the absolute "error" of them is
+        Two scores are considered similar if the absolute "error" of them is
         smaller than defaulMaxAbsoluteDiff.
 
         The relative error is defined as:
@@ -2281,7 +2875,7 @@ class DJunctor
             alignments.sort!"a.score > b.score";
 
             // Mark reads as useless if either: (s. issue #3)
-            // (a) The aligned read, ie. the alignment extened with the exceeding
+            // (a) The aligned read, ie. the alignment extended with the exceeding
             //     read sequence on either end, is fully contained in a single
             //     contig.
             // (b) It aligns in multiple locations of one contig with
@@ -2350,70 +2944,181 @@ class DJunctor
         auto pileUps = buildPileUps(catCandidates);
 
         logFillingInfo!("findHits", "raw")(pileUps);
-        logJsonDebug("pileUps", pileUps.serializeToJson);
-
-        alias getReadId = (reads) => reads[0].contigA.id;
+        logJsonDebug("pileUps", pileUps.toJson);
 
         foreach (pileUp; pileUps)
         {
             assert(pileUp.isValid, "ambiguous pile up");
 
-            bool isGap = pileUp.isGap;
-            const(size_t)[] refContigIds = pileUp[0].map!"a.contigB.id".array;
-            size_t[] readIds = pileUp.map!getReadId.array;
-            string[] fastaEntries = getFastaEntries(options.readsDb, readIds, options).array;
-            string pileupDb = buildDamFile(fastaEntries, options);
-            string[] consensusDbs = getConsensus(pileupDb, options);
+            auto croppedDbResult = getCroppedPileUpDb(pileUp);
+            auto hit = buildConsensus(croppedDbResult);
 
-            // dfmt off
-            logJsonDebug(
-                "pileupDb", pileupDb,
-                "consensusDbs", consensusDbs.map!Json.array,
-                "contigIds", refContigIds.map!Json.array,
-            );
-            // dfmt on
-
-            foreach (consensusDb; consensusDbs)
-            {
-                auto consensusAlignments = getMappings(options.refDb, consensusDb, options);
-                auto consensusPileUps = buildPileUps(consensusAlignments);
-                // Select the largest pile up if there are more than one
-                auto consensusPileUp = consensusPileUps.maxElement!"a.length";
-                consensusPileUp.sort!(Comparator!meanScore.gt);
-                // dfmt off
-                auto hitReadAlignment = consensusPileUp
-                    .filter!(readAlignment => !isGap || readAlignment.isGap)
-                    .front;
-
-                if (consensusPileUps.length > 1)
-                    logJsonWarn(
-                        "contigIds", refContigIds.map!Json.array,
-                        "code", "ambiguousConsensusAlignment",
-                        "message", "consensus has more than one pile up",
-                    );
-                // dfmt on
-                logFillingInfo!("findHits", "consensus")([consensusPileUp]);
-                // dfmt off
-                logJsonDebug(
-                    "contigIds", refContigIds.map!Json.array,
-                    "pileUp", consensusPileUp
-                        .map!(readAlignment => Json([
-                            "type": Json(getType(readAlignment).to!string),
-                            "estimateSize": Json(getInsertionSize(readAlignment)),
-                            "hitScore": Json(meanScore(readAlignment)),
-                            "alignmentScores": Json(readAlignment.map!"a.score".map!Json.array),
-                            "readId": Json(getReadId(readAlignment)),
-                        ]))
-                        .array,
-                );
-                // dfmt on
-
-                // Mark best scoring read for later sequence insertion.
-                catHits ~= Hit(hitReadAlignment, consensusDb);
-            }
+            // Mark best scoring read for later sequence insertion.
+            catHits ~= hit;
+            logJsonDebug("hit", hit.toJson);
         }
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.findHits");
+
+        return this;
+    }
+
+    protected Hit getCroppedPileUpDb(PileUp pileUp)
+    {
+        auto pileUpType = pileUp.getType;
+        auto complementaryPileUp = pileUp.getComplementaryOrder(readsAlignment.a2b);
+        fetchTracePoints(complementaryPileUp);
+        auto tracePointDistance = complementaryPileUp[0][0].tracePointDistance;
+        auto croppingRefPositions = pileUp.getCroppingRefPositions(tracePointDistance);
+        logJsonDebug("croppingRefPositions", croppingRefPositions.toJson);
+        size_t[] readIds = pileUp.map!"a[0].contigA.id".array;
+        // dfmt off
+        auto rawFastaEntries = zip(
+            readIds,
+            getFastaEntries(options.readsDb, readIds, options).map!parseFastaRecord,
+        ).array.assumeSorted!"a[0] < b[0]";
+        // dfmt on
+        auto croppedFastaEntries = appender!(string[]);
+        croppedFastaEntries.reserve(rawFastaEntries.length);
+        size_t bestInsertionScore;
+        size_t bestInsertionLength;
+        size_t bestInsertionIdx;
+        AlignmentChain.Complement bestInsertionComplement;
+
+        foreach (croppedDbIdx, complementaryReadAlignment; complementaryPileUp)
+        {
+            immutable dummyFastaEntry = typeof(rawFastaEntries.front[1])();
+            auto readId = complementaryReadAlignment[0].contigB.id;
+            auto rawFastaEntry = rawFastaEntries.equalRange(tuple(readId, dummyFastaEntry)).front[1];
+            immutable lineSep = typeof(rawFastaEntry).lineSep;
+            auto readCroppingSlice = complementaryReadAlignment
+                .map!(alignmentChain => alignmentChain.getCroppingSlice(croppingRefPositions))
+                .fold!((aSlice, bSlice) => intersection(aSlice, bSlice));
+            auto insertionLength = readCroppingSlice[1] - readCroppingSlice[0];
+
+            // dfmt off
+            debug logJsonDebug(
+                "readId", readId,
+                "complement", complementaryReadAlignment[0].complement,
+                "rawReadCroppingSlices", complementaryReadAlignment.map!(alignmentChain => alignmentChain.getCroppingSlice(croppingRefPositions)).array.toJson,
+                "readCroppingSlice", readCroppingSlice.toJson,
+                "croppedReadLength", readCroppingSlice[1] - readCroppingSlice[0],
+            );
+            // dfmt on
+
+            if (complementaryReadAlignment[0].complement)
+            {
+                auto readLength = complementaryReadAlignment[0].contigB.length;
+
+                foreach (ref endpoint; readCroppingSlice)
+                    endpoint = readLength - endpoint;
+                swap(readCroppingSlice.expand);
+            }
+            assert(readCroppingSlice[0] < readCroppingSlice[1], "invalid/empty read cropping slice");
+
+            size_t insertionScore = getInsertionScore(complementaryReadAlignment, pileUpType);
+
+            if (insertionScore > bestInsertionScore)
+            {
+                bestInsertionScore = insertionScore;
+                bestInsertionLength = insertionLength;
+                bestInsertionIdx = croppedDbIdx;
+                bestInsertionComplement = complementaryReadAlignment[0].complement;
+            }
+
+            auto croppedFastaEntry = appender!string;
+            croppedFastaEntry.reserve(rawFastaEntry.data.length);  // TODO reserve only needed memory
+
+            croppedFastaEntry ~= rawFastaEntry.header;
+            croppedFastaEntry ~= lineSep;
+            // dfmt off
+            auto croppedSequence = complementaryReadAlignment[0].complement
+                ? rawFastaEntry[readCroppingSlice[0] .. readCroppingSlice[1]].array.reverseComplement
+                : rawFastaEntry[readCroppingSlice[0] .. readCroppingSlice[1]].array;
+            // dfmt on
+            croppedFastaEntry ~= croppedSequence.chunks(options.fastaLineWidth).joiner(lineSep);
+            croppedFastaEntry ~= lineSep;
+
+            croppedFastaEntries ~= croppedFastaEntry.data;
+        }
+
+        string croppedPileUpDb = buildDamFile(croppedFastaEntries.data, options);
+
+        with (CoordinateTransform) with (ReadAlignmentType)
+            {
+                return Hit(
+                    Insertion.make(
+                        Coordinate(
+                            croppingRefPositions.backContigId,
+                            croppingRefPositions.backIdx,
+                        ),
+                        Coordinate(
+                            croppingRefPositions.frontContigId,
+                            croppingRefPositions.frontIdx,
+                        ),
+                        bestInsertionLength,
+                        pileUpType,
+                    ),
+                    bestInsertionIdx,
+                    bestInsertionComplement,
+                    croppedPileUpDb,
+                );
+            }
+    }
+
+    protected size_t getInsertionScore(in ReadAlignment readAlignment, in ReadAlignmentType pileUpType) pure
+    {
+        immutable goodAnchorLength = 1000; // TODO maybe this should be an CLI option
+        immutable shortAlignmentPenaltyMagnitude = AlignmentChain.maxScore / 512;
+        immutable notSpanningPenaltyMagnitude = AlignmentChain.maxScore / 2;
+
+        long expectedAlignmentCount = pileUpType == ReadAlignmentType.gap ? 2 : 1;
+        long avgAlignmentLength = readAlignment.map!"a.totalLength".sum / expectedAlignmentCount;
+        long avgAlignmentScore = readAlignment.map!"a.score".sum / expectedAlignmentCount;
+        long shortAlignmentPenalty = floor(shortAlignmentPenaltyMagnitude * ((goodAnchorLength + 1) / avgAlignmentLength.to!float)^^2).to!size_t;
+        size_t score = max(0, avgAlignmentScore - shortAlignmentPenalty);
+
+        // dfmt off
+        debug logJsonDebug(
+            "expectedAlignmentCount", expectedAlignmentCount,
+            "avgAlignmentLength", avgAlignmentLength,
+            "avgAlignmentScore", avgAlignmentScore,
+            "shortAlignmentPenalty", shortAlignmentPenalty,
+            "score", score,
+        );
+        // dfmt on
+
+        return score;
+    }
+
+    protected Hit buildConsensus(Hit croppedDbResult)
+    {
+        string[] consensusDbs = getConsensus(croppedDbResult.dbFile, options);
+
+        debug logJsonDebug("consensusDbs", consensusDbs.map!Json.array);
+        assert(consensusDbs.length > 0, "empty consensus");
+
+        if (consensusDbs.length > 1)
+        {
+            // dfmt off
+            logJsonWarn(
+                "warn", "more consensus DBs than expected; this may lead to unexpected results",
+                "consensusDbs", consensusDbs.map!Json.array,
+            );
+            // dfmt on
+        }
+
+        croppedDbResult.dbFile = consensusDbs[0];
+
+        return croppedDbResult;
+    }
+
+    protected DJunctor fetchTracePoints(PileUp pileUp)
+    {
+        auto allAlignmentChains = pileUp.getAlignmentChainRefs();
+        allAlignmentChains.sort!("*a < *b", SwapStrategy.stable);
+        allAlignmentChains.attachTracePoints(options.refDb, options.readsDb,
+                options.damapperOptions, options);
 
         return this;
     }
@@ -2428,7 +3133,7 @@ class DJunctor
         // dfmt off
         logJsonDiagnostic(
             "step", "djunctor.insertHits",
-            "coordTransform", coordTransform.serializeToJson,
+            "coordTransform", coordTransform.toJson,
             "coordTransformPython", coordTransform.toString(),
         );
         // dfmt on
@@ -2443,18 +3148,26 @@ class DJunctor
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.insertHit");
 
-        const(size_t)[] refContigIds = hit.alignments.map!"a.contigB.id".array;
-        auto complement = hit.alignments[0].complement;
-        size_t readId = hit.alignments[0].contigA.id;
-        auto read = getFastaEntries(hit.dbFile, [readId], options).front.parseFastaRecord;
-        auto gapSequenceSlice = getHitSequenceSlice(hit);
         // dfmt off
-        auto insertSequence = complement
-            ? read.reverseComplement[gapSequenceSlice]
-            : read[gapSequenceSlice];
+        const(size_t)[] refContigIds = [
+            hit.insertion.begin.contigId,
+            hit.insertion.end.contigId,
+        ];
         // dfmt on
-        auto insertionInfo = getInsertionInfo(hit);
-        auto trInsertionInfo = insertionInfo;
+        auto complement = hit.complement;
+        size_t readId = hit.readId;
+        auto read = (() => {
+            auto fastaEntries = getFastaEntries(hit.dbFile, [readId], options);
+            auto front = fastaEntries.front;
+            auto parsedFastaRecord = front.parseFastaRecord;
+
+            return parsedFastaRecord;
+        })()();
+        auto insertSequence = read[];
+        CoordinateTransform.Insertion insertionInfo = hit.insertion;
+        // Update insertion info with the actual consensus length.
+        insertionInfo.length = read.length;
+        CoordinateTransform.Insertion trInsertionInfo = insertionInfo;
         trInsertionInfo.begin = T(insertionInfo.begin);
         trInsertionInfo.end = T(insertionInfo.end);
         auto refContigFastaEntries = refContigIds.map!(
@@ -2464,6 +3177,9 @@ class DJunctor
         string newHeader = refContigFastaEntries[0].header;
         size_t newContigLength = trInsertionInfo.totalInsertionLength(endContigLength);
         immutable lineSep = typeof(refContigFastaEntries[0]).lineSep;
+        alias ReferenceSequence = typeof(refContigFastaEntries[0][0 .. 0]);
+        ReferenceSequence beforeInsertSequence;
+        ReferenceSequence afterInsertSequence;
         auto fastaBuilder = appender!string;
         auto expectedFastaLength = newHeader.length + newContigLength
             + newContigLength / options.fastaLineWidth + 2;
@@ -2477,38 +3193,24 @@ class DJunctor
             final switch (insertionInfo.type)
             {
             case gap:
-                // dfmt off
-                auto joinedSequence = chain(
-                    refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx],
-                    insertSequence,
-                    refContigFastaEntries[1][trInsertionInfo.end.idx .. $],
-                );
-                // dfmt on
-                fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth).joiner(lineSep);
+                beforeInsertSequence = refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx];
+                afterInsertSequence = refContigFastaEntries[1][trInsertionInfo.end.idx .. $];
                 break;
             case front:
-                // dfmt off
-                auto joinedSequence = chain(
-                    insertSequence,
-                    refContigFastaEntries[0][trInsertionInfo.end.idx .. $],
-                );
-                // dfmt on
-                fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth).joiner(lineSep);
+                beforeInsertSequence = refContigFastaEntries[0][0 .. 0];
+                afterInsertSequence = refContigFastaEntries[0][trInsertionInfo.end.idx .. $];
                 break;
             case back:
-                // dfmt off
-                auto joinedSequence = chain(
-                    refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx],
-                    insertSequence,
-                );
-                // dfmt on
-                fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth).joiner(lineSep);
+                beforeInsertSequence = refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx],
+                afterInsertSequence = refContigFastaEntries[0][0 .. 0];
                 break;
             case relabel:
                 assert(0, "invalid insertion");
             }
         }
 
+        auto joinedSequence = chain(beforeInsertSequence, insertSequence, afterInsertSequence);
+        fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth).joiner(lineSep);
         fastaBuilder ~= lineSep;
 
         auto overlayDb = buildDamFile([fastaBuilder.data], options);
@@ -2516,6 +3218,7 @@ class DJunctor
         T ~= insertionInfo;
         referenceDb.addAlias(T(refContigIds[0]), overlayDb, 1);
 
+        immutable sequencePreviewLength = 500;
         // dfmt off
         logJsonDebug(
             "step", "insertHits",
@@ -2524,8 +3227,10 @@ class DJunctor
             "readId", readId,
             "complement", complement.to!bool,
             "insertSequence", insertSequence.array.to!string,
-            "insertionInfo", insertionInfo.serializeToJson(),
-            "transformedInsertionInfo", trInsertionInfo.serializeToJson(),
+            "beforeInsertSequence", beforeInsertSequence.tail(sequencePreviewLength).array.to!string,
+            "afterInsertSequence", afterInsertSequence.take(sequencePreviewLength).array.to!string,
+            "insertionInfo", insertionInfo.toJson(),
+            "transformedInsertionInfo", trInsertionInfo.toJson(),
             "overlayDb", overlayDb,
             "expectedFastaLength", expectedFastaLength,
             "newHeaderLength", newHeader.length,
@@ -2535,171 +3240,12 @@ class DJunctor
         );
         // dfmt on
         debug assert(expectedFastaLength >= fastaBuilder.data.length,
-                format!"avoid reallocation: expeceted %d but used %d"(expectedFastaLength,
+                format!"avoid reallocation: expected %d but used %d"(expectedFastaLength,
                     fastaBuilder.data.length));
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.insertHit");
 
         return this;
-    }
-
-    protected auto getInsertionInfo(in Hit hit) pure
-    {
-        if (hit.alignments.length == 1)
-            return getInsertionInfoForExtension(hit);
-        else if (hit.alignments.length == 2)
-            return getInsertionInfoForGap(hit);
-        else
-            assert(0, "illegal alignments count in hit");
-    }
-
-    protected auto getInsertionInfoForExtension(in Hit hit) pure
-    {
-        with (CoordinateTransform)
-        {
-            with (ReadAlignmentType)
-            {
-                auto alignment = hit.alignments[0];
-                assert(hit.alignments.isValid && hit.alignments.isExtension);
-                ReadAlignmentType extensionType = hit.alignments.getType;
-                size_t refContigId = alignment.contigB.id;
-                // dfmt off
-                size_t idx = (extensionType == front) ^ alignment.complement
-                    ? alignment.first.contigB.begin
-                    : alignment.last.contigB.end;
-                // dfmt on
-
-                if (alignment.complement)
-                {
-                    idx = alignment.contigB.length - idx;
-                }
-                auto extensionSequenceSlice = getHitSequenceSlice(hit);
-
-                // dfmt off
-                debug logJsonDebug(
-                    "alignment", alignment.serializeToJson,
-                    "refContigId", refContigId,
-                    "extensionType", extensionType.to!string,
-                    "idx", idx,
-                    "extensionSequenceSlice", extensionSequenceSlice.serializeToJson,
-                );
-                // dfmt on
-
-                // dfmt off
-                return Insertion.make(
-                    Coordinate(refContigId, idx),
-                    Coordinate(refContigId, idx),
-                    extensionSequenceSlice[1] - extensionSequenceSlice[0],
-                    extensionType,
-                );
-                // dfmt on
-            }
-        }
-    }
-
-    protected auto getInsertionInfoForGap(in Hit hit) pure
-    {
-        size_t refContig1Id = hit.alignments[0].contigB.id;
-        size_t refContig2Id = hit.alignments[1].contigB.id;
-
-        size_t gapRefBegin;
-        size_t gapRefEnd;
-
-        if (hit.alignments[0].complement)
-        {
-            gapRefBegin = hit.alignments[0].contigB.length - hit.alignments[0].first.contigB.begin;
-            gapRefEnd = hit.alignments[1].contigB.length - hit.alignments[1].last.contigB.end;
-        }
-        else
-        {
-            gapRefBegin = hit.alignments[0].last.contigB.end;
-            gapRefEnd = hit.alignments[1].first.contigB.begin;
-        }
-
-        auto gapSequenceSlice = getHitSequenceSlice(hit);
-
-        with (CoordinateTransform)
-        {
-            // dfmt off
-            return Insertion.make(
-                Coordinate(refContig1Id, gapRefBegin),
-                Coordinate(refContig2Id, gapRefEnd),
-                gapSequenceSlice[1] - gapSequenceSlice[0],
-                ReadAlignmentType.gap,
-            );
-            // dfmt on
-        }
-    }
-
-    protected static Tuple!(int, int) getHitSequenceSlice(in Hit hit) pure
-    {
-        if (hit.alignments.length == 1)
-            return getExtensionSequenceSlice(hit);
-        else if (hit.alignments.length == 2)
-            return getGapSequenceSlice(hit);
-        else
-            assert(0, "illegal alignments count in hit");
-    }
-
-    protected static Tuple!(int, int) getExtensionSequenceSlice(in Hit hit) pure
-    {
-        auto alignment = hit.alignments[0];
-        auto extensionType = hit.alignments.getType;
-        size_t begin;
-        size_t end;
-
-        switch (extensionType)
-        {
-        case ReadAlignmentType.front:
-            if (alignment.complement)
-            {
-                begin = alignment.last.contigA.end;
-                end = alignment.contigA.length;
-            }
-            else
-            {
-                begin = 0;
-                end = alignment.first.contigA.begin;
-            }
-            break;
-        case ReadAlignmentType.back:
-            if (alignment.complement)
-            {
-                begin = 0;
-                end = alignment.first.contigA.begin;
-            }
-            else
-            {
-                begin = alignment.last.contigA.end;
-                end = alignment.contigA.length;
-            }
-            break;
-        default:
-            assert(0);
-        }
-
-        return typeof(return)(begin.to!int, end.to!int);
-    }
-
-    protected static Tuple!(int, int) getGapSequenceSlice(in Hit hit) pure
-    {
-        auto alignment1 = hit.alignments[0];
-        auto alignment2 = hit.alignments[1];
-        size_t begin;
-        size_t end;
-
-        if (alignment1.isBefore!"contigA"(alignment2))
-        {
-            begin = alignment1.last.contigA.end;
-            end = alignment2.first.contigA.begin;
-        }
-        else
-        {
-            begin = alignment2.last.contigA.end;
-            end = alignment1.first.contigA.begin;
-        }
-
-        return typeof(return)(begin.to!int, end.to!int);
     }
 
     protected auto getReferenceFastaEntry(in size_t contigId) const
@@ -2753,7 +3299,7 @@ class DJunctor
         // dfmt off
         logJsonDebug(
             "numReferenceContigs", numReferenceContigs,
-            "contigSources", contigSources.array.serializeToJson,
+            "contigSources", contigSources.array.toJson,
         );
         // dfmt on
 
@@ -2765,7 +3311,7 @@ class DJunctor
             {
                 T ~= CoordinateTransform.Insertion.makeRelabel(oldContigId, newContigId);
                 logJsonDebug("relabel", ["oldContigId" : oldContigId,
-                        "newContigId" : newContigId].serializeToJson);
+                        "newContigId" : newContigId].toJson);
             }
         }
 
@@ -2859,7 +3405,7 @@ struct CoordinateTransform
 
         Coordinate begin;
         Coordinate end;
-        size_t length;
+        private size_t _length;
 
         @disable this(Coordinate);
         @disable this(Coordinate, Coordinate);
@@ -2867,7 +3413,7 @@ struct CoordinateTransform
         {
             this.begin = begin;
             this.end = end;
-            this.length = length;
+            this._length = length;
         }
 
         static Insertion makeRelabel(size_t oldContigId, size_t newContigId) pure nothrow
@@ -2895,12 +3441,33 @@ struct CoordinateTransform
 
         invariant
         {
-            assert(begin != end || (begin.idx == end.idx && length > 0), "empty insertion");
+            assert(begin != end || (begin.idx == end.idx && _length > 0), "empty insertion");
             if (begin.contigId == end.contigId)
             {
                 assert(end.idx >= begin.idx,
                         "insertion begin index should be before/equal to end index on same contig");
-                assert(length >= end.idx - begin.idx, "inserted sequence too small");
+                assert(_length >= end.idx - begin.idx, "inserted sequence too small");
+            }
+        }
+
+        @property length() pure const nothrow
+        {
+            return _length;
+        }
+
+        @property length(size_t newLength) pure nothrow
+        {
+            final switch (type)
+            {
+                case Type.back:
+                    end.idx = begin.idx + newLength;
+                    goto case;
+                case Type.front:
+                case Type.gap:
+                    _length = newLength;
+                    return;
+                case Type.relabel:
+                    return;
             }
         }
 
@@ -2967,12 +3534,12 @@ struct CoordinateTransform
     const(Insertion)[] insertions;
 
     /**
-        Transform a coordinate accordin to insertions. If the designated
+        Transform a coordinate according to insertions. If the designated
         contig is not present in insertions then the original coordinate is
         returned. Otherwise the new coordinate is computed as follows:
 
         1. Find insertion where end contig matches input. Note: if begin
-           contig matches input not action is needed becuase neither the
+           contig matches input not action is needed because neither the
            `idx` nor the `contigId` is affected.
         2. Travel from that point backwards to the beginning of the chain –
            ie. until begin contig and end contig of two insertions are
@@ -3407,7 +3974,7 @@ struct CoordinateTransform
     /**
         Add an insertion to this transform.
 
-        Returns: this tranform.
+        Returns: this transform.
         See_Also: `CoordinateTransform.transform`.
     */
     CoordinateTransform add(in Insertion newInsertion) pure

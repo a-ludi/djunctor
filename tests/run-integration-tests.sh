@@ -23,6 +23,10 @@ ARGV=("$@")
 KEEP_TEMP=false
 RUN_DJUNCTOR=true
 RUN_GDB=false
+GDB="${GDB:-gdb}"
+if ! [[ -v GDBFLAGS ]]; then
+    GDBFLAGS=()
+fi
 SHOW_COVERAGE=false
 SHOW_UNCOVERED_LINES=false
 UNCOVERED_LINES_CONTEXT=2
@@ -33,27 +37,18 @@ function init_script()
     trap clean_up EXIT
 
     TEST_ROOT="$(dirname "$(realpath "$0")")"
-    LOG_COPY="./integration-tests.log"
-    RESULT_COPY="./integration-tests-result.fasta"
-    COORD_TRANSFORM_COPY="./coord-transform.py"
+    LOG_COPY="$PWD/integration-tests.log"
+    RESULTS_ARCHIVE="$PWD/integration-tests.tar.gz"
 
     parse_opts
 
     WORKDIR="$(mktemp --tmpdir -d djunctor-integration-tests.XXXXXX)"
-
     DJUNCTOR_OPTS[${#DJUNCTOR_OPTS[*]}]="--coord-transform"
     DJUNCTOR_OPTS[${#DJUNCTOR_OPTS[*]}]="$WORKDIR/$COORD_TRANSFORM"
-
-    if $RUN_DJUNCTOR;
-    then
-        OUTPUT_LOG="$WORKDIR/output.log"
-        RESULT_FILE="$WORKDIR/result.fasta"
-        COORD_TRANSFORM="$WORKDIR/$COORD_TRANSFORM"
-    else
-        OUTPUT_LOG="$LOG_COPY"
-        RESULT_FILE="$RESULT_COPY"
-        COORD_TRANSFORM="$COORD_TRANSFORM_COPY"
-    fi
+    OUTPUT_LOG="$WORKDIR/output.log"
+    RESULT_FILE="$WORKDIR/result.fasta"
+    RESULT_DB="$WORKDIR/result.dam"
+    COORD_TRANSFORM="$WORKDIR/$COORD_TRANSFORM"
 }
 
 function parse_opts()
@@ -98,7 +93,7 @@ function usage()
     echo "Optional arguments:"
     echo " -c        Enables code coverage statistics to be generated; show coverage"
     echo "           summary after tests."
-    echo " -D        Do not run djunctor; instead just run tests against the last log ($LOG_COPY)."
+    echo " -D        Do not run djunctor; instead just run tests against the results ($RESULTS_ARCHIVE)."
     echo " -g        Open interactive gdb session and exit afterwards. Prints the "'`run`'" command"
     echo "           to be used in gdb"
     echo " -h        Prints this help."
@@ -109,15 +104,13 @@ function usage()
 
 function clean_up()
 {
-    if $RUN_DJUNCTOR && [[ -f "$OUTPUT_LOG" ]];
+    if $RUN_DJUNCTOR;
     then
-        echo
+        backup_results
+        echo "results saved in $RESULTS_ARCHIVE"
+
         cp "$OUTPUT_LOG" "$LOG_COPY"
         echo "output copied to $LOG_COPY"
-        cp "$RESULT_FILE" "$RESULT_COPY"
-        echo "result copied to $RESULT_COPY"
-        cp "$COORD_TRANSFORM" "$COORD_TRANSFORM_COPY"
-        echo "cord transform copied to $COORD_TRANSFORM_COPY"
     fi
 
     # remove coverage statistics of libraries
@@ -133,6 +126,29 @@ function clean_up()
     fi
 }
 
+function backup_results()
+{
+    local FILE_LIST="$(mktemp --tmpdir djunctor-integration-tests.XXXXXX.files.lst)"
+
+    pushd "$WORKDIR" > /dev/null
+    find . -print0 > "$FILE_LIST"
+    tar -czf "$RESULTS_ARCHIVE" \
+        --verbatim-files-from \
+        --null \
+        -T "$FILE_LIST"
+    popd > /dev/null
+
+    rm -f "$FILE_LIST"
+}
+
+function restore_results()
+{
+    pushd "$WORKDIR" > /dev/null
+    tar -xzf "$RESULTS_ARCHIVE"
+    popd > /dev/null
+    set_test_data_paths
+}
+
 function provide_test_data()
 {
     pushd "$WORKDIR" > /dev/null
@@ -140,7 +156,11 @@ function provide_test_data()
     tar -xzf "$TEST_DATA_ARCHIVE"
     rm "$TEST_DATA_ARCHIVE"
     popd > /dev/null
+    set_test_data_paths
+}
 
+function set_test_data_paths()
+{
     TEST_DATA_READS="$WORKDIR/$TEST_DATA_READS"
     TEST_DATA_REF="$WORKDIR/$TEST_DATA_REF"
     TEST_DATA_MODREF="$WORKDIR/$TEST_DATA_MODREF"
@@ -155,16 +175,20 @@ function run_djunctor()
         echo 'type `djunctor` to start the program'
         echo '------------------------------------'
 
-        gdb -x "$WORKDIR/$GDB_INIT_SCRIPT" djunctor
+        "$GDB" "${GDBFLAGS[@]}" -x "$WORKDIR/$GDB_INIT_SCRIPT" djunctor
         exit
     else
-        if ! ./djunctor "${DJUNCTOR_OPTS[@]}" \
+        ./djunctor "${DJUNCTOR_OPTS[@]}" \
                         "$TEST_DATA_MODREF.dam" \
                         "$TEST_DATA_READS.dam" \
                         2> "$OUTPUT_LOG" \
-                        1> "$RESULT_FILE";
+                        1> "$RESULT_FILE"
+        local DJUNTOR_STATUS="$?"
+        DJUNCTOR_WORKDIR="$(json_log | jq -r 'select(has("workdir")) | .workdir')"
+
+        if (( DJUNTOR_STATUS != 0 ));
         then
-            echo "Error while executing djunctor ($?); see log for details." >&2
+            echo "Error while executing djunctor ($DJUNTOR_STATUS); see log for details." >&2
 
             exit 1
         fi
@@ -176,6 +200,15 @@ function build_gdb_init_script()
     echo 'define djunctor'
     echo run "${DJUNCTOR_OPTS[@]}" "$TEST_DATA_MODREF.dam" "$TEST_DATA_READS.dam"
     echo 'end'
+}
+
+function prepare_tests()
+{
+    fasta2DAM "$RESULT_DB" "$RESULT_FILE" && DBsplit "$RESULT_DB"
+
+    pushd "$WORKDIR" > /dev/null
+    daligner "$TEST_DATA_REF.dam" "$RESULT_DB"
+    popd > /dev/null
 }
 
 function do_tests()
@@ -245,6 +278,9 @@ function main()
         dub build "${BUILD_OPTS[@]}"
         provide_test_data
         run_djunctor
+        prepare_tests
+    else
+        restore_results
     fi
     do_tests
 
@@ -279,7 +315,7 @@ function expect_json()
 
 function json_log()
 {
-    grep '^{' "$OUTPUT_LOG"
+    grep --text '^{' "$OUTPUT_LOG"
 }
 
 function expect_transformed_coord()
@@ -329,6 +365,35 @@ function expect_insert_sequence_ends()
     fi
 }
 
+function result_contig_properly_aligns_to_reference()
+{
+    local RESULT_CONTIG="$1"
+    local MAX_LENGTH_DIFF=16
+    local MAX_NUM_DIFFS=256
+    local NUM_MATCHING_ALIGNMENTS=$(reference_to_result_alignments | \
+        awk -F ',' '{ if ($1 == 1 && $2 == '"$RESULT_CONTIG"' && ($6 - ($10 - $9)) < '"$MAX_LENGTH_DIFF"' && $11 < '"$MAX_NUM_DIFFS"') { print } }' | \
+        wc -l)
+    if ! (( NUM_MATCHING_ALIGNMENTS == 1 )); then
+        echo "expected to find proper alignment for contig $RESULT_CONTIG but got $NUM_MATCHING_ALIGNMENTS"
+
+        return 1
+    fi
+}
+
+function reference_to_result_alignments()
+{
+    LAdump_csv "$TEST_DATA_REF.dam" "$RESULT_DB" "$WORKDIR/reference.result.las"
+}
+
+function LAdump_csv()
+{
+    LAdump -c -d -l "$@" | \
+        tail -n+3 | \
+        tr ' \n' ',,' | \
+        sed -e 's/,P/\nP/g' -e 's/[PCDL],//g'
+}
+
+
 #-----------------------------------------------------------------------------
 # Test Cases
 #-----------------------------------------------------------------------------
@@ -338,11 +403,7 @@ function test_front_extension_found()
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
         '.[0].gapInfo | map(select(.type == "front")) | length == 1 and map(.contigIds) == [[5]] and map(.estimateLengthMean) == [4538] and map(.numReads) == [15]' \
-        '.[0].gapInfo | map(select(.type == "front"))' && \
-    expect_json \
-        '. | has("gapInfo") and .step == "findHits" and .readState == "consensus"' \
-        '(map(select(.gapInfo | length == 1 and .[0].type == "front") | .gapInfo) | flatten) | length == 1 and map(.contigIds) == [[5]] and map(.estimateLengthMean) == [4217] and map(.numReads) == [15]' \
-        '(map(select(.gapInfo | length == 1 and .[0].type == "front") | .gapInfo) | flatten)'
+        '.[0].gapInfo | map(select(.type == "front"))'
 }
 
 function test_gaps_found()
@@ -350,11 +411,7 @@ function test_gaps_found()
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
         '.[0].gapInfo | map(select(.type == "gap")) | length == 3 and map(.contigIds) == [[1, 2], [2, 3], [3, 4]] and map(.estimateLengthMean) == [4156, 8561, 5064] and map(.numReads) == [71, 81, 63]' \
-        '.[0].gapInfo | map(select(.type == "gap"))' && \
-    expect_json \
-        '. | has("gapInfo") and .step == "findHits" and .readState == "consensus"' \
-        '(map(select(.gapInfo | length == 1 and .[0].type == "gap") | .gapInfo) | flatten) | length == 3 and map(.contigIds) == [[1, 2], [2, 3], [3, 4]] and map(.estimateLengthMean) == [4100, 8449, 5000] and map(.numReads) == [71, 81, 62]' \
-        '(map(select(.gapInfo | length == 1 and .[0].type == "gap") | .gapInfo) | flatten)'
+        '.[0].gapInfo | map(select(.type == "gap"))'
 }
 
 function test_back_extension_found()
@@ -362,58 +419,81 @@ function test_back_extension_found()
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
         '.[0].gapInfo | map(select(.type == "back")) | length == 0' \
-        '.[0].gapInfo | map(select(.type == "back"))' && \
+        '.[0].gapInfo | map(select(.type == "back"))'
+}
+
+function test_front_extensions_filled()
+{
+    local INSINFO1='{begin: {contigId: 5, idx: 0}, end: {contigId: 5, idx: 1200}, length: 8239}'
+
     expect_json \
-        '. | has("gapInfo") and .step == "findHits" and .readState == "consensus"' \
-        '(map(select(.gapInfo | length == 1 and .[0].type == "back") | .gapInfo) | flatten) | length == 0' \
-        '(map(select(.gapInfo | length == 1 and .[0].type == "back") | .gapInfo) | flatten)'
+        '.type == "front" and .step == "insertHits" and has("readId")' \
+        'length == 1 and map(.readId) == [9] and map(.insertionInfo) == ['"$INSINFO1"']' \
+        '{ readIds: map(.readId), insertionInfos: map(.insertionInfo) }'
 }
 
 function test_gaps_filled()
 {
+    local INSINFO1='{begin: {contigId: 1, idx: 8000}, end: {contigId: 2, idx: 200}, length: 4600}'
+    local INSINFO2='{begin: {contigId: 2, idx: 8200}, end: {contigId: 3, idx: 100}, length: 8700}'
+    local INSINFO3='{begin: {contigId: 3, idx: 123000}, end: {contigId: 4, idx: 100}, length: 7800}'
+
     expect_json \
         '.type == "gap" and .step == "insertHits" and has("readId")' \
-        'length == 3 and map(.readId) == [17, 6, 21] and map(.contigIds) == [[1, 2], [2, 3], [3, 4]]' \
-        '{ readIds: map(.readId), contigIds: map(.contigIds) }'
+        'length == 3 and map(.readId) == [51, 36, 17] and map(.insertionInfo) == ['"$INSINFO1, $INSINFO2, $INSINFO3"']' \
+        '{ readIds: map(.readId), insertionInfos: map(.insertionInfo) }'
+}
+
+function test_contig_5_nicely_extended()
+{
+    expect_json \
+        '.contigIds == [5, 5] and has("transformedInsertionInfo")' \
+        '.[0].transformedInsertionInfo | (.begin.idx == 0 and .end.idx == 1200 and .length == 8239)' \
+        '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' && \
+    expect_insert_sequence_ends \
+        5 5 \
+        'cctctgtgctcctgtgcatggaggaggaaaccaaggcttccagccccgga' \
+        'taccacactgtgtctacgaacaatctgtagactgtgtgctcgtgtgcctg'
+    # this is *true* sequence
 }
 
 function test_gap_1_2_nicely_filled()
 {
     expect_json \
         '.contigIds == [1, 2] and has("transformedInsertionInfo")' \
-        '.[0] | ((.transformedInsertionInfo | (.begin.idx == 8300 and .end.idx == 0)) and .transformedInsertionInfo.length == (.insertSequence | length))' \
-        '.[0] | {".begin.idx": .transformedInsertionInfo.begin.idx, ".end.idx": .transformedInsertionInfo.end.idx, ".length": .transformedInsertionInfo.length, "length": (.insertSequence | length)}' && \
+        '.[0].transformedInsertionInfo | (.begin.idx == 8000 and .end.idx == 200 and .length == 4600)' \
+        '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' && \
     expect_insert_sequence_ends \
         1 2 \
-        'ctgcagcagagaccacacattaactcttattacgttccaacaacctataa' \
-        'acttatgtttactagttattatggtctcaatgtgtgtacacccccacccc'
-    # this is the expected consensus
+        'accccacaggctaagggctcagtcctaggaatacacgtcatgccccttgt' \
+        'aacccacagaattttaatgcacaaagaacaaatcacaagctacacaaatt'
+    # this is *true* sequence
 }
 
 function test_gap_2_3_nicely_filled()
 {
     expect_json \
         '.contigIds == [2, 3] and has("transformedInsertionInfo")' \
-        '.[0].transformedInsertionInfo | (.begin.idx == 20750 and .end.idx == 0 and .length == 8450)' \
+        '.[0].transformedInsertionInfo | (.begin.idx == 20600 and .end.idx == 100 and .length == 8700)' \
         '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' && \
     expect_insert_sequence_ends \
         2 3 \
-        'actccgcttaaatttattttacctaaaatccttttaacagacaaagtcca' \
-        'ctaaaagtatactggcttaaatgctaatttcatctgaaaaataccacaga'
-    # this is the expected consensus
+        'cgtgattcatgaaccattcctttgccgaaataaactccgcttaaatttat' \
+        'gaagagaagactgatgagggcccatgtggcacctcaggtagggtctgcac'
+    # this is *true* sequence
 }
 
 function test_gap_3_4_nicely_filled()
 {
     expect_json \
         '.contigIds == [3, 4] and has("transformedInsertionInfo")' \
-        '.[0].transformedInsertionInfo | (.begin.idx == 154900 and .end.idx == 0 and .length == 5000)' \
+        '.[0].transformedInsertionInfo | (.begin.idx == 152200 and .end.idx == 100 and .length == 7800)' \
         '.[0].transformedInsertionInfo | {".begin.idx": .begin.idx, ".end.idx": .end.idx, ".length": .length}' && \
     expect_insert_sequence_ends \
         3 4 \
-        'cctcaggccggtttgaagaccagcacagcccatgtgagcagggcacaggg' \
-        'ttctccagcatcatcttgggagaatgttgacgtcactgatcttggtttct'
-    # this is the true sequence
+        'caggtctacctccacacagccttggaggggcgtcctgggggtagattacg' \
+        'tcctcagcccgggcgcccgacctcagctccctccagccctggactctgtt'
+    # this is *true* sequence
 }
 
 function test_merged_result()
@@ -423,6 +503,16 @@ function test_merged_result()
         '.[0] | .numReferenceContigs == 5 and (.contigSources | map(.[0]) == [1, 5] and .[0][1].dbFile != .[1][1].dbFile)'
 }
 
+function test_result_contig_1_properly_aligns_to_reference()
+{
+    result_contig_properly_aligns_to_reference 1
+}
+
+function test_result_contig_2_properly_aligns_to_reference()
+{
+    result_contig_properly_aligns_to_reference 2
+}
+
 function test_number_of_iterations()
 {
     expect_json \
@@ -430,23 +520,43 @@ function test_number_of_iterations()
         '. | max_by(.iteration).iteration == 0'
 }
 
-function test_coordinate_transform()
+function test_coordinate_transform__contig_1()
 {
+    # This is the transformed coordinate after *perfect* gap filling
     expect_transformed_coord \
         1 42 \
-        1 $((42)) && \
+        1 $((42))
+}
+
+function test_coordinate_transform__contig_2()
+{
+    # This is the transformed coordinate after *perfect* gap filling
     expect_transformed_coord \
         2 42 \
-        1 $((42 - 0 + 4100 + 8300)) && \
+        1 $((42 + 12400))
+}
+
+function test_coordinate_transform__contig_3()
+{
+    # This is the transformed coordinate after *perfect* gap filling
     expect_transformed_coord \
         3 42 \
-        1 $((42 - 0 + 8450 + 8350 - 0 + 4100 + 8300)) && \
+        1 $((42 + 29200))
+}
+
+function test_coordinate_transform__contig_4()
+{
+    # This is the transformed coordinate after *perfect* gap filling
     expect_transformed_coord \
         4 42 \
-        1 $((42 - 0 + 5000 + 125700 - 0 + 8450 + 8350 - 0 + 4100 + 8300)) && \
+        1 $((42 + 159900))
+}
+
+function test_coordinate_transform__contig_5()
+{
     expect_transformed_coord \
         5 42 \
-        2 $((42 - 0 + 2083))
+        2 $((42 + 8239 - 1200))
 }
 
 
