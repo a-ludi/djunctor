@@ -1056,7 +1056,7 @@ private
             "type", type,
             "command", sanitizedCommand.map!Json.array,
             "output", result
-                .output
+                .output[0 .. min(1024, $)]
                 .lineSplitter
                 .map!Json
                 .array,
