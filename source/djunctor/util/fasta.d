@@ -316,9 +316,9 @@ template PacBioHeader(T) if (isSomeString!T)
         static immutable headerFormat = ">%s/%d/%d_%d RQ=%f";
 
         T name;
-        size_t id;
         size_t well;
-        size_t sequenceLength;
+        size_t qualityRegionBegin;
+        size_t qualityRegionEnd;
         float readQuality;
 
         /// Construct a `PacBioHeader!T` from `header`.
@@ -344,9 +344,9 @@ template PacBioHeader(T) if (isSomeString!T)
             // dfmt off
             return format!headerFormat(
                 name,
-                id,
                 well,
-                sequenceLength,
+                qualityRegionBegin,
+                qualityRegionEnd,
                 readQuality,
             );
             // dfmt on
@@ -357,9 +357,9 @@ template PacBioHeader(T) if (isSomeString!T)
             // dfmt off
             auto numMatches = header[].formattedRead!headerFormat(
                 name,
-                id,
                 well,
-                sequenceLength,
+                qualityRegionBegin,
+                qualityRegionEnd,
                 readQuality,
             );
             // dfmt on
@@ -377,9 +377,9 @@ unittest
 
     assert(pbHeader1.to!string == ">name/1/0_1337 RQ=0.750000");
     assert(pbHeader1.name == "name");
-    assert(pbHeader1.id == 1);
-    assert(pbHeader1.well == 0);
-    assert(pbHeader1.sequenceLength == 1337);
+    assert(pbHeader1.well == 1);
+    assert(pbHeader1.qualityRegionBegin == 0);
+    assert(pbHeader1.qualityRegionEnd == 1337);
     assert(pbHeader1.readQuality == 0.75);
 
     PacBioHeader!string pbHeader2 = header;
@@ -401,9 +401,9 @@ unittest
 
     assert(pbHeader1.to!string == ">name/1/0_1337 RQ=0.750000");
     assert(pbHeader1.name == "name");
-    assert(pbHeader1.id == 1);
-    assert(pbHeader1.well == 0);
-    assert(pbHeader1.sequenceLength == 1337);
+    assert(pbHeader1.well == 1);
+    assert(pbHeader1.qualityRegionBegin == 0);
+    assert(pbHeader1.qualityRegionEnd == 1337);
     assert(pbHeader1.readQuality == 0.75);
 }
 
