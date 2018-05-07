@@ -17,4 +17,6 @@ djunctor-test-*
 *.fasta
 *.py
 *~
+*.tar
+*.tar.gz
 .gdbinit
