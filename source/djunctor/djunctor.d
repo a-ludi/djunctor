@@ -3068,14 +3068,13 @@ class DJunctor
 
     protected size_t getInsertionScore(in ReadAlignment readAlignment, in ReadAlignmentType pileUpType) pure
     {
-        immutable goodAnchorLength = 1000; // TODO maybe this should be an CLI option
         immutable shortAlignmentPenaltyMagnitude = AlignmentChain.maxScore / 512;
         immutable notSpanningPenaltyMagnitude = AlignmentChain.maxScore / 2;
 
         long expectedAlignmentCount = pileUpType == ReadAlignmentType.gap ? 2 : 1;
         long avgAlignmentLength = readAlignment.map!"a.totalLength".sum / expectedAlignmentCount;
         long avgAlignmentScore = readAlignment.map!"a.score".sum / expectedAlignmentCount;
-        long shortAlignmentPenalty = floor(shortAlignmentPenaltyMagnitude * ((goodAnchorLength + 1) / avgAlignmentLength.to!float)^^2).to!size_t;
+        long shortAlignmentPenalty = floor(shortAlignmentPenaltyMagnitude * ((options.goodAnchorLength + 1) / avgAlignmentLength.to!float)^^2).to!size_t;
         size_t score = max(0, avgAlignmentScore - shortAlignmentPenalty);
 
         // dfmt off
