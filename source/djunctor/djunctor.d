@@ -131,6 +131,13 @@ struct AlignmentChain
         yes = true,
     }
 
+    static enum Order : int
+    {
+        none,
+        ref2read,
+        read2ref,
+    }
+
     static immutable maxScore = 2 ^^ 16;
 
     size_t id;
@@ -139,6 +146,7 @@ struct AlignmentChain
     Complement complement;
     LocalAlignment[] localAlignments;
     size_t tracePointDistance;
+    Order order;
 
     invariant
     {
@@ -551,6 +559,35 @@ struct AlignmentChain
     }
 }
 
+AlignmentChain.Order reverse(in AlignmentChain.Order order) pure nothrow
+{
+    final switch (order)
+    {
+        case AlignmentChain.Order.none:
+            return AlignmentChain.Order.none;
+        case AlignmentChain.Order.ref2read:
+            return AlignmentChain.Order.read2ref;
+        case AlignmentChain.Order.read2ref:
+            return AlignmentChain.Order.ref2read;
+    }
+}
+
+AlignmentContainer!(AlignmentChain[]) annotateOrder(ref AlignmentContainer!(AlignmentChain[]) alignmentContainer, in AlignmentChain.Order a2bOrder) nothrow
+{
+    foreach (ref alignmentChain; alignmentContainer.a2b)
+    {
+        alignmentChain.order = a2bOrder;
+    }
+
+    auto b2aOrder = a2bOrder.reverse;
+    foreach (ref alignmentChain; alignmentContainer.b2a)
+    {
+        alignmentChain.order = b2aOrder;
+    }
+
+    return alignmentContainer;
+}
+
 bool idsPred(in AlignmentChain ac1, in AlignmentChain ac2) pure
 {
     auto cmpValue = ac1.compareIds(ac2);
@@ -746,6 +783,7 @@ static enum ReadAlignmentType
 */
 bool isValid(in ReadAlignment readAlignment) pure nothrow
 {
+    assert(readAlignment[0].order == AlignmentChain.Order.read2ref, "only applicable for read2ref alignments");
     return readAlignment.isExtension ^ readAlignment.isGap;
 }
 
@@ -756,6 +794,7 @@ bool isValid(in ReadAlignment readAlignment) pure nothrow
 */
 ReadAlignmentType getType(in ReadAlignment readAlignment) pure nothrow
 {
+    assert(readAlignment[0].order == AlignmentChain.Order.read2ref, "only applicable for read2ref alignments");
     assert(readAlignment.isValid, "invalid read alignment");
 
     if (readAlignment.isGap)
@@ -780,6 +819,7 @@ ReadAlignmentType getType(in ReadAlignment readAlignment) pure nothrow
 */
 bool isExtension(in ReadAlignment readAlignment) pure nothrow
 {
+    assert(readAlignment[0].order == AlignmentChain.Order.read2ref, "only applicable for read2ref alignments");
     return readAlignment.isFrontExtension ^ readAlignment.isBackExtension;
 }
 
@@ -807,6 +847,7 @@ bool isExtension(in ReadAlignment readAlignment) pure nothrow
 */
 bool isFrontExtension(in ReadAlignment readAlignment) pure nothrow
 {
+    assert(readAlignment[0].order == AlignmentChain.Order.read2ref, "only applicable for read2ref alignments");
     if (readAlignment.length != 1)
     {
         return false;
@@ -854,6 +895,7 @@ bool isFrontExtension(in ReadAlignment readAlignment) pure nothrow
 */
 bool isBackExtension(in ReadAlignment readAlignment) pure nothrow
 {
+    assert(readAlignment[0].order == AlignmentChain.Order.read2ref, "only applicable for read2ref alignments");
     if (readAlignment.length != 1)
     {
         return false;
@@ -936,7 +978,9 @@ unittest
                                         Locus(19, 20),
                                         0,
                                     ),
-                                ]
+                                ],
+                                0,
+                                Order.read2ref,
                             ),
                         ],
                         No.isValid,
@@ -964,7 +1008,9 @@ unittest
                                         Locus(19, 20),
                                         0,
                                     ),
-                                ]
+                                ],
+                                0,
+                                Order.read2ref,
                             ),
                         ],
                         No.isValid,
@@ -992,7 +1038,9 @@ unittest
                                         Locus(5, 6),
                                         0,
                                     ),
-                                ]
+                                ],
+                                0,
+                                Order.read2ref,
                             ),
                         ],
                         Yes.isValid,
@@ -1020,7 +1068,9 @@ unittest
                                         Locus(97, 98),
                                         0,
                                     ),
-                                ]
+                                ],
+                                0,
+                                Order.read2ref,
                             ),
                         ],
                         Yes.isValid,
@@ -1048,7 +1098,9 @@ unittest
                                         Locus(97, 98),
                                         0,
                                     ),
-                                ]
+                                ],
+                                0,
+                                Order.read2ref,
                             ),
                         ],
                         Yes.isValid,
@@ -1076,7 +1128,9 @@ unittest
                                         Locus(5, 6),
                                         0,
                                     ),
-                                ]
+                                ],
+                                0,
+                                Order.read2ref,
                             ),
                         ],
                         Yes.isValid,
@@ -1104,7 +1158,9 @@ unittest
                                         Locus(97, 98),
                                         0,
                                     ),
-                                ]
+                                ],
+                                0,
+                                Order.read2ref,
                             ),
                             AlignmentChain(
                                 8,
@@ -1122,7 +1178,9 @@ unittest
                                         Locus(5, 6),
                                         0,
                                     ),
-                                ]
+                                ],
+                                0,
+                                Order.read2ref,
                             ),
                         ],
                         Yes.isValid,
@@ -1150,7 +1208,9 @@ unittest
                                         Locus(5, 6),
                                         0,
                                     ),
-                                ]
+                                ],
+                                0,
+                                Order.read2ref,
                             ),
                             AlignmentChain(
                                 10,
@@ -1168,7 +1228,9 @@ unittest
                                         Locus(97, 98),
                                         0,
                                     ),
-                                ]
+                                ],
+                                0,
+                                Order.read2ref,
                             ),
                         ],
                         Yes.isValid,
@@ -1235,17 +1297,17 @@ unittest
                     AlignmentChain(0, Contig(1, 50), Contig(1, 50), no, [
                         LocalAlignment(Locus(0, 15), Locus(10, 20), 0),
                         LocalAlignment(Locus(20, 40), Locus(30, 50), 1),
-                    ])
+                    ], 0, Order.read2ref)
                 ];
                 auto gapAlignment = [
                     AlignmentChain(0, Contig(1, 80), Contig(1, 50), no, [
                         LocalAlignment(Locus(10, 15), Locus(30, 35), 0),
                         LocalAlignment(Locus(20, 30), Locus(40, 50), 1),
-                    ]),
+                    ], 0, Order.read2ref),
                     AlignmentChain(1, Contig(1, 80), Contig(2, 50), no, [
                         LocalAlignment(Locus(50, 55), Locus(0, 10), 2),
                         LocalAlignment(Locus(60, 70), Locus(15, 20), 3),
-                    ]),
+                    ], 0, Order.read2ref),
                 ];
                 // dfmt on
 
@@ -1355,7 +1417,7 @@ unittest
                         [AlignmentChain(0, Contig(1, 50), Contig(1, 50), no, [
                             LocalAlignment(Locus(0, 15), Locus(10, 20), 0),
                             LocalAlignment(Locus(20, 40), Locus(30, 50), 1),
-                        ])],
+                        ], 0, Order.read2ref)],
                         10
                     ),
                     //            0      10  45  50
@@ -1367,7 +1429,7 @@ unittest
                         [AlignmentChain(1, Contig(1, 50), Contig(1, 50), no, [
                             LocalAlignment(Locus(0, 15), Locus(10, 20), 2),
                             LocalAlignment(Locus(20, 40), Locus(30, 45), 3),
-                        ])],
+                        ], 0, Order.read2ref)],
                         5
                     ),
                     // CASE 2 (left extension, no complement):
@@ -1381,7 +1443,7 @@ unittest
                         [AlignmentChain(2, Contig(1, 50), Contig(1, 50), no, [
                             LocalAlignment(Locus(10, 15), Locus(0, 20), 4),
                             LocalAlignment(Locus(20, 50), Locus(30, 40), 5),
-                        ])],
+                        ], 0, Order.read2ref)],
                         10
                     ),
                     //                  0   5  40      50
@@ -1393,7 +1455,7 @@ unittest
                         [AlignmentChain(3, Contig(1, 50), Contig(1, 50), no, [
                             LocalAlignment(Locus(10, 15), Locus(5, 20), 6),
                             LocalAlignment(Locus(20, 50), Locus(30, 40), 7),
-                        ])],
+                        ], 0, Order.read2ref)],
                         5
                     ),
                     // CASE 3 (right extension, complement):
@@ -1407,7 +1469,7 @@ unittest
                         [AlignmentChain(4, Contig(1, 50), Contig(1, 50), yes, [
                             LocalAlignment(Locus(0, 15), Locus(10, 20), 8),
                             LocalAlignment(Locus(20, 40), Locus(30, 50), 9),
-                        ])],
+                        ], 0, Order.read2ref)],
                         10
                     ),
                     //            0      10  45  50
@@ -1419,7 +1481,7 @@ unittest
                         [AlignmentChain(5, Contig(1, 50), Contig(1, 50), yes, [
                             LocalAlignment(Locus(0, 15), Locus(10, 20), 10),
                             LocalAlignment(Locus(20, 40), Locus(30, 45), 11),
-                        ])],
+                        ], 0, Order.read2ref)],
                         5
                     ),
                     // CASE 4 (left extension, complement):
@@ -1433,7 +1495,7 @@ unittest
                         [AlignmentChain(6, Contig(1, 50), Contig(1, 50), yes, [
                             LocalAlignment(Locus(10, 15), Locus(0, 20), 12),
                             LocalAlignment(Locus(20, 50), Locus(30, 40), 13),
-                        ])],
+                        ], 0, Order.read2ref)],
                         10
                     ),
                     //                  0   5  40      50
@@ -1445,7 +1507,7 @@ unittest
                         [AlignmentChain(7, Contig(1, 50), Contig(1, 50), yes, [
                             LocalAlignment(Locus(10, 15), Locus(5, 20), 14),
                             LocalAlignment(Locus(20, 50), Locus(30, 40), 15),
-                        ])],
+                        ], 0, Order.read2ref)],
                         5
                     ),
                 ];
@@ -1547,11 +1609,11 @@ unittest
                             AlignmentChain(0, Contig(1, 80), Contig(1, 50), no, [
                                 LocalAlignment(Locus(10, 15), Locus(30, 35), 0),
                                 LocalAlignment(Locus(20, 30), Locus(40, 50), 1),
-                            ]),
+                            ], 0, Order.read2ref),
                             AlignmentChain(1, Contig(1, 80), Contig(2, 50), no, [
                                 LocalAlignment(Locus(50, 55), Locus(0, 10), 2),
                                 LocalAlignment(Locus(60, 70), Locus(15, 20), 3),
-                            ]),
+                            ], 0, Order.read2ref),
                         ],
                         20
                     ),
@@ -1567,11 +1629,11 @@ unittest
                             AlignmentChain(2, Contig(1, 80), Contig(1, 50), no, [
                                 LocalAlignment(Locus(10, 15), Locus(30, 35), 4),
                                 LocalAlignment(Locus(20, 30), Locus(40, 45), 5),
-                            ]),
+                            ], 0, Order.read2ref),
                             AlignmentChain(3, Contig(1, 80), Contig(2, 50), no, [
                                 LocalAlignment(Locus(50, 55), Locus(5, 10), 6),
                                 LocalAlignment(Locus(60, 70), Locus(15, 20), 7),
-                            ]),
+                            ], 0, Order.read2ref),
                         ],
                         10
                     ),
@@ -1587,11 +1649,11 @@ unittest
                             AlignmentChain(4, Contig(1, 80), Contig(2, 50), no, [
                                 LocalAlignment(Locus(50, 55), Locus(5, 10), 6),
                                 LocalAlignment(Locus(60, 70), Locus(15, 20), 7),
-                            ]),
+                            ], 0, Order.read2ref),
                             AlignmentChain(5, Contig(1, 80), Contig(1, 50), no, [
                                 LocalAlignment(Locus(10, 15), Locus(30, 35), 4),
                                 LocalAlignment(Locus(20, 30), Locus(40, 45), 5),
-                            ]),
+                            ], 0, Order.read2ref),
                         ],
                         10
                     ),
@@ -1609,11 +1671,11 @@ unittest
                             AlignmentChain(6, Contig(1, 80), Contig(1, 50), yes, [
                                 LocalAlignment(Locus(10, 15), Locus(30, 35), 8),
                                 LocalAlignment(Locus(20, 30), Locus(40, 50), 9),
-                            ]),
+                            ], 0, Order.read2ref),
                             AlignmentChain(7, Contig(1, 80), Contig(2, 50), yes, [
                                 LocalAlignment(Locus(50, 55), Locus(0, 10), 10),
                                 LocalAlignment(Locus(60, 70), Locus(15, 20), 11),
-                            ]),
+                            ], 0, Order.read2ref),
                         ],
                         20
                     ),
@@ -1629,11 +1691,11 @@ unittest
                             AlignmentChain(8, Contig(1, 80), Contig(1, 50), yes, [
                                 LocalAlignment(Locus(10, 15), Locus(30, 35), 12),
                                 LocalAlignment(Locus(20, 30), Locus(40, 45), 13),
-                            ]),
+                            ], 0, Order.read2ref),
                             AlignmentChain(9, Contig(1, 80), Contig(2, 50), yes, [
                                 LocalAlignment(Locus(50, 55), Locus(5, 10), 14),
                                 LocalAlignment(Locus(60, 70), Locus(15, 20), 15),
-                            ]),
+                            ], 0, Order.read2ref),
                         ],
                         10
                     ),
@@ -1649,11 +1711,11 @@ unittest
                             AlignmentChain(10, Contig(1, 80), Contig(2, 50), yes, [
                                 LocalAlignment(Locus(50, 55), Locus(5, 10), 14),
                                 LocalAlignment(Locus(60, 70), Locus(15, 20), 15),
-                            ]),
+                            ], 0, Order.read2ref),
                             AlignmentChain(11, Contig(1, 80), Contig(1, 50), yes, [
                                 LocalAlignment(Locus(10, 15), Locus(30, 35), 12),
                                 LocalAlignment(Locus(20, 30), Locus(40, 45), 13),
-                            ]),
+                            ], 0, Order.read2ref),
                         ],
                         10
                     ),
@@ -1980,6 +2042,8 @@ unittest
                                 numDiffs,
                             ),
                         ],
+                        0,
+                        Order.read2ref,
                     )];
                     // dfmt on
                 }
@@ -2014,6 +2078,8 @@ unittest
                                     numDiffs,
                                 ),
                             ],
+                            0,
+                            Order.read2ref,
                         ),
                         AlignmentChain(
                             alignmentChainId - 1,
@@ -2032,6 +2098,8 @@ unittest
                                     numDiffs,
                                 ),
                             ],
+                            0,
+                            Order.read2ref,
                         ),
                     ];
                     // dfmt on
@@ -2193,7 +2261,8 @@ PileUp getComplementaryOrder(in PileUp pileUp, AlignmentChain[] complementaryAli
 unittest
 {
     alias Complement = AlignmentChain.Complement;
-    AlignmentChain getDummyAC(size_t contigB, size_t contigA, AlignmentChain.Complement complement, size_t contigABegin, size_t contigAEnd, size_t contigBBegin, size_t contigBEnd)
+    alias Order = AlignmentChain.Order;
+    AlignmentChain getDummyAC(size_t contigA, size_t contigB, AlignmentChain.Complement complement, size_t contigABegin, size_t contigAEnd, size_t contigBBegin, size_t contigBEnd, AlignmentChain.Order order)
     {
         immutable contigLength = 100;
         // dfmt off
@@ -2205,6 +2274,8 @@ unittest
                 AlignmentChain.LocalAlignment.Locus(contigABegin, contigAEnd),
                 AlignmentChain.LocalAlignment.Locus(contigBBegin, contigBEnd),
             )],
+            0,
+            order,
         };
         // dfmt on
 
@@ -2214,35 +2285,35 @@ unittest
     // dfmt off
     auto inPileUp = [
         [  // read 1 spans gap from 1 to 2
-            getDummyAC(1, 1, Complement.no,   0,  10,  90, 100),
-            getDummyAC(1, 2, Complement.no,  90, 100,   0,  10),
+            getDummyAC(1, 1, Complement.no,   0,  10,  90, 100, Order.read2ref),
+            getDummyAC(1, 2, Complement.no,  90, 100,   0,  10, Order.read2ref),
         ],
         [  // read 2 extends begin contig 3
-            getDummyAC(2, 3, Complement.no,  90, 100,   0,  10),
+            getDummyAC(2, 3, Complement.no,  90, 100,   0,  10, Order.read2ref),
         ],
         [  // read 3 extends end contig 3
-            getDummyAC(3, 3, Complement.no,   0,  10,  90, 100),
+            getDummyAC(3, 3, Complement.no,   0,  10,  90, 100, Order.read2ref),
         ],
         [  // read 4 spans gap from 4 to 5 (complement)
-            getDummyAC(4, 4, Complement.yes,   0,  10,  90, 100),
-            getDummyAC(4, 5, Complement.yes,  90, 100,   0,  10),
+            getDummyAC(4, 4, Complement.yes,   0,  10,  90, 100, Order.read2ref),
+            getDummyAC(4, 5, Complement.yes,  90, 100,   0,  10, Order.read2ref),
         ],
         [  // read 5 extends begin contig 6 (complement)
-            getDummyAC(5, 6, Complement.yes,  90, 100,   0,  10),
+            getDummyAC(5, 6, Complement.yes,  90, 100,   0,  10, Order.read2ref),
         ],
         [  // read 6 extends end contig 6 (complement)
-            getDummyAC(6, 6, Complement.yes,   0,  10,  90, 100),
+            getDummyAC(6, 6, Complement.yes,   0,  10,  90, 100, Order.read2ref),
         ],
     ];
     auto complementaryAlignmentChains = [
-        getDummyAC(1, 1, Complement.no,  90, 100,   0,  10),
-        getDummyAC(2, 1, Complement.no,   0,  10,  90, 100),
-        getDummyAC(3, 2, Complement.no,   0,  10,  90, 100),
-        getDummyAC(3, 3, Complement.no,  90, 100,   0,  10),
-        getDummyAC(4, 4, Complement.yes,   0,  10,  90, 100),
-        getDummyAC(5, 4, Complement.yes,  90, 100,   0,  10),
-        getDummyAC(6, 5, Complement.yes,  90, 100,   0,  10),
-        getDummyAC(6, 6, Complement.yes,   0,  10,  90, 100),
+        getDummyAC(1, 1, Complement.no,  90, 100,   0,  10, Order.ref2read),
+        getDummyAC(2, 1, Complement.no,   0,  10,  90, 100, Order.ref2read),
+        getDummyAC(3, 2, Complement.no,   0,  10,  90, 100, Order.ref2read),
+        getDummyAC(3, 3, Complement.no,  90, 100,   0,  10, Order.ref2read),
+        getDummyAC(4, 4, Complement.yes,   0,  10,  90, 100, Order.ref2read),
+        getDummyAC(5, 4, Complement.yes,  90, 100,   0,  10, Order.ref2read),
+        getDummyAC(6, 5, Complement.yes,  90, 100,   0,  10, Order.ref2read),
+        getDummyAC(6, 6, Complement.yes,   0,  10,  90, 100, Order.ref2read),
     ];
     // dfmt on
 
@@ -2251,24 +2322,24 @@ unittest
     // dfmt off
     assert(complementaryPileUp == [
         [  // read 1 spans gap from 1 to 2
-            getDummyAC(1, 1, Complement.no,  90, 100,   0,  10),
-            getDummyAC(2, 1, Complement.no,   0,  10,  90, 100),
+            getDummyAC(1, 1, Complement.no,  90, 100,   0,  10, Order.ref2read),
+            getDummyAC(2, 1, Complement.no,   0,  10,  90, 100, Order.ref2read),
         ],
         [  // read 2 extends begin contig 3
-            getDummyAC(3, 2, Complement.no,   0,  10,  90, 100),
+            getDummyAC(3, 2, Complement.no,   0,  10,  90, 100, Order.ref2read),
         ],
         [  // read 3 extends end contig 3
-            getDummyAC(3, 3, Complement.no,  90, 100,   0,  10),
+            getDummyAC(3, 3, Complement.no,  90, 100,   0,  10, Order.ref2read),
         ],
         [  // read 4 spans gap from 4 to 5 (complement)
-            getDummyAC(4, 4, Complement.yes,   0,  10,  90, 100),
-            getDummyAC(5, 4, Complement.yes,  90, 100,   0,  10),
+            getDummyAC(4, 4, Complement.yes,   0,  10,  90, 100, Order.ref2read),
+            getDummyAC(5, 4, Complement.yes,  90, 100,   0,  10, Order.ref2read),
         ],
         [  // read 5 extends begin contig 6 (complement)
-            getDummyAC(6, 5, Complement.yes,  90, 100,   0,  10),
+            getDummyAC(6, 5, Complement.yes,  90, 100,   0,  10, Order.ref2read),
         ],
         [  // read 6 extends end contig 6 (complement)
-            getDummyAC(6, 6, Complement.yes,   0,  10,  90, 100),
+            getDummyAC(6, 6, Complement.yes,   0,  10,  90, 100, Order.ref2read),
         ],
     ]);
     // dfmt on
@@ -2290,6 +2361,7 @@ AlignmentChain getComplementaryOrder(in AlignmentChain alignmentChain) pure
                 alignmentChain.last.contigA.end,
             ),
         )],
+        order: alignmentChain.order.reverse
     };
     // dfmt on
 
@@ -2789,6 +2861,7 @@ class DJunctor
         logJsonDiagnostic("state", "enter", "function", "djunctor.init");
         selfAlignment = getLocalAlignments(options.refDb, options);
         readsAlignment = getMappings(options.refDb, options.readsDb, options);
+        annotateOrder(readsAlignment, AlignmentChain.Order.ref2read);
         catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup,
                 readsAlignment.b2a.dup);
         logJsonDiagnostic("state", "exit", "function", "djunctor.init");
