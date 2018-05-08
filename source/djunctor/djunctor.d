@@ -2249,7 +2249,13 @@ PileUp getComplementaryOrder(in PileUp pileUp, AlignmentChain[] complementaryAli
                 throw new Exception("missing complementary alignment chain");
             }
 
-            complementaryReadAlignment ~= complementaryCandidates.front;
+            auto complementaryAlignmentChain = complementaryCandidates.front;
+
+            assert(alignmentChain.contigA == complementaryAlignmentChain.contigB);
+            assert(alignmentChain.contigB == complementaryAlignmentChain.contigA);
+            assert(complementaryAlignmentChain.getComplementaryOrder.opCmp(alignmentChain) == 0);
+
+            complementaryReadAlignment ~= complementaryAlignmentChain;
         }
 
         complementaryPileUp ~= complementaryReadAlignment.data;
