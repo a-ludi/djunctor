@@ -30,6 +30,7 @@ fi
 SHOW_COVERAGE=false
 SHOW_UNCOVERED_LINES=false
 UNCOVERED_LINES_CONTEXT=2
+VERBOSE=false
 
 function init_script()
 {
@@ -53,7 +54,7 @@ function init_script()
 
 function parse_opts()
 {
-    while getopts "chDgku" OPTION "${ARGV[@]}"; do
+    while getopts "chDgkuv" OPTION "${ARGV[@]}"; do
         case "$OPTION" in
             c)
                 BUILD_OPTS[${#BUILD_OPTS[*]}]='--build=cov'
@@ -75,6 +76,9 @@ function parse_opts()
                 ;;
             u)
                 SHOW_UNCOVERED_LINES=true
+                ;;
+            v)
+                VERBOSE=true
                 ;;
             *)
                 usage
@@ -100,6 +104,7 @@ function usage()
     echo " -k        Keep temporary files; this is forwarded to djunctor."
     echo " -u[=NUM]  If -c is given report uncovered lines in coverage summary. If given print NUM"
     echo "           lines of context (default: 2)"
+    echo " -v        Show more output for debugging."
 }
 
 function clean_up()
@@ -313,7 +318,9 @@ function expect_json()
     if ! jq --exit-status "$JQ_DEFS $2" > /dev/null <<<"$OBSERVED";
     then
         echo "expected: $2"
-        echo "observed: $OBSERVED"
+        if $VERBOSE; then
+            echo "observed: $OBSERVED"
+        fi
 
         if [[ -n "$3" ]];
         then
