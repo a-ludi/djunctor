@@ -3020,7 +3020,11 @@ class DJunctor
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.findHits");
 
-        auto pileUps = buildPileUps(catCandidates);
+        // dfmt off
+        auto pileUps = buildPileUps(catCandidates)
+            .filter!(pileUp => pileUp.length >= options.minAbsolutePileUpSize)
+            .array;
+        // dfmt on
 
         logFillingInfo!("findHits", "raw")(pileUps);
         logJsonDebug("pileUps", pileUps.toJson);

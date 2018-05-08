@@ -123,6 +123,10 @@ struct Options
     @Help("alignment anchors with at least this length will get no penalty")
     size_t goodAnchorLength = 1000;
 
+    @Option("min-absolute-pile-up-size")
+    @Help("alignment anchors with at least this length will get no penalty")
+    size_t minAbsolutePileUpSize = 5;
+
     @Option("daligner-options")
     @Help("list of options to pass to `daligner`")
     string[] dalignerOptions = [];
