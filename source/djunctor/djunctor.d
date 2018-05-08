@@ -3261,7 +3261,6 @@ class DJunctor
         auto refContigFastaEntries = refContigIds.map!(
                 contigId => getReferenceFastaEntry(T(contigId))).array;
         auto endContigLength = refContigFastaEntries[$ - 1].length;
-        // TODO update headers
         string newHeader = refContigFastaEntries[0].header;
         size_t newContigLength = trInsertionInfo.totalInsertionLength(endContigLength);
         immutable lineSep = typeof(refContigFastaEntries[0]).lineSep;
