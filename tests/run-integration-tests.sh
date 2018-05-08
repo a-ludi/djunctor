@@ -387,10 +387,23 @@ function result_contig_properly_aligns_to_reference()
     local MAX_LENGTH_DIFF=16
     local MAX_NUM_DIFFS=256
     local NUM_MATCHING_ALIGNMENTS=$(reference_to_result_alignments | \
-        awk -F ',' '{ if ($1 == 1 && $2 == '"$RESULT_CONTIG"' && ($6 - ($10 - $9)) < '"$MAX_LENGTH_DIFF"' && $11 < '"$MAX_NUM_DIFFS"') { print } }' | \
+        awk -F ',' '
+        {
+            if ($1 == 1 && $2 == '"$RESULT_CONTIG"' && ($6 - ($10 - $9)) < '"$MAX_LENGTH_DIFF"' && $11 < '"$MAX_NUM_DIFFS"')
+            {
+                print
+            }
+        }' | \
         wc -l)
     if ! (( NUM_MATCHING_ALIGNMENTS == 1 )); then
-        echo "expected to find proper alignment for contig $RESULT_CONTIG but got $NUM_MATCHING_ALIGNMENTS"
+        echo "expected to find proper alignment for contig $RESULT_CONTIG ($NUM_MATCHING_ALIGNMENTS)"
+        reference_to_result_alignments | \
+            awk -F ',' '{
+                if ($1 == 1 && $2 == '"$RESULT_CONTIG"')
+                {
+                    printf "        → (%d - (%d - %d)) == %d < '"$MAX_LENGTH_DIFF"' && %d < '"$MAX_NUM_DIFFS"')\n", $6, $10, $9, ($6 - ($10 - $9)), $11
+                }
+            }'
 
         return 1
     fi
