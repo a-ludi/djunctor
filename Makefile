@@ -11,4 +11,4 @@ clean:
 	dub clean
 
 todos:
-	@grep --color -noPR '\b(TODO|FIXME)\b.*$$' ./source ./tests
+	@grep --color --exclude='*.tar'{,.gz,.xz} -noPR '\b(TODO|FIXME)[\s]*?[:\s][\s]*(?P<todo>.*)$$' ./source ./tests
