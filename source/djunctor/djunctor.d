@@ -947,10 +947,8 @@ bool isGap(in ReadAlignment readAlignment) pure nothrow
     // dfmt off
     return readAlignment.length == 2 &&
         readAlignment[0].contigB.id != readAlignment[1].contigB.id &&
-        (
-            (readAlignment[0 .. 1].isBackExtension && readAlignment[1 .. 2].isFrontExtension) ||
-            (readAlignment[0 .. 1].isFrontExtension && readAlignment[1 .. 2].isBackExtension)
-        );
+        readAlignment[0 .. 1].isExtension && readAlignment[1 .. 2].isExtension &&
+        (readAlignment[0 .. 1].isBackExtension == readAlignment[1 .. 2].isFrontExtension);
     // dfmt on
 }
 
@@ -2237,6 +2235,9 @@ PileUp getComplementaryOrder(in PileUp pileUp, AlignmentChain[] complementaryAli
 
     foreach (readAlignment; pileUp)
     {
+        assert(readAlignment.isValid);
+        assert(readAlignment[0 .. 1].isValid);
+        assert(readAlignment[$ - 1 .. $].isValid);
         complementaryReadAlignment = appender!ReadAlignment;
         complementaryReadAlignment.reserve(readAlignment.length);
 
