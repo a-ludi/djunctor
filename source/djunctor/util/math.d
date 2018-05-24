@@ -11,7 +11,7 @@ module djunctor.util.math;
 import std.algorithm : sort, sum;
 import std.conv : to;
 import std.range : ElementType, isForwardRange, walkLength;
-import std.traits : isIntegral;
+import std.traits : isIntegral, isNumeric;
 
 /// Caluclate the mean of range.
 ElementType!Range mean(Range)(Range values) if (isForwardRange!Range)
@@ -116,4 +116,22 @@ unittest
     assert(floor(8, 10) == 0);
     assert(floor(32, 16) == 32);
     assert(floor(101, 100) == 100);
+}
+
+/// Returns the absolute difference between two numbers.
+Num absdiff(Num)(in Num a, in Num b) pure nothrow if (isNumeric!Num)
+{
+    // dfmt off
+    return a > b
+        ? a - b
+        : b - a;
+    // dfmt on
+}
+
+///
+unittest
+{
+    assert(absdiff(2UL, 3UL) == 1UL);
+    assert(absdiff(-42, 13) == 55);
+    assert(absdiff(2.5, 5) == 2.5);
 }
