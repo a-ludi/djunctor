@@ -1119,8 +1119,8 @@ unittest
 
     // dfmt off
     auto fastaRecords = [
-        ">Sim/1/0_14 RQ=0.975\nggcccaggcagccc",
-        ">Sim/3/0_11 RQ=0.975\ngagtgcagtgg",
+        ">Sim/1/0_14 RQ=0.975\nggcccacccaggcagccc",
+        ">Sim/3/0_11 RQ=0.975\ngagtgcgtgcagtgg",
     ];
     // dfmt on
     struct Options
