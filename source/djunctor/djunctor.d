@@ -37,7 +37,7 @@ version (unittest)
     import djunctor.dazzler : origGetLocalAlignments = getLocalAlignments,
         origGetMappings = getMappings;
     import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
-        getNumContigs, getTracePointDistance, attachTracePoints;
+        getNumContigs, getTracePointDistance, attachTracePoints, writeMask;
 
     MockCallable!(AlignmentContainer!(AlignmentChain[]), const string, const Options) getLocalAlignments;
     MockCallable!(origGetMappings!Options) getMappings;
@@ -46,7 +46,7 @@ else
 {
     import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
         getLocalAlignments, getMappings, getNumContigs, getTracePointDistance,
-        attachTracePoints;
+        attachTracePoints, writeMask;
 }
 
 /// General container for alignment data.
@@ -2987,6 +2987,7 @@ class DJunctor
     size_t numReferenceContigs;
     size_t numReads;
     AlignmentChain[] selfAlignment;
+    Region[] repetitiveRegions;
     AlignmentContainer!(AlignmentChain[]) readsAlignment;
     const Options options;
     /// Set of read ids not to be considered in further processing.
@@ -3047,11 +3048,58 @@ class DJunctor
             options.workdir,
         ));
         // dfmt on
+        assessRepeatStructure();
         readsAlignment = getMappings(options.refDb, options.readsDb, options);
         annotateOrder(readsAlignment, AlignmentChain.Order.ref2read);
         catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup,
                 readsAlignment.b2a.dup);
         logJsonDiagnostic("state", "exit", "function", "djunctor.init");
+
+        return this;
+    }
+
+    protected DJunctor assessRepeatStructure()
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.assessRepeatStructure");
+
+        auto repetitiveRegionsBuilder = appender!(Region[]);
+
+        foreach (alignment; selfAlignment)
+        {
+            auto repetitiveAlignmentRegion = alignment.getRegion();
+            bool isInserted = false;
+            foreach (ref repetitiveRegion; repetitiveRegionsBuilder.data)
+            {
+                if (!empty(intersection(repetitiveAlignmentRegion, repetitiveRegion)))
+                {
+                    auto union_ = convexUnion(repetitiveAlignmentRegion, repetitiveRegion);
+                    repetitiveRegion.begin = union_.begin;
+                    repetitiveRegion.end = union_.end;
+                    isInserted = true;
+                    break;
+                }
+            }
+
+            if (!isInserted)
+            {
+                repetitiveRegionsBuilder ~= repetitiveAlignmentRegion;
+            }
+        }
+
+        repetitiveRegions = repetitiveRegionsBuilder.data;
+        // dfmt off
+        logJsonDebug(
+            "numSelfAlignments", selfAlignment.length,
+            "repetitiveRegions", repetitiveRegions.toJson,
+        );
+        // dfmt on
+
+        if (options.repeatMask != null)
+        {
+            writeMask(options.refDb, options.repeatMask, repetitiveRegions, options);
+        }
+
+        logJsonDiagnostic("state", "exit", "function", "djunctor.assessRepeatStructure");
 
         return this;
     }

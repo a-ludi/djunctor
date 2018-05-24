@@ -135,6 +135,10 @@ struct Options
     @Help("alignment anchors with at least this length will get no penalty")
     size_t minAbsolutePileUpSize = 5;
 
+    @Option("repeat-mask")
+    @Help("if given write inferred repeat mask into a Dazzler mask with this name")
+    string repeatMask = null;
+
     @Option("daligner-options")
     @Help("list of options to pass to `daligner`")
     string[] dalignerOptions = [];
@@ -219,7 +223,7 @@ struct Options
     }
 
     /// Return a table that lists all `@Option`s in this struct.
-    string toString() pure const
+    string toString() const
     {
         import std.algorithm : joiner, map, maxElement, sort;
         import std.array : array;
