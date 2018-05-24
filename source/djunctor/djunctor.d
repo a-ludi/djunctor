@@ -3290,7 +3290,15 @@ class DJunctor
         // dfmt on
 
         logFillingInfo!("findHits", "raw")(pileUps);
-        logJsonDebug("pileUps", pileUps.toJson);
+        // dfmt off
+        logJsonDebug("pileUps", pileUps
+            .map!(pileUp => Json([
+                "type": Json(pileUp.getType.to!string),
+                "readAlignments": pileUp.toJson,
+            ]))
+            .array
+            .toJson);
+        // dfmt on
 
         foreach (pileUp; pileUps)
         {
