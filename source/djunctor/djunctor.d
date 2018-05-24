@@ -3181,22 +3181,12 @@ class DJunctor
 
     protected Hit buildConsensus(Hit croppedDbResult)
     {
-        string[] consensusDbs = getConsensus(croppedDbResult.dbFile, options);
+        string consensusDb = getConsensus(croppedDbResult.dbFile, croppedDbResult.readId, options);
 
-        debug logJsonDebug("consensusDbs", consensusDbs.map!Json.array);
-        assert(consensusDbs.length > 0, "empty consensus");
+        debug logJsonDebug("consensusDb", consensusDb);
 
-        if (consensusDbs.length > 1)
-        {
-            // dfmt off
-            logJsonWarn(
-                "warn", "more consensus DBs than expected; this may lead to unexpected results",
-                "consensusDbs", consensusDbs.map!Json.array,
-            );
-            // dfmt on
-        }
-
-        croppedDbResult.dbFile = consensusDbs[0];
+        croppedDbResult.dbFile = consensusDb;
+        croppedDbResult.readId = 1;
 
         return croppedDbResult;
     }

@@ -1156,6 +1156,40 @@ unittest
 
     Returns: list of consensus DBs.
 */
+string getConsensus(Options)(in string dbFile, in size_t readId, in Options options)
+        if (hasOption!(Options, "daccordOptions", isOptionsList)
+            && hasOption!(Options, "dalignerOptions",
+            isOptionsList) && hasOption!(Options, "dbsplitOptions",
+            isOptionsList) && hasOption!(Options, "workdir", isSomeString))
+{
+    static struct ModifiedOptions
+    {
+        string[] daccordOptions;
+        string[] dalignerOptions;
+        string[] dbsplitOptions;
+        string workdir;
+    }
+
+    // dfmt off
+    auto consensusDbs = getConsensus(dbFile, const(ModifiedOptions)(
+        options.daccordOptions ~ format!"-I%d,%d"(readId, readId),
+        options.dalignerOptions,
+        options.dbsplitOptions,
+        options.workdir,
+    ));
+    // dfmt on
+
+    if (consensusDbs.length == 0)
+    {
+        throw new Exception("empty consensus");
+    }
+
+    assert(consensusDbs.length == 1, "too many consensus DBs");
+
+    return consensusDbs[0];
+}
+
+///
 string[] getConsensus(Options)(in string dbFile, in Options options)
         if (hasOption!(Options, "daccordOptions", isOptionsList)
             && hasOption!(Options, "dalignerOptions",
