@@ -571,13 +571,13 @@ private TracePointDump[] readTracePointList(S)(in S lasDump) if (isSomeString!S)
             char chainPartType;
 
             // dfmt off
-                auto numMatches = dumpLine.formattedRead!"P %d %d %c %c"(
-                    nextContigAId,
-                    nextContigBId,
-                    complement,
-                    chainPartType,
-                );
-                // dfmt on
+            auto numMatches = dumpLine.formattedRead!"P %d %d %c %c"(
+                nextContigAId,
+                nextContigBId,
+                complement,
+                chainPartType,
+            );
+            // dfmt on
             assert(numMatches == 4);
 
             final switch (chainPartType.to!ChainPartType)
@@ -1272,8 +1272,11 @@ size_t getNumContigs(Options)(in string damFile, in Options options)
     immutable contigNumFormatStart = contigNumFormat[0 .. 4];
     size_t numContigs;
     size_t[] empty;
-    auto matchingLine = dbdump(damFile, empty, [], options.workdir).filter!(
-            line => line.startsWith(contigNumFormatStart)).front;
+    // dfmt off
+    auto matchingLine = dbdump(damFile, empty, [], options.workdir)
+        .filter!(line => line.startsWith(contigNumFormatStart))
+        .front;
+    // dfmt on
 
     if (!matchingLine)
     {
