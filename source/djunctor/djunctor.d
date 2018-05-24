@@ -11,13 +11,13 @@ module djunctor.djunctor;
 import djunctor.commandline : Options;
 import djunctor.util.fasta : parseFasta, parseFastaRecord, parsePacBioHeader, reverseComplement;
 import djunctor.util.log;
-import djunctor.util.math : ceil, floor, mean, median;
+import djunctor.util.math : absdiff, ceil, floor, mean, median;
 import djunctor.util.range : Comparator;
 import djunctor.util.string : indent;
 import core.exception : AssertError;
 import std.algorithm : all, any, canFind, chunkBy, each, equal, filter, find,
     fold, group, isSorted, joiner, map, max, maxElement, min, sort, sum, swap,
-    SwapStrategy;
+    SwapStrategy, uniq;
 import std.array : appender, Appender, array;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
@@ -165,7 +165,15 @@ struct AlignmentChain
                 size_t traceLength = la.tracePoints.map!"a.numBasePairs".sum;
                 size_t traceDiffs = la.tracePoints.map!"a.numDiffs".sum;
 
-                assert(la.numDiffs == traceDiffs, "missing trace points");
+                // TODO remove logging and "soft" assertion if fixed in LAdump
+                if (la.numDiffs != traceDiffs)
+                    debug logJsonDebug(
+                        "contigA", contigA.id,
+                        "contigB", contigB.id,
+                        "la.numDiffs", la.numDiffs,
+                        "traceDiffs", traceDiffs,
+                    );
+                assert(absdiff(la.numDiffs, traceDiffs) <= 1, "missing trace points");
                 assert(la.contigB.end - la.contigB.begin == traceLength,
                         "trace distance does not match alignment");
             }
