@@ -2424,6 +2424,166 @@ unittest
     assert(pileUp[1][0].id == 3);
 }
 
+
+// dfmt off
+/**
+    Marks a region of on a contig. The designated interval is right-open.
+*/
+alias Region = Tuple!(
+    size_t, "contigId",
+    size_t, "begin",
+    size_t, "end",
+);
+// dfmt on
+
+/// Returns the size of region.
+size_t size(in Region region) pure nothrow
+{
+    return region.end - region.begin;
+}
+
+/// ditto
+size_t size(in Region[] regions) pure nothrow
+{
+    return regions.map!(region => size(region)).sum;
+}
+
+/// Returns true iff the region is empty.
+bool empty(in Region region) pure nothrow
+{
+    return region.begin >= region.end;
+}
+
+///
+unittest
+{
+    assert(empty(Region(0, 0, 0)));
+    assert(empty(Region(1, 42, 42)));
+    assert(!empty(Region(0, 0, 42)));
+    assert(!empty(Region(1, 42, 1337)));
+}
+
+/**
+    Returns the convex union of both regions.
+
+    Throws: Exception if `contigId`s differ.
+*/
+Region convexUnion(in Region aRegion, in Region bRegion) pure
+{
+    if (aRegion.contigId != bRegion.contigId)
+    {
+        throw new Exception("cannot build union of two regions on different contigs");
+    }
+    else if (empty(aRegion))
+    {
+        return bRegion;
+    }
+    else if (empty(bRegion))
+    {
+        return aRegion;
+    }
+
+    // dfmt off
+    return Region(
+        aRegion.contigId,
+        min(aRegion.begin, bRegion.begin),
+        max(aRegion.end, bRegion.end),
+    );
+    // dfmt on
+}
+
+///
+unittest
+{
+    assert(convexUnion(Region(0, 0, 15), Region(0,  5, 20)) == Region(0, 0, 20));
+    assert(convexUnion(Region(0, 0,  5), Region(0, 15, 20)) == Region(0, 0, 20));
+    assert(convexUnion(Region(0, 0, 20), Region(0,  5, 15)) == Region(0, 0, 20));
+    assert(convexUnion(Region(0, 0, 20), Region(0, 25, 25)) == Region(0, 0, 20));
+    assert(convexUnion(Region(0, 25, 25), Region(0, 0, 20)) == Region(0, 0, 20));
+    assertThrown!Exception(convexUnion(Region(0, 0, 10), Region(1, 0, 10)));
+}
+
+/// Returns the intersection of both regions; empty if `contigId`s differ.
+Region intersection(in Region aRegion, in Region bRegion) pure nothrow
+{
+    if (aRegion.contigId != bRegion.contigId)
+    {
+        return Region(0, 0, 0);
+    }
+
+    // dfmt off
+    return Region(
+        aRegion.contigId,
+        max(aRegion.begin, bRegion.begin),
+        min(aRegion.end, bRegion.end),
+    );
+    // dfmt on
+}
+
+///
+unittest
+{
+    assert(intersection(Region(0, 0, 15), Region(0,  5, 20)) == Region(0, 5, 15));
+    assert(empty(intersection(Region(0, 0,  5), Region(0, 15, 20))));
+    assert(intersection(Region(0, 0, 20), Region(0,  5, 15)) == Region(0, 5, 15));
+    assert(empty(intersection(Region(0, 0, 20), Region(0, 25, 25))));
+    assert(empty(intersection(Region(0, 25, 25), Region(0, 0, 20))));
+    assert(empty(intersection(Region(0, 0, 10), Region(1, 0, 10))));
+}
+
+/// Returns the set difference `aRegion - bRegion`; returns `[aRegion]` if
+/// regions do not intersect.
+Region[] difference(in Region aRegion, in Region bRegion) pure nothrow
+{
+    auto intersection = intersection(aRegion, bRegion);
+
+    if (empty(intersection))
+    {
+        return [aRegion];
+    }
+
+    auto x3 = intersection.end;
+    auto x4 = aRegion.end;
+
+    // dfmt off
+    return only(
+        Region(
+            aRegion.contigId,
+            aRegion.begin,
+            intersection.begin,
+        ),
+        Region(
+            aRegion.contigId,
+            intersection.end,
+            aRegion.end,
+        ),
+    ).filter!(part => !empty(part)).array;
+    // dfmt on
+}
+
+///
+unittest
+{
+    assert(difference(Region(0, 0, 15), Region(0,  5, 20)) == Region(0, 0, 5));
+    assert(difference(Region(0, 0,  5), Region(0, 15, 20)) == Region(0, 0,  5));
+    assert(difference(Region(0, 0, 20), Region(0,  5, 15)) == Region(0, 0, 5));
+    assert(difference(Region(0, 0, 20), Region(0, 25, 25)) == Region(0, 0, 20));
+    assert(difference(Region(0, 25, 25), Region(0, 0, 20)) == Region(0, 25, 25));
+    assert(difference(Region(0, 0, 10), Region(1, 0, 10)) == Region(0, 0, 10));
+}
+
+/// Returns the alignment region of alignmentChain.
+Region getRegion(in AlignmentChain alignmentChain) pure nothrow
+{
+    // dfmt off
+    return Region(
+        alignmentChain.contigA.id,
+        alignmentChain.first.contigA.begin,
+        alignmentChain.last.contigA.end,
+    );
+    // dfmt on
+}
+
 // dfmt off
 alias CroppingSlice = Tuple!(
     size_t, "begin",
