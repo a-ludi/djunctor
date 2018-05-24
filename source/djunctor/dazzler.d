@@ -597,6 +597,7 @@ private TracePointDump[] readTracePointList(S)(in S lasDump) if (isSomeString!S)
                 }
                 else
                 {
+                    debug logJsonDebug("info", "missing chain start");
                     // NOTE: This is a work-around for a bug in LAdump: if the
                     //       beginning of a chain is not a "proper overlap" but
                     //       a continuation is then LAdump will print the
@@ -1021,6 +1022,13 @@ private auto readDbDump(S, Range)(S dbDump, Range recordNumbers, in size_t lineL
             );
         // dfmt on
         assert(numMatches == 8, format!"%d matches in chunk: `%s`"(numMatches, joinedLines.array));
+
+        debug logJsonDebug(
+            "isSkipping", sortedRecordNumbers.length > 0 && !sortedRecordNumbers.contains(recordNumber),
+            "wantedRecordNumbers", recordNumbers.serializeToJson,
+            "recordNumber", recordNumber,
+            "headerLine", headerLine,
+        );
 
         // skip unwanted records
         if (sortedRecordNumbers.length > 0 && !sortedRecordNumbers.contains(recordNumber))
