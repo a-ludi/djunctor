@@ -9,7 +9,8 @@
 module djunctor.djunctor;
 
 import djunctor.commandline : Options;
-import djunctor.util.fasta : parseFasta, parseFastaRecord, parsePacBioHeader, reverseComplement;
+import djunctor.util.fasta : parseFasta, parseFastaRecord, parsePacBioHeader,
+    reverseComplement;
 import djunctor.util.log;
 import djunctor.util.math : absdiff, ceil, floor, mean, median;
 import djunctor.util.range : Comparator;
@@ -25,7 +26,8 @@ import std.exception : assertNotThrown, assertThrown;
 import std.format : format, formattedWrite;
 import std.math : abs, floor, sgn;
 import std.range : assumeSorted, chain, chunks, ElementType, enumerate, iota,
-    isForwardRange, only, refRange, retro, slide, SortedRange, tail, take, walkLength, zip;
+    isForwardRange, only, refRange, retro, slide, SortedRange, tail, take,
+    walkLength, zip;
 import std.stdio : File, write, writeln;
 import std.string : outdent;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
@@ -158,21 +160,21 @@ struct AlignmentChain
             assert(0 <= la.contigB.begin && la.contigB.begin < la.contigB.end
                     && la.contigB.end <= contigB.length, "non-sense alignment of contigB");
 
-            assert(tracePointDistance == 0 || la.tracePoints.length > 0,
-                    "missing trace points");
+            assert(tracePointDistance == 0 || la.tracePoints.length > 0, "missing trace points");
             if (tracePointDistance > 0)
             {
                 size_t traceLength = la.tracePoints.map!"a.numBasePairs".sum;
                 size_t traceDiffs = la.tracePoints.map!"a.numDiffs".sum;
 
                 // TODO remove logging and "soft" assertion if fixed in LAdump
-                if (la.numDiffs != traceDiffs)
+                if (la.numDiffs != traceDiffs)// dfmt off
                     debug logJsonDebug(
                         "contigA", contigA.id,
                         "contigB", contigB.id,
                         "la.numDiffs", la.numDiffs,
                         "traceDiffs", traceDiffs,
                     );
+                    // dfmt on
                 assert(absdiff(la.numDiffs, traceDiffs) <= 1, "missing trace points");
                 assert(la.contigB.end - la.contigB.begin == traceLength,
                         "trace distance does not match alignment");
@@ -571,16 +573,17 @@ AlignmentChain.Order reverse(in AlignmentChain.Order order) pure nothrow
 {
     final switch (order)
     {
-        case AlignmentChain.Order.none:
-            return AlignmentChain.Order.none;
-        case AlignmentChain.Order.ref2read:
-            return AlignmentChain.Order.read2ref;
-        case AlignmentChain.Order.read2ref:
-            return AlignmentChain.Order.ref2read;
+    case AlignmentChain.Order.none:
+        return AlignmentChain.Order.none;
+    case AlignmentChain.Order.ref2read:
+        return AlignmentChain.Order.read2ref;
+    case AlignmentChain.Order.read2ref:
+        return AlignmentChain.Order.ref2read;
     }
 }
 
-AlignmentContainer!(AlignmentChain[]) annotateOrder(ref AlignmentContainer!(AlignmentChain[]) alignmentContainer, in AlignmentChain.Order a2bOrder) nothrow
+AlignmentContainer!(AlignmentChain[]) annotateOrder(ref AlignmentContainer!(
+        AlignmentChain[]) alignmentContainer, in AlignmentChain.Order a2bOrder) nothrow
 {
     foreach (ref alignmentChain; alignmentContainer.a2b)
     {
@@ -714,7 +717,7 @@ unittest
 
     **Note:** the order is relative to the orientation of the opposite contig.
 */
-bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
+bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure 
         if (contig == "contigA" || contig == "contigB")
 {
     assert(__traits(getMember, ac1, contig) == __traits(getMember, ac2, contig),
@@ -791,7 +794,8 @@ static enum ReadAlignmentType
 */
 bool isValid(in ReadAlignment readAlignment) pure nothrow
 {
-    assert(readAlignment[0].order == AlignmentChain.Order.read2ref, "only applicable for read2ref alignments");
+    assert(readAlignment[0].order == AlignmentChain.Order.read2ref,
+            "only applicable for read2ref alignments");
     return readAlignment.isExtension ^ readAlignment.isGap;
 }
 
@@ -802,7 +806,8 @@ bool isValid(in ReadAlignment readAlignment) pure nothrow
 */
 ReadAlignmentType getType(in ReadAlignment readAlignment) pure nothrow
 {
-    assert(readAlignment[0].order == AlignmentChain.Order.read2ref, "only applicable for read2ref alignments");
+    assert(readAlignment[0].order == AlignmentChain.Order.read2ref,
+            "only applicable for read2ref alignments");
     assert(readAlignment.isValid, "invalid read alignment");
 
     if (readAlignment.isGap)
@@ -827,7 +832,8 @@ ReadAlignmentType getType(in ReadAlignment readAlignment) pure nothrow
 */
 bool isExtension(in ReadAlignment readAlignment) pure nothrow
 {
-    assert(readAlignment[0].order == AlignmentChain.Order.read2ref, "only applicable for read2ref alignments");
+    assert(readAlignment[0].order == AlignmentChain.Order.read2ref,
+            "only applicable for read2ref alignments");
     return readAlignment.isFrontExtension ^ readAlignment.isBackExtension;
 }
 
@@ -855,7 +861,8 @@ bool isExtension(in ReadAlignment readAlignment) pure nothrow
 */
 bool isFrontExtension(in ReadAlignment readAlignment) pure nothrow
 {
-    assert(readAlignment[0].order == AlignmentChain.Order.read2ref, "only applicable for read2ref alignments");
+    assert(readAlignment[0].order == AlignmentChain.Order.read2ref,
+            "only applicable for read2ref alignments");
     if (readAlignment.length != 1)
     {
         return false;
@@ -903,7 +910,8 @@ bool isFrontExtension(in ReadAlignment readAlignment) pure nothrow
 */
 bool isBackExtension(in ReadAlignment readAlignment) pure nothrow
 {
-    assert(readAlignment[0].order == AlignmentChain.Order.read2ref, "only applicable for read2ref alignments");
+    assert(readAlignment[0].order == AlignmentChain.Order.read2ref,
+            "only applicable for read2ref alignments");
     if (readAlignment.length != 1)
     {
         return false;
@@ -2200,9 +2208,11 @@ ReadAlignmentType getType(in PileUp pileUp) pure nothrow
     else
     {
         assert(pileUp.isExtension);
+        // dfmt off
         return pileUp[0].isFrontExtension
             ? ReadAlignmentType.front
             : ReadAlignmentType.back;
+        // dfmt on
     }
 }
 
@@ -2277,7 +2287,9 @@ unittest
 {
     alias Complement = AlignmentChain.Complement;
     alias Order = AlignmentChain.Order;
-    AlignmentChain getDummyAC(size_t contigA, size_t contigB, AlignmentChain.Complement complement, size_t contigABegin, size_t contigAEnd, size_t contigBBegin, size_t contigBEnd, AlignmentChain.Order order)
+    AlignmentChain getDummyAC(size_t contigA, size_t contigB,
+            AlignmentChain.Complement complement, size_t contigABegin,
+            size_t contigAEnd, size_t contigBBegin, size_t contigBEnd, AlignmentChain.Order order)
     {
         immutable contigLength = 100;
         // dfmt off
@@ -2362,6 +2374,7 @@ unittest
 
 AlignmentChain getComplementaryOrder(in AlignmentChain alignmentChain) pure
 {
+    // dfmt off
     AlignmentChain complementary = {
         contigA: alignmentChain.contigB,
         contigB: alignmentChain.contigA,
@@ -2385,15 +2398,17 @@ AlignmentChain getComplementaryOrder(in AlignmentChain alignmentChain) pure
         static foreach (contig; ["contigA", "contigB"])
         {
             static foreach (coord; ["begin", "end"])
-                mixin("complementary.localAlignments[0]."~contig~"."~coord~" = complementary."~contig~".length - complementary.localAlignments[0]."~contig~"."~coord~";");
-            mixin("swap(complementary.localAlignments[0]."~contig~".begin, complementary.localAlignments[0]."~contig~".end);");
+                mixin("complementary.localAlignments[0]." ~ contig ~ "." ~ coord ~ " = complementary."
+                        ~ contig ~ ".length - complementary.localAlignments[0]."
+                        ~ contig ~ "." ~ coord ~ ";");
+            mixin("swap(complementary.localAlignments[0]." ~ contig
+                    ~ ".begin, complementary.localAlignments[0]." ~ contig ~ ".end);");
         }
 
     }
 
     return complementary;
 }
-
 
 /// Returns a list of pointers to all involved alignment chains.
 AlignmentChain*[] getAlignmentChainRefs(PileUp pileUp) pure nothrow
@@ -2431,7 +2446,6 @@ unittest
     assert(pileUp[0][1].id == 2);
     assert(pileUp[1][0].id == 3);
 }
-
 
 // dfmt off
 /**
@@ -2503,9 +2517,9 @@ Region convexUnion(in Region aRegion, in Region bRegion) pure
 ///
 unittest
 {
-    assert(convexUnion(Region(0, 0, 15), Region(0,  5, 20)) == Region(0, 0, 20));
-    assert(convexUnion(Region(0, 0,  5), Region(0, 15, 20)) == Region(0, 0, 20));
-    assert(convexUnion(Region(0, 0, 20), Region(0,  5, 15)) == Region(0, 0, 20));
+    assert(convexUnion(Region(0, 0, 15), Region(0, 5, 20)) == Region(0, 0, 20));
+    assert(convexUnion(Region(0, 0, 5), Region(0, 15, 20)) == Region(0, 0, 20));
+    assert(convexUnion(Region(0, 0, 20), Region(0, 5, 15)) == Region(0, 0, 20));
     assert(convexUnion(Region(0, 0, 20), Region(0, 25, 25)) == Region(0, 0, 20));
     assert(convexUnion(Region(0, 25, 25), Region(0, 0, 20)) == Region(0, 0, 20));
     assertThrown!Exception(convexUnion(Region(0, 0, 10), Region(1, 0, 10)));
@@ -2531,9 +2545,9 @@ Region intersection(in Region aRegion, in Region bRegion) pure nothrow
 ///
 unittest
 {
-    assert(intersection(Region(0, 0, 15), Region(0,  5, 20)) == Region(0, 5, 15));
-    assert(empty(intersection(Region(0, 0,  5), Region(0, 15, 20))));
-    assert(intersection(Region(0, 0, 20), Region(0,  5, 15)) == Region(0, 5, 15));
+    assert(intersection(Region(0, 0, 15), Region(0, 5, 20)) == Region(0, 5, 15));
+    assert(empty(intersection(Region(0, 0, 5), Region(0, 15, 20))));
+    assert(intersection(Region(0, 0, 20), Region(0, 5, 15)) == Region(0, 5, 15));
     assert(empty(intersection(Region(0, 0, 20), Region(0, 25, 25))));
     assert(empty(intersection(Region(0, 25, 25), Region(0, 0, 20))));
     assert(empty(intersection(Region(0, 0, 10), Region(1, 0, 10))));
@@ -2572,9 +2586,9 @@ Region[] difference(in Region aRegion, in Region bRegion) pure nothrow
 ///
 unittest
 {
-    assert(difference(Region(0, 0, 15), Region(0,  5, 20)) == Region(0, 0, 5));
-    assert(difference(Region(0, 0,  5), Region(0, 15, 20)) == Region(0, 0,  5));
-    assert(difference(Region(0, 0, 20), Region(0,  5, 15)) == Region(0, 0, 5));
+    assert(difference(Region(0, 0, 15), Region(0, 5, 20)) == Region(0, 0, 5));
+    assert(difference(Region(0, 0, 5), Region(0, 15, 20)) == Region(0, 0, 5));
+    assert(difference(Region(0, 0, 20), Region(0, 5, 15)) == Region(0, 0, 5));
     assert(difference(Region(0, 0, 20), Region(0, 25, 25)) == Region(0, 0, 20));
     assert(difference(Region(0, 25, 25), Region(0, 0, 20)) == Region(0, 25, 25));
     assert(difference(Region(0, 0, 10), Region(1, 0, 10)) == Region(0, 0, 10));
@@ -2655,7 +2669,8 @@ CroppingRefPosition getCroppingRefPositions(const PileUp pileUp, in size_t trace
     // dfmt on
 }
 
-CroppingSlice getCroppingSlice(const AlignmentChain alignmentChain, in CroppingRefPosition croppingRefPosition) pure
+CroppingSlice getCroppingSlice(const AlignmentChain alignmentChain,
+        in CroppingRefPosition croppingRefPosition) pure
 {
     auto tracePointDistance = alignmentChain.tracePointDistance;
     auto alignmentType = [alignmentChain.getComplementaryOrder].getType;
@@ -2749,7 +2764,8 @@ size_t getCommonBackTracePoint(const AlignmentChain[] alignmentChains, in size_t
     return getCommonBackTracePoint(alignmentSlices, tracePointDistance);
 }
 
-private size_t getCommonBackTracePoint(Tuple!(size_t, size_t)[] alignmentSlices, in size_t tracePointDistance) pure nothrow
+private size_t getCommonBackTracePoint(Tuple!(size_t,
+        size_t)[] alignmentSlices, in size_t tracePointDistance) pure nothrow
 {
     if (alignmentSlices.length == 0)
         return 0;
@@ -2874,7 +2890,8 @@ size_t getCommonFrontTracePoint(const AlignmentChain[] alignmentChains, in size_
     return getCommonFrontTracePoint(alignmentSlices, tracePointDistance);
 }
 
-private size_t getCommonFrontTracePoint(Tuple!(size_t, size_t)[] alignmentSlices, in size_t tracePointDistance) pure nothrow
+private size_t getCommonFrontTracePoint(Tuple!(size_t,
+        size_t)[] alignmentSlices, in size_t tracePointDistance) pure nothrow
 {
     if (alignmentSlices.length == 0)
         return size_t.max;
@@ -3343,10 +3360,11 @@ class DJunctor
         {
             immutable dummyFastaEntry = typeof(rawFastaEntries.front[1])();
             auto readId = complementaryReadAlignment[0].contigB.id;
-            auto rawFastaEntry = rawFastaEntries.equalRange(tuple(readId, dummyFastaEntry)).front[1];
+            auto rawFastaEntry = rawFastaEntries.equalRange(tuple(readId,
+                    dummyFastaEntry)).front[1];
             immutable lineSep = typeof(rawFastaEntry).lineSep;
-            auto readCroppingSlice = complementaryReadAlignment
-                .map!(alignmentChain => alignmentChain.getCroppingSlice(croppingRefPositions))
+            auto readCroppingSlice = complementaryReadAlignment.map!(
+                    alignmentChain => alignmentChain.getCroppingSlice(croppingRefPositions))
                 .fold!((aSlice, bSlice) => intersection(aSlice, bSlice));
             auto insertionLength = readCroppingSlice[1] - readCroppingSlice[0];
 
@@ -3370,7 +3388,8 @@ class DJunctor
             }
             assert(readCroppingSlice[0] < readCroppingSlice[1], "invalid/empty read cropping slice");
 
-            size_t insertionScore = getInsertionScore(complementaryReadAlignment, pileUpType, Yes.preferSpanning);
+            size_t insertionScore = getInsertionScore(complementaryReadAlignment,
+                    pileUpType, Yes.preferSpanning);
 
             if (insertionScore > bestInsertionScore)
             {
@@ -3385,7 +3404,8 @@ class DJunctor
             headerBuilder.qualityRegionBegin = 0;
             headerBuilder.qualityRegionBegin = croppedLength;
             auto newHeader = headerBuilder.to!string;
-            auto expectedFastaLength = newHeader.length + croppedLength + croppedLength / options.fastaLineWidth + 2;
+            auto expectedFastaLength = newHeader.length + croppedLength
+                + croppedLength / options.fastaLineWidth + 2;
             auto croppedFastaEntry = appender!string;
             croppedFastaEntry.reserve(expectedFastaLength);
 
@@ -3406,6 +3426,7 @@ class DJunctor
 
         with (CoordinateTransform) with (ReadAlignmentType)
             {
+                // dfmt off
                 return Hit(
                     Insertion.make(
                         Coordinate(
@@ -3423,10 +3444,13 @@ class DJunctor
                     bestInsertionComplement,
                     croppedPileUpDb,
                 );
+                // dfmt on
             }
     }
 
-    protected size_t getInsertionScore(in ReadAlignment readAlignment, in ReadAlignmentType pileUpType, in Flag!"preferSpanning" preferSpanning = No.preferSpanning) pure
+    protected size_t getInsertionScore(in ReadAlignment readAlignment,
+            in ReadAlignmentType pileUpType,
+            in Flag!"preferSpanning" preferSpanning = No.preferSpanning) pure
     {
         immutable shortAlignmentPenaltyMagnitude = AlignmentChain.maxScore / 512;
         immutable notSpanningPenaltyMagnitude = AlignmentChain.maxScore / 2;
@@ -3434,7 +3458,8 @@ class DJunctor
         long expectedAlignmentCount = pileUpType == ReadAlignmentType.gap ? 2 : 1;
         long avgAlignmentLength = readAlignment.map!"a.totalLength".sum / readAlignment.length;
         long avgAlignmentScore = readAlignment.map!"a.score".sum / readAlignment.length;
-        long shortAlignmentPenalty = floor(shortAlignmentPenaltyMagnitude * ((options.goodAnchorLength + 1) / avgAlignmentLength.to!float)^^2).to!size_t;
+        long shortAlignmentPenalty = floor(shortAlignmentPenaltyMagnitude * (
+                (options.goodAnchorLength + 1) / avgAlignmentLength.to!float) ^^ 2).to!size_t;
         // dfmt off
         long notSpanningPenalty = preferSpanning
             ? (expectedAlignmentCount - readAlignment.length) * notSpanningPenaltyMagnitude
@@ -3555,7 +3580,7 @@ class DJunctor
                 break;
             case back:
                 beforeInsertSequence = refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx],
-                afterInsertSequence = refContigFastaEntries[0][0 .. 0];
+                    afterInsertSequence = refContigFastaEntries[0][0 .. 0];
                 break;
             case relabel:
                 assert(0, "invalid insertion");
@@ -3737,11 +3762,11 @@ class DJunctor
 }
 
 /**
-                This realizes a transform which translates coordinates before insertions
-                to coordinates after them. The insertions can be added sequentially. The
-                transform is fully functional at any point in time and can be converted
-                to a Python 2.7 script for external usage.
-            */
+    This realizes a transform which translates coordinates before insertions
+    to coordinates after them. The insertions can be added sequentially. The
+    transform is fully functional at any point in time and can be converted
+    to a Python 2.7 script for external usage.
+*/
 struct CoordinateTransform
 {
     static struct Coordinate
@@ -3816,15 +3841,15 @@ struct CoordinateTransform
         {
             final switch (type)
             {
-                case Type.back:
-                    end.idx = begin.idx + newLength;
-                    goto case;
-                case Type.front:
-                case Type.gap:
-                    _length = newLength;
-                    return;
-                case Type.relabel:
-                    return;
+            case Type.back:
+                end.idx = begin.idx + newLength;
+                goto case;
+            case Type.front:
+            case Type.gap:
+                _length = newLength;
+                return;
+            case Type.relabel:
+                return;
             }
         }
 

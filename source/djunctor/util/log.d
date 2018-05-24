@@ -116,7 +116,8 @@ unittest
     logJsonError("error", "mysterious observation", "secret", 42);
 
     stderr.rewind();
-    auto expected = ctRegex!(`\{"secret":42,"error":"mysterious observation","timestamp":[0-9]+\}` ~ '\n');
+    auto expected = ctRegex!(
+            `\{"secret":42,"error":"mysterious observation","timestamp":[0-9]+\}` ~ '\n');
     auto observed = stderr.readln;
 
     assert(matchFirst(observed, expected), "got unexpected output `" ~ observed ~ "`");

@@ -591,7 +591,8 @@ private TracePointDump[] readTracePointList(S)(in S lasDump) if (isSomeString!S)
                 startChain();
                 break;
             case ChainPartType.continuation:
-                if (contigAId == nextContigAId && contigBId == nextContigBId)
+                if (contigAId == nextContigAId
+                        && contigBId == nextContigBId)
                 {
                     nextChainPart();
                 }
@@ -1023,12 +1024,14 @@ private auto readDbDump(S, Range)(S dbDump, Range recordNumbers, in size_t lineL
         // dfmt on
         assert(numMatches == 8, format!"%d matches in chunk: `%s`"(numMatches, joinedLines.array));
 
+        // dfmt off
         debug logJsonDebug(
             "isSkipping", sortedRecordNumbers.length > 0 && !sortedRecordNumbers.contains(recordNumber),
             "wantedRecordNumbers", recordNumbers.serializeToJson,
             "recordNumber", recordNumber,
             "headerLine", headerLine,
         );
+        // dfmt on
 
         // skip unwanted records
         if (sortedRecordNumbers.length > 0 && !sortedRecordNumbers.contains(recordNumber))
@@ -1335,7 +1338,8 @@ size_t getNumContigs(Options)(in string damFile, in Options options)
     return numContigs;
 }
 
-void writeMask(Region, Options)(in string dbFile, in string maskName, in Region[] regions, in Options options)
+void writeMask(Region, Options)(in string dbFile, in string maskName,
+        in Region[] regions, in Options options)
         if (hasOption!(Options, "workdir", isSomeString))
 {
     // dfmt off
@@ -1362,7 +1366,7 @@ void writeMask(Region, Options)(in string dbFile, in string maskName, in Region[
     maskRegions.sort();
 
     auto numReads = getNumContigs(dbFile, options).to!int;
-    int size = 0;  // this seems to be zero always (see DAMASKER/TANmask.c:422)
+    int size = 0; // this seems to be zero always (see DAMASKER/TANmask.c:422)
     size_t currentContig = 1;
     long dataPointer = 0;
 
