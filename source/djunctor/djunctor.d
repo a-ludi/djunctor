@@ -3109,7 +3109,8 @@ class DJunctor
         logJsonDiagnostic("state", "enter", "function", "djunctor.mainLoop");
         do
         {
-            filterUseless();
+            filterRedudant();
+            filterWeaklyAnchored();
             findHits();
 
             // dfmt off
@@ -3135,9 +3136,9 @@ class DJunctor
         return this;
     }
 
-    protected DJunctor filterUseless()
+    protected DJunctor filterRedudant()
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.filterUseless");
+        logJsonDiagnostic("state", "enter", "function", "djunctor.filterRedudant");
 
         auto sizeReserve = numEstimateUseless(catCandidates.a2b.length, iteration);
         if (sizeReserve == 0)
@@ -3145,7 +3146,7 @@ class DJunctor
             // dfmt off
             logJsonDiagnostic(
                 "state", "exit",
-                "function", "djunctor.filterUseless",
+                "function", "djunctor.filterRedudant",
                 "reason", "skipping: expecting zero useless reads",
             );
             // dfmt on
@@ -3192,7 +3193,48 @@ class DJunctor
         this.catUseless ~= uselessAcc.data;
         this.catCandidates.a2b = candidatesAcc.data;
         this.catCandidates.b2a = this.catCandidates.b2a.filter!isNotUseless.array;
-        logJsonDiagnostic("state", "exit", "function", "djunctor.filterUseless");
+        logJsonDiagnostic("state", "exit", "function", "djunctor.filterRedudant");
+
+        return this;
+    }
+
+    protected DJunctor filterWeaklyAnchored()
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.filterWeaklyAnchored");
+
+        auto uselessAcc = appender!(size_t[]);
+        auto candidatesAcc = appender!(AlignmentChain[]);
+        alias isNotUseless = ac => !uselessAcc.data.canFind(ac.contigA.id);
+
+        foreach (alignment; catCandidates.a2b)
+        {
+            assert(alignment.order == AlignmentChain.Order.ref2read);
+            // Mark reads as weakly anchored if they are mostly anchored in a
+            // repetitive region
+            auto alignmentRegion = alignment.getRegion();
+            foreach (repetitiveRegion; repetitiveRegions)
+            {
+                auto differenceRegion = difference(alignmentRegion, repetitiveRegion);
+                bool isWeaklyAnchored = size(differenceRegion) <= options.minAnchorLength;
+
+                if (isWeaklyAnchored)
+                {
+                    uselessAcc ~= alignment.contigB.id;
+                }
+                else
+                {
+                    candidatesAcc ~= alignment;
+                }
+            }
+        }
+        auto weaklyAnchoredCandidates = uselessAcc.data.sort().uniq().array;
+
+        this.catUseless ~= weaklyAnchoredCandidates;
+        this.catCandidates.a2b = candidatesAcc.data;
+        this.catCandidates.b2a = this.catCandidates.b2a.filter!isNotUseless.array;
+
+        logJsonDiagnostic("weaklyAnchoredCandidates", weaklyAnchoredCandidates.toJson);
+        logJsonDiagnostic("state", "exit", "function", "djunctor.filterWeaklyAnchored");
 
         return this;
     }
