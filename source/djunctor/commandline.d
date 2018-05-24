@@ -119,7 +119,15 @@ struct Options
     @Help("write a Python 2.7 compatible script which transform input coordinates to output coordinates")
     string coordTransform = null;
 
-    @Option("anchor-length")
+    @Option("reference-error")
+    @Help("estimated error rate in reference")
+    double referenceErrorRate = .95;
+
+    @Option("min-anchor-length")
+    @Help("alignment need to have at least this length of unique anchoring sequence")
+    size_t minAnchorLength = 200;
+
+    @Option("good-anchor-length")
     @Help("alignment anchors with at least this length will get no penalty")
     size_t goodAnchorLength = 1000;
 

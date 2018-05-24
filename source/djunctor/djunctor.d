@@ -2984,7 +2984,9 @@ class DJunctor
     alias numEstimateUseless = (numCatUnsure, iteration) => (numCatUnsure - numCatUnsure / 20) / (
             iteration + 1);
 
-    AlignmentContainer!(AlignmentChain[]) selfAlignment;
+    size_t numReferenceContigs;
+    size_t numReads;
+    AlignmentChain[] selfAlignment;
     AlignmentContainer!(AlignmentChain[]) readsAlignment;
     const Options options;
     /// Set of read ids not to be considered in further processing.
@@ -3025,8 +3027,26 @@ class DJunctor
 
     protected DJunctor init()
     {
+        static struct SelfAlignmentOptions
+        {
+            string[] dalignerOptions;
+            string[] ladumpOptions;
+            string workdir;
+        }
+
         logJsonDiagnostic("state", "enter", "function", "djunctor.init");
-        selfAlignment = getLocalAlignments(options.refDb, options);
+        numReferenceContigs = getNumContigs(options.refDb, options);
+        numReads = getNumContigs(options.readsDb, options);
+        // dfmt off
+        selfAlignment = getLocalAlignments(options.refDb, const(SelfAlignmentOptions)(
+            options.dalignerOptions ~ [
+                format!"-l%d"(options.minAnchorLength),
+                format!"-e%f"(1 - 2 * (1 - options.referenceErrorRate)),
+            ],
+            options.ladumpOptions[].filter!"a != \"-o\"".array,
+            options.workdir,
+        ));
+        // dfmt on
         readsAlignment = getMappings(options.refDb, options.readsDb, options);
         annotateOrder(readsAlignment, AlignmentChain.Order.ref2read);
         catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup,
@@ -3034,21 +3054,6 @@ class DJunctor
         logJsonDiagnostic("state", "exit", "function", "djunctor.init");
 
         return this;
-    }
-
-    unittest
-    {
-        auto options = Options();
-        auto djunctor = new DJunctor(options);
-
-        djunctor.init();
-
-        assert(getLocalAlignments.wasCalled);
-        assert(djunctor.selfAlignment == getLocalAlignments.returnValue);
-        getLocalAlignments.reset();
-        assert(getMappings.wasCalled);
-        assert(djunctor.readsAlignment == getMappings.returnValue);
-        getMappings.reset();
     }
 
     protected DJunctor mainLoop()

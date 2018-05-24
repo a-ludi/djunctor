@@ -101,11 +101,11 @@ string provideDamFileInWorkdir(in string dbFile, ProvideMethod provideMethod, in
     return inWorkdir(dbFile);
 }
 
-AlignmentContainer!(AlignmentChain[]) getLocalAlignments(Options)(in string dbA, in Options options)
+AlignmentChain[] getLocalAlignments(Options)(in string dbA, in Options options)
         if (hasOption!(Options, "dalignerOptions", isOptionsList) && hasOption!(Options,
             "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
-    return getLocalAlignments(dbA, null, options);
+    return getLocalAlignments(dbA, null, options).a2b;
 }
 
 AlignmentContainer!(AlignmentChain[]) getLocalAlignments(Options)(in string dbA,
