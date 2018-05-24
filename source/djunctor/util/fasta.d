@@ -313,13 +313,13 @@ template PacBioHeader(T) if (isSomeString!T)
 {
     struct PacBioHeader
     {
-        static immutable headerFormat = ">%s/%d/%d_%d RQ=%f";
+        static immutable headerFormat = ">%s/%d/%d_%d %s";
 
         T name;
         size_t well;
         size_t qualityRegionBegin;
         size_t qualityRegionEnd;
-        float readQuality;
+        string additionalInformation;
 
         /// Construct a `PacBioHeader!T` from `header`.
         this(T header)
@@ -347,7 +347,7 @@ template PacBioHeader(T) if (isSomeString!T)
                 well,
                 qualityRegionBegin,
                 qualityRegionEnd,
-                readQuality,
+                additionalInformation,
             );
             // dfmt on
         }
@@ -360,7 +360,7 @@ template PacBioHeader(T) if (isSomeString!T)
                 well,
                 qualityRegionBegin,
                 qualityRegionEnd,
-                readQuality,
+                additionalInformation,
             );
             // dfmt on
 
@@ -375,12 +375,12 @@ unittest
     string header = ">name/1/0_1337 RQ=0.75";
     auto pbHeader1 = PacBioHeader!string(header);
 
-    assert(pbHeader1.to!string == ">name/1/0_1337 RQ=0.750000");
+    assert(pbHeader1.to!string == ">name/1/0_1337 RQ=0.75");
     assert(pbHeader1.name == "name");
     assert(pbHeader1.well == 1);
     assert(pbHeader1.qualityRegionBegin == 0);
     assert(pbHeader1.qualityRegionEnd == 1337);
-    assert(pbHeader1.readQuality == 0.75);
+    assert(pbHeader1.additionalInformation == "RQ=0.75");
 
     PacBioHeader!string pbHeader2 = header;
 
@@ -399,12 +399,12 @@ unittest
     string header = ">name/1/0_1337 RQ=0.75";
     auto pbHeader1 = header.parsePacBioHeader();
 
-    assert(pbHeader1.to!string == ">name/1/0_1337 RQ=0.750000");
+    assert(pbHeader1.to!string == ">name/1/0_1337 RQ=0.75");
     assert(pbHeader1.name == "name");
     assert(pbHeader1.well == 1);
     assert(pbHeader1.qualityRegionBegin == 0);
     assert(pbHeader1.qualityRegionEnd == 1337);
-    assert(pbHeader1.readQuality == 0.75);
+    assert(pbHeader1.additionalInformation == "RQ=0.75");
 }
 
 /**
