@@ -3259,7 +3259,7 @@ class DJunctor
             }
             assert(readCroppingSlice[0] < readCroppingSlice[1], "invalid/empty read cropping slice");
 
-            size_t insertionScore = getInsertionScore(complementaryReadAlignment, pileUpType);
+            size_t insertionScore = getInsertionScore(complementaryReadAlignment, pileUpType, Yes.preferSpanning);
 
             if (insertionScore > bestInsertionScore)
             {
@@ -3315,16 +3315,21 @@ class DJunctor
             }
     }
 
-    protected size_t getInsertionScore(in ReadAlignment readAlignment, in ReadAlignmentType pileUpType) pure
+    protected size_t getInsertionScore(in ReadAlignment readAlignment, in ReadAlignmentType pileUpType, in Flag!"preferSpanning" preferSpanning = No.preferSpanning) pure
     {
         immutable shortAlignmentPenaltyMagnitude = AlignmentChain.maxScore / 512;
         immutable notSpanningPenaltyMagnitude = AlignmentChain.maxScore / 2;
 
         long expectedAlignmentCount = pileUpType == ReadAlignmentType.gap ? 2 : 1;
-        long avgAlignmentLength = readAlignment.map!"a.totalLength".sum / expectedAlignmentCount;
-        long avgAlignmentScore = readAlignment.map!"a.score".sum / expectedAlignmentCount;
+        long avgAlignmentLength = readAlignment.map!"a.totalLength".sum / readAlignment.length;
+        long avgAlignmentScore = readAlignment.map!"a.score".sum / readAlignment.length;
         long shortAlignmentPenalty = floor(shortAlignmentPenaltyMagnitude * ((options.goodAnchorLength + 1) / avgAlignmentLength.to!float)^^2).to!size_t;
-        size_t score = max(0, avgAlignmentScore - shortAlignmentPenalty);
+        // dfmt off
+        long notSpanningPenalty = preferSpanning
+            ? (expectedAlignmentCount - readAlignment.length) * notSpanningPenaltyMagnitude
+            : 0;
+        // dfmt on
+        size_t score = max(0, avgAlignmentScore - shortAlignmentPenalty - notSpanningPenalty);
 
         // dfmt off
         debug logJsonDebug(
