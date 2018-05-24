@@ -10,6 +10,7 @@ module djunctor.dazzler;
 
 import djunctor.commandline : hasOption, isOptionsList;
 import djunctor.djunctor : AlignmentChain, AlignmentContainer;
+import djunctor.util.fasta : parseFastaRecord;
 import djunctor.util.log;
 import djunctor.util.range : arrayChunks;
 import djunctor.util.tempfile : mkstemp;
@@ -37,6 +38,9 @@ private immutable hiddenDbFileSuffixes = [".bps", ".hdr", ".idx"];
 
 /// Constant holding the .dam file extension.
 immutable damFileExtension = ".dam";
+
+/// The Dazzler tools require sequence of a least minSequenceLength base pairs.
+immutable minSequenceLength = 14;
 
 /**
     Return a list of hidden files associated to every `.dam`/`.db` file. These
@@ -1418,6 +1422,7 @@ private
                 Config.none, workdir);
         //dfmt off
         fastaRecords
+            .filter!(fastaRecord => parseFastaRecord(fastaRecord).length >= minSequenceLength)
             .joiner(only('\n'))
             .chain("\n")
             .chunks(writeChunkSize)
