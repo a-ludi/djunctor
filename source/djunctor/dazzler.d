@@ -1286,6 +1286,58 @@ size_t getNumContigs(Options)(in string damFile, in Options options)
     return numContigs;
 }
 
+void writeMask(Region, Options)(in string dbFile, in string maskName, in Region[] regions, in Options options)
+        if (hasOption!(Options, "workdir", isSomeString))
+{
+    // dfmt off
+    alias MaskRegion = Tuple!(
+        int, "contigId",
+        int, "begin",
+        int, "end",
+    );
+    // dfmt on
+
+    auto dbName = dbFile.baseName.stripExtension;
+    auto maskHeader = File(format!"%s/.%s.%s.anno"(options.workdir, dbName, maskName), "wb");
+    auto maskData = File(format!"%s/.%s.%s.data"(options.workdir, dbName, maskName), "wb");
+
+    // dfmt off
+    auto maskRegions = regions
+        .map!(region => MaskRegion(
+            region.contigId.to!int,
+            region.begin.to!int,
+            region.end.to!int,
+        ))
+        .array;
+    // dfmt on
+    maskRegions.sort();
+
+    auto numReads = getNumContigs(dbFile, options).to!int;
+    int size = 0;  // this seems to be zero always (see DAMASKER/TANmask.c:422)
+    size_t currentContig = 1;
+    long dataPointer = 0;
+
+    maskHeader.rawWrite([numReads, size]);
+    maskHeader.rawWrite([dataPointer]);
+    foreach (maskRegion; maskRegions)
+    {
+        assert(maskRegion.contigId >= currentContig);
+
+        if (maskRegion.contigId > currentContig)
+        {
+            maskHeader.rawWrite([dataPointer]);
+            ++currentContig;
+        }
+
+        if (maskRegion.contigId == currentContig)
+        {
+            maskData.rawWrite([maskRegion.begin, maskRegion.end]);
+            dataPointer += typeof(maskRegion.begin).sizeof + typeof(maskRegion.end).sizeof;
+        }
+    }
+    maskHeader.rawWrite([dataPointer]);
+}
+
 private
 {
     bool lasEmpty(in string lasFile, in string dbA, in string dbB, in string workdir)
