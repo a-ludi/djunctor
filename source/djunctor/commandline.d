@@ -149,7 +149,11 @@ struct Options
 
     @Option("daccord-options")
     @Help("list of options to pass to `daccord`")
-    string[] daccordOptions = [];
+    // dfmt off
+    string[] daccordOptions = [
+        "-f", // produce full sequences
+    ];
+    // dfmt on
 
     @Option("dbsplit-options")
     @Help("list of options to pass to `DBsplit`")
