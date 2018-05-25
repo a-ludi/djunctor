@@ -3156,7 +3156,11 @@ class DJunctor
             // dfmt off
             logJsonDiagnostic(
                 "iteration", iteration,
+<<<<<<< HEAD
                 "uselessReads", catUseless,
+=======
+                "uselessReads", catUseless.toJson,
+>>>>>>> do not insert short extensions
                 "numCandiatesA2b", catCandidates.a2b.length,
                 "numCandiatesB2a", catCandidates.b2a.length,
                 "numHits", catHits.length
