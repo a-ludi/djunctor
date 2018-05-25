@@ -15,9 +15,35 @@ TEST_DATA_REF="reference"
 TEST_DATA_MODREF="reference_mod"
 COORD_TRANSFORM="coord-transform.py"
 GDB_INIT_SCRIPT="gdbinit"
-DJUNCTOR_OPTS=(-v -v -v --input-provide-method symlink --repeat-mask djunctor_repeat)
+DJUNCTOR_OPTS=(
+    -v
+    -v
+    -v
+    --input-provide-method symlink
+    --repeat-mask djunctor_repeat
+    --reads-error 0.05
+    --reference-error 0.01
+)
 BUILD_OPTS=(--build=debug)
-JQ_DEFS=''
+RESULT_TO_REFERENCE_DALIGNER_OPTS=(
+    -e.95
+    -l4000
+    -h128
+)
+JQ_DEFS='
+    def abs: if . < 0 then -1 * . else . end;
+    def zip(arrB):
+        . as $arrA |
+        [range(0; ([($arrA | length), (arrB | length)] | min))] |
+        map(
+            . as $i |
+            [$arrA[$i], arrB[$i]]
+        );
+    def gapFilled(expectation):
+        .beginContig == expectation.beginContig and
+        .endContig == expectation.endContig and
+        (.gapEnd - expectation.gapEnd | abs) <= 16;
+'
 
 ARGV=("$@")
 KEEP_TEMP=false
@@ -214,7 +240,7 @@ function prepare_tests()
     fasta2DAM "$RESULT_DB" "$RESULT_FILE" && DBsplit "$RESULT_DB"
 
     pushd "$WORKDIR" > /dev/null
-    daligner "$TEST_DATA_REF.dam" "$RESULT_DB"
+    daligner "${RESULT_TO_REFERENCE_DALIGNER_OPTS}" "$TEST_DATA_REF.dam" "$RESULT_DB"
     popd > /dev/null
 }
 
@@ -404,13 +430,17 @@ function result_contig_properly_aligns_to_reference()
         wc -l)
     if ! (( NUM_MATCHING_ALIGNMENTS == 1 )); then
         echo "expected to find proper alignment for contig $RESULT_CONTIG ($NUM_MATCHING_ALIGNMENTS)"
-        reference_to_result_alignments | \
-            awk -F ',' '{
-                if ($1 == 1 && $2 == '"$RESULT_CONTIG"')
-                {
-                    printf "        → (%d - (%d - %d)) == %d < '"$MAX_LENGTH_DIFF"' && %d < '"$MAX_NUM_DIFFS"')\n", $6, $10, $9, ($6 - ($10 - $9)), $11
-                }
-            }'
+
+        if $VERBOSE;
+        then
+            reference_to_result_alignments | \
+                awk -F ',' '{
+                    if ($1 == 1 && $2 == '"$RESULT_CONTIG"')
+                    {
+                        printf "        → (%d - (%d - %d)) == %d < '"$MAX_LENGTH_DIFF"' && %d < '"$MAX_NUM_DIFFS"')\n", $6, $10, $9, ($6 - ($10 - $9)), $11
+                    }
+                }'
+        fi
 
         return 1
     fi
@@ -445,16 +475,45 @@ function join()
 # Test Cases
 #-----------------------------------------------------------------------------
 
-FRONT_EXTENSION_5_LENGTH=996
-FRONT_EXTENSION_9_LENGTH=2222
+FRONT_EXTENSION_1_LENGTH=12
+FRONT_EXTENSION_8_LENGTH=2953
+FRONT_EXTENSION_9_LENGTH=2643
 
 function test_front_extension_found()
 {
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
-        '.[0].gapInfo | map(select(.type == "front")) | map(.contigIds) == [[5], [9]]' \
+        '.[0].gapInfo | map(select(.type == "front")) | map(.contigIds) == [[1], [8], [9]]' \
         '.[0].gapInfo | map(select(.type == "front") | .contigIds)' \
         'gapInfo'
+}
+
+function test_front_extensions_filled()
+{
+    local INSINFO=(
+        '{beginContig: 1, endContig: 1, extensionLength: '"$FRONT_EXTENSION_1_LENGTH"'}'
+        '{beginContig: 8, endContig: 8, extensionLength: '"$FRONT_EXTENSION_8_LENGTH"'}'
+        '{beginContig: 9, endContig: 9, extensionLength: '"$FRONT_EXTENSION_9_LENGTH"'}'
+    )
+
+    expect_json \
+        '.type == "front" and .step == "insertHits" and has("insertionInfo")' \
+        '
+            map({
+                beginContig: .insertionInfo.begin.contigId,
+                endContig: .insertionInfo.end.contigId,
+                extensionLength: (.insertionInfo.length - .insertionInfo.end.idx),
+            }) |
+            zip(['"$(join ',' "${INSINFO[@]}")"']) |
+            map(
+                .[0] as $got |
+                .[1] as $exp |
+                $got == $exp
+            ) |
+            all
+        ' \
+        '{ insertionInfos: map({ beginContig: .insertionInfo.begin.contigId, endContig: .insertionInfo.end.contigId, extensionLength: (.insertionInfo.length - .insertionInfo.end.idx)}) }' \
+        'insertionInfo'
 }
 
 function test_back_extension_found()
@@ -469,28 +528,27 @@ function test_back_extension_found()
 function test_back_extensions_filled()
 {
     local INSINFO=(
-        '{beginContig: 7, endContig: 7, extensionLength: 6819}'
-        '{beginContig: 8, endContig: 8, extensionLength: 9195}'
+        '{beginContig: 7, endContig: 7, extensionLength: 7532}'
+        '{beginContig: 8, endContig: 8, extensionLength: 8323}'
     )
 
     expect_json \
         '.type == "back" and .step == "insertHits" and has("insertionInfo")' \
-        'map({ beginContig: .insertionInfo.begin.contigId, endContig: .insertionInfo.end.contigId, extensionLength: .insertionInfo.length}) == ['"$(join ',' "${INSINFO[@]}")"']' \
+        '
+            map({
+                beginContig: .insertionInfo.begin.contigId,
+                endContig: .insertionInfo.end.contigId,
+                extensionLength: .insertionInfo.length,
+            }) |
+            zip(['"$(join ',' "${INSINFO[@]}")"']) |
+            map(
+                .[0] as $got |
+                .[1] as $exp |
+                $got == $exp
+            ) |
+            all
+        ' \
         '{ insertionInfos: map({ beginContig: .insertionInfo.begin.contigId, endContig: .insertionInfo.end.contigId, extensionLength: .insertionInfo.length}) }' \
-        'insertionInfo'
-}
-
-function test_front_extensions_filled()
-{
-    local INSINFO=(
-        '{beginContig: 5, endContig: 5, extensionLength: '"$FRONT_EXTENSION_5_LENGTH"'}'
-        '{beginContig: 9, endContig: 9, extensionLength: '"$FRONT_EXTENSION_9_LENGTH"'}'
-    )
-
-    expect_json \
-        '.type == "front" and .step == "insertHits" and has("insertionInfo")' \
-        'map({ beginContig: .insertionInfo.begin.contigId, endContig: .insertionInfo.end.contigId, extensionLength: (.insertionInfo.length - .insertionInfo.end.idx)}) == ['"$(join ',' "${INSINFO[@]}")"']' \
-        '{ insertionInfos: map({ beginContig: .insertionInfo.begin.contigId, endContig: .insertionInfo.end.contigId, extensionLength: (.insertionInfo.length - .insertionInfo.end.idx)}) }' \
         'insertionInfo'
 }
 
@@ -498,7 +556,14 @@ function test_gaps_found()
 {
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
-        '.[0].gapInfo | map(select(.type == "gap") | .contigIds) == [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7]]' \
+        '.[0].gapInfo | map(select(.type == "gap") | .contigIds) == [
+            [1, 2],
+            [2, 3],
+            [3, 4],
+            [4, 5],
+            [5, 6],
+            [6, 7]
+        ]' \
         '.[0].gapInfo | map(select(.type == "gap") | .contigIds)' \
         'gapInfo'
 }
@@ -509,13 +574,27 @@ function test_gaps_filled()
         '{beginContig: 1, endContig: 2, gapEnd:  12400}'  #   8300 + 4100 =  12400
         '{beginContig: 2, endContig: 3, gapEnd:  16800}'  #   8350 + 8450 =  16800
         '{beginContig: 3, endContig: 4, gapEnd: 130700}'  # 125700 + 5000 = 130700
+        '{beginContig: 4, endContig: 5, gapEnd:  15000}'  #  10000 + 5000 =  15000
         '{beginContig: 5, endContig: 6, gapEnd:  28750}'  #  25750 + 3000 =  28750
         '{beginContig: 6, endContig: 7, gapEnd:  15250}'  #  12750 + 2500 =  15250
     )
 
     expect_json \
         '.type == "gap" and .step == "insertHits" and has("readId")' \
-        'map({ beginContig: .insertionInfo.begin.contigId, endContig: .insertionInfo.end.contigId, gapEnd: (.insertionInfo.begin.idx + .insertionInfo.length - .insertionInfo.end.idx)}) == ['"$(join ',' "${INSINFO[@]}")"']' \
+        '
+            map({
+                beginContig: .insertionInfo.begin.contigId,
+                endContig: .insertionInfo.end.contigId,
+                gapEnd: (.insertionInfo.begin.idx + .insertionInfo.length - .insertionInfo.end.idx),
+            }) |
+            zip(['"$(join ',' "${INSINFO[@]}")"']) |
+            map(
+                .[0] as $got |
+                .[1] as $exp |
+                $got | gapFilled($exp)
+            ) |
+            all
+        ' \
         '{ insertionInfos: map({beginContig: .insertionInfo.begin.contigId, endContig: .insertionInfo.end.contigId, gapEnd: (.insertionInfo.begin.idx + .insertionInfo.length - .insertionInfo.end.idx)}) }' \
         'insertionInfo'
 }
@@ -525,7 +604,7 @@ function test_merged_result()
 {
     expect_json \
         '. | has("numReferenceContigs")' \
-        '.[0] | .numReferenceContigs == 9 and (.contigSources | length) == 4 and (.contigSources | length) == (.contigSources | unique_by(.[1].dbFile) | length)' \
+        '.[0] | .numReferenceContigs == 9 and (.contigSources | length) == 3 and (.contigSources | length) == (.contigSources | unique_by(.[1].dbFile) | length)' \
         'map({ numReferenceContigs, contigSources })' \
         'numReferenceContigs'
 }
@@ -622,7 +701,7 @@ function test_coordinate_transform__contig_1()
     # This is the transformed coordinate after *perfect* gap filling
     expect_transformed_coord \
         1 42 \
-        1 $((42))
+        1 $((42 + FRONT_EXTENSION_1_LENGTH))
 }
 
 function test_coordinate_transform__contig_2()
@@ -630,7 +709,7 @@ function test_coordinate_transform__contig_2()
     # This is the transformed coordinate after *perfect* gap filling
     expect_transformed_coord \
         2 42 \
-        1 $((42 + 12400))
+        1 $((42 + 12400 + FRONT_EXTENSION_1_LENGTH))
 }
 
 function test_coordinate_transform__contig_3()
@@ -638,47 +717,46 @@ function test_coordinate_transform__contig_3()
     # This is the transformed coordinate after *perfect* gap filling
     expect_transformed_coord \
         3 42 \
-        1 $((42 + 29200))
+        1 $((42 + 29200 + FRONT_EXTENSION_1_LENGTH))
 }
 
 function test_coordinate_transform__contig_4()
 {
-    # This is the transformed coordinate after *perfect* gap filling
+    # This is the transformed coordinate after *perfect* (+ 1 error) gap filling
     expect_transformed_coord \
         4 42 \
-        1 $((42 + 159900))
+        1 $((42 + 159900 + 1 + FRONT_EXTENSION_1_LENGTH))
 }
 
 function test_coordinate_transform__contig_5()
 {
+    # This is the transformed coordinate after *perfect* (+ 7 error) gap filling
     expect_transformed_coord \
         5 42 \
-        2 $((42 + FRONT_EXTENSION_5_LENGTH))
+        1 $((42 + 174900 + 7 + FRONT_EXTENSION_1_LENGTH))
 }
 
 function test_coordinate_transform__contig_6()
 {
-    # This is the transformed coordinate after *perfect* gap filling and the
-    # (imperfect) front extension of contig 5
+    # This is the transformed coordinate after *perfect* (+ 13 error) gap filling
     expect_transformed_coord \
         6 42 \
-        2 $((42 + 28750 + FRONT_EXTENSION_5_LENGTH))
+        1 $((42 + 203650 + 13 + FRONT_EXTENSION_1_LENGTH))
 }
 
 function test_coordinate_transform__contig_7()
 {
-    # This is the transformed coordinate after *perfect* gap filling and the
-    # (imperfect) front extension of contig 5
+    # This is the transformed coordinate after *perfect* (+ 13 error) gap filling
     expect_transformed_coord \
         7 42 \
-        2 $((42 + 44000 + FRONT_EXTENSION_5_LENGTH))
+        1 $((42 + 218900 + 13 + FRONT_EXTENSION_1_LENGTH))
 }
 
 function test_coordinate_transform__contig_8()
 {
     expect_transformed_coord \
         8 42 \
-        3 $((42))
+        2 $((42 + FRONT_EXTENSION_8_LENGTH))
 }
 
 function test_coordinate_transform__contig_9()
@@ -687,7 +765,7 @@ function test_coordinate_transform__contig_9()
     # (imperfect) front extension of contig 9
     expect_transformed_coord \
         9 42 \
-        4 $((42 + FRONT_EXTENSION_9_LENGTH))
+        3 $((42 + FRONT_EXTENSION_9_LENGTH))
 }
 
 
