@@ -717,7 +717,7 @@ unittest
 
     **Note:** the order is relative to the orientation of the opposite contig.
 */
-bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure 
+bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
         if (contig == "contigA" || contig == "contigB")
 {
     assert(__traits(getMember, ac1, contig) == __traits(getMember, ac2, contig),
@@ -3060,6 +3060,13 @@ class DJunctor
             string workdir;
         }
 
+        static struct ReadsToRefAlignmentOptions
+        {
+            string[] damapperOptions;
+            string[] ladumpOptions;
+            string workdir;
+        }
+
         logJsonDiagnostic("state", "enter", "function", "djunctor.init");
         numReferenceContigs = getNumContigs(options.refDb, options);
         numReads = getNumContigs(options.readsDb, options);
@@ -3067,14 +3074,20 @@ class DJunctor
         selfAlignment = getLocalAlignments(options.refDb, const(SelfAlignmentOptions)(
             options.dalignerOptions ~ [
                 format!"-l%d"(options.minAnchorLength),
-                format!"-e%f"(1 - 2 * (1 - options.referenceErrorRate)),
+                format!"-e%f"((1 - options.referenceErrorRate)^^2),
             ],
             options.ladumpOptions[].filter!"a != \"-o\"".array,
             options.workdir,
         ));
         // dfmt on
         assessRepeatStructure();
-        readsAlignment = getMappings(options.refDb, options.readsDb, options);
+        readsAlignment = getMappings(options.refDb, options.readsDb, const(ReadsToRefAlignmentOptions)(
+            options.damapperOptions ~ [
+                format!"-e%f"((1 - options.referenceErrorRate) * (1 - options.readsErrorRate)),
+            ],
+            options.ladumpOptions[].array,
+            options.workdir,
+        ));
         annotateOrder(readsAlignment, AlignmentChain.Order.ref2read);
         catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup,
                 readsAlignment.b2a.dup);
@@ -3482,7 +3495,23 @@ class DJunctor
 
     protected Hit buildConsensus(Hit croppedDbResult)
     {
-        string consensusDb = getConsensus(croppedDbResult.dbFile, croppedDbResult.readId, options);
+        static struct ConsensusAlignmentOptions
+        {
+            string[] daccordOptions;
+            string[] dalignerOptions;
+            string[] dbsplitOptions;
+            string workdir;
+        }
+
+        string consensusDb = getConsensus(croppedDbResult.dbFile, croppedDbResult.readId, const(ConsensusAlignmentOptions)(
+            options.daccordOptions,
+            options.dalignerOptions ~ [
+                format!"-l%d"(options.minAnchorLength),
+                format!"-e%f"((1 - options.readsErrorRate)^^2),
+            ],
+            options.dbsplitOptions,
+            options.workdir,
+        ));
 
         debug logJsonDebug("consensusDb", consensusDb);
 

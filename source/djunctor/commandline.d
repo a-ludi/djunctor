@@ -119,9 +119,13 @@ struct Options
     @Help("write a Python 2.7 compatible script which transform input coordinates to output coordinates")
     string coordTransform = null;
 
+    @Option("reads-error")
+    @Help("estimated error rate in reads")
+    double readsErrorRate = .15;
+
     @Option("reference-error")
     @Help("estimated error rate in reference")
-    double referenceErrorRate = .95;
+    double referenceErrorRate = .05;
 
     @Option("min-anchor-length")
     @Help("alignment need to have at least this length of unique anchoring sequence")
