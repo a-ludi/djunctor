@@ -3008,6 +3008,8 @@ class DJunctor
     static immutable maxAbsoluteDiff = AlignmentChain.maxScore / 100; // 1% wrt. score
     alias numEstimateUseless = (numCatUnsure, iteration) => (numCatUnsure - numCatUnsure / 20) / (
             iteration + 1);
+    /// Do not insert extensions that are improbable short after consensus.
+    static immutable minExtensionLength = 100;
 
     size_t numReferenceContigs;
     size_t numReads;
@@ -3154,7 +3156,7 @@ class DJunctor
             // dfmt off
             logJsonDiagnostic(
                 "iteration", iteration,
-                "numUseless", catUseless.length,
+                "uselessReads", catUseless,
                 "numCandiatesA2b", catCandidates.a2b.length,
                 "numCandiatesB2a", catCandidates.b2a.length,
                 "numHits", catHits.length
@@ -3571,6 +3573,7 @@ class DJunctor
 
             return parsedFastaRecord;
         })()();
+
         auto insertSequence = read[];
         CoordinateTransform.Insertion insertionInfo = hit.insertion;
         // Update insertion info with the actual consensus length.
@@ -3582,6 +3585,26 @@ class DJunctor
                 contigId => getReferenceFastaEntry(T(contigId))).array;
         auto endContigLength = refContigFastaEntries[$ - 1].length;
         string newHeader = refContigFastaEntries[0].header;
+
+        if (insertionInfo.isExtension)
+        {
+            auto effectiveExtensionLength = getEffectiveExtensionLength(insertionInfo, endContigLength);
+
+            if (effectiveExtensionLength < minExtensionLength)
+            {
+                // dfmt off
+                logJsonDiagnostic(
+                    "info", "skipping insertion of short extension",
+                    "effectedContig", insertionInfo.end.contigId,
+                    "extensionLength", effectiveExtensionLength,
+                    "extensionType", insertionInfo.type.to!string,
+                );
+                // dfmt on
+
+                return this;
+            }
+        }
+
         size_t newContigLength = trInsertionInfo.totalInsertionLength(endContigLength);
         immutable lineSep = typeof(refContigFastaEntries[0]).lineSep;
         alias ReferenceSequence = typeof(refContigFastaEntries[0][0 .. 0]);
@@ -3669,6 +3692,13 @@ class DJunctor
     protected auto getReferenceFastaEntry(in DBUnion.DBReference dbRef) const
     {
         return parseFastaRecord(getFastaEntries(dbRef.dbFile, [dbRef.contigId + 0], options).front);
+    }
+
+    protected size_t getEffectiveExtensionLength(in CoordinateTransform.Insertion insertionInfo, in size_t endContigLength) const
+    {
+        return insertionInfo.isFrontExtension
+            ? insertionInfo.length - insertionInfo.end.idx
+            : insertionInfo.length - (endContigLength - insertionInfo.begin.idx);
     }
 
     protected DJunctor finish()

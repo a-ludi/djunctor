@@ -475,7 +475,18 @@ function join()
 # Test Cases
 #-----------------------------------------------------------------------------
 
-FRONT_EXTENSION_1_LENGTH=12
+function test_short_extension_skipped()
+{
+    expect_json \
+        '. | has("extensionLength") and .step == "findHits" and .readState == "raw"' \
+        '. | map(
+            .effectedContig | inside([1]) and
+            .extensionLength < 100
+        ) | all' \
+        '. | map({effectedContig, extensionLength, extensionType})' \
+        'extensionLength'
+}
+
 FRONT_EXTENSION_8_LENGTH=2953
 FRONT_EXTENSION_9_LENGTH=2643
 
@@ -483,7 +494,11 @@ function test_front_extension_found()
 {
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
-        '.[0].gapInfo | map(select(.type == "front")) | map(.contigIds) == [[1], [8], [9]]' \
+        '.[0].gapInfo | map(select(.type == "front")) | map(.contigIds) == [
+            [1],
+            [8],
+            [9]
+        ]' \
         '.[0].gapInfo | map(select(.type == "front") | .contigIds)' \
         'gapInfo'
 }
@@ -491,7 +506,6 @@ function test_front_extension_found()
 function test_front_extensions_filled()
 {
     local INSINFO=(
-        '{beginContig: 1, endContig: 1, extensionLength: '"$FRONT_EXTENSION_1_LENGTH"'}'
         '{beginContig: 8, endContig: 8, extensionLength: '"$FRONT_EXTENSION_8_LENGTH"'}'
         '{beginContig: 9, endContig: 9, extensionLength: '"$FRONT_EXTENSION_9_LENGTH"'}'
     )
@@ -520,7 +534,10 @@ function test_back_extension_found()
 {
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
-        '.[0].gapInfo | map(select(.type == "back")) | map(.contigIds) == [[7], [8]]' \
+        '.[0].gapInfo | map(select(.type == "back")) | map(.contigIds) == [
+            [7],
+            [8]
+        ]' \
         '.[0].gapInfo | map(select(.type == "back") | .contigIds)' \
         'gapInfo'
 }
@@ -701,7 +718,7 @@ function test_coordinate_transform__contig_1()
     # This is the transformed coordinate after *perfect* gap filling
     expect_transformed_coord \
         1 42 \
-        1 $((42 + FRONT_EXTENSION_1_LENGTH))
+        1 $((42))
 }
 
 function test_coordinate_transform__contig_2()
@@ -709,7 +726,7 @@ function test_coordinate_transform__contig_2()
     # This is the transformed coordinate after *perfect* gap filling
     expect_transformed_coord \
         2 42 \
-        1 $((42 + 12400 + FRONT_EXTENSION_1_LENGTH))
+        1 $((42 + 12400))
 }
 
 function test_coordinate_transform__contig_3()
@@ -717,7 +734,7 @@ function test_coordinate_transform__contig_3()
     # This is the transformed coordinate after *perfect* gap filling
     expect_transformed_coord \
         3 42 \
-        1 $((42 + 29200 + FRONT_EXTENSION_1_LENGTH))
+        1 $((42 + 29200))
 }
 
 function test_coordinate_transform__contig_4()
@@ -725,7 +742,7 @@ function test_coordinate_transform__contig_4()
     # This is the transformed coordinate after *perfect* (+ 1 error) gap filling
     expect_transformed_coord \
         4 42 \
-        1 $((42 + 159900 + 1 + FRONT_EXTENSION_1_LENGTH))
+        1 $((42 + 159900 + 1))
 }
 
 function test_coordinate_transform__contig_5()
@@ -733,7 +750,7 @@ function test_coordinate_transform__contig_5()
     # This is the transformed coordinate after *perfect* (+ 7 error) gap filling
     expect_transformed_coord \
         5 42 \
-        1 $((42 + 174900 + 7 + FRONT_EXTENSION_1_LENGTH))
+        1 $((42 + 174900 + 7))
 }
 
 function test_coordinate_transform__contig_6()
@@ -741,7 +758,7 @@ function test_coordinate_transform__contig_6()
     # This is the transformed coordinate after *perfect* (+ 13 error) gap filling
     expect_transformed_coord \
         6 42 \
-        1 $((42 + 203650 + 13 + FRONT_EXTENSION_1_LENGTH))
+        1 $((42 + 203650 + 13))
 }
 
 function test_coordinate_transform__contig_7()
@@ -749,7 +766,7 @@ function test_coordinate_transform__contig_7()
     # This is the transformed coordinate after *perfect* (+ 13 error) gap filling
     expect_transformed_coord \
         7 42 \
-        1 $((42 + 218900 + 13 + FRONT_EXTENSION_1_LENGTH))
+        1 $((42 + 218900 + 13))
 }
 
 function test_coordinate_transform__contig_8()
