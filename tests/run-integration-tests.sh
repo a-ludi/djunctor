@@ -634,14 +634,18 @@ function test_pile_ups_contain_enough_valid_read()
     local TRUE_PILE_UPS="$(jq -c 'map({ contigs, reads: (.reads | map(.readId) | unique | sort) })' < "$WORKDIR/pile_ups.json")"
     local TEST_RESULT="$(jq '
         def correctReadsRatio: (.correctReads | length) / (.computedReads | length);
+        def trueReadsFoundRatio: (.correctReads | length) / (.trueReads | length);
         def minCorrectReadsRatio: '"$MIN_CORRECT_READS_RATIO"';
         def isGoodPileUp: correctReadsRatio >= minCorrectReadsRatio;
         def isBadPileUp: isGoodPileUp | not;
         def buildOutput: {
             contigs,
             type,
+            isGoodEnough: isGoodPileUp,
+            trueReads: .correctReads,
             falseReads: (.computedReads - .correctReads),
             correctReadsRatio: correctReadsRatio,
+            trueReadsFoundRatio: trueReadsFoundRatio,
         };
 
         .truePileUps as $truePileUps |
@@ -658,7 +662,7 @@ function test_pile_ups_contain_enough_valid_read()
                     ($type == "gap" and .contigs == $contigs) or
                     ($type == "back" and .contigs[0] == $contigs[0])
                 ) |
-                ($computedReads - .reads) as $correctReads |
+                ($computedReads - ($computedReads - .reads)) as $correctReads |
                 {
                     contigs: $contigs,
                     type: $type,
@@ -670,21 +674,37 @@ function test_pile_ups_contain_enough_valid_read()
             select(length > 0)
         ) |
         flatten |
-        {
-            goodPileUps: map(select(isGoodPileUp) | buildOutput),
-            badPileUps: map(select(isBadPileUp) | buildOutput),
-        }
+        map(buildOutput)
     ' <<<"{\"truePileUps\":$TRUE_PILE_UPS,\"computedPileUps\":$COMPUTED_PILE_UPS}")"
 
     if ! jq --exit-status '.badPileUps | length == 0' <<<"$TEST_RESULT" &> /dev/null; then
-        local NUM_PILE_UPS="$(jq -r '(.badPileUps | length) + (.goodPileUps | length)' <<<"$TEST_RESULT")"
-        local NUM_BAD_PILE_UPS="$(jq -r '.badPileUps | length' <<<"$TEST_RESULT")"
+        local NUM_PILE_UPS="$(jq -r 'length' <<<"$TEST_RESULT")"
+        local NUM_GOOD_PILE_UPS="$(jq -r 'map(select(.isGoodEnough)) | length' <<<"$TEST_RESULT")"
 
-        echo -n "found $NUM_BAD_PILE_UPS/$NUM_PILE_UPS bad pile ups"
+        echo -n "found $NUM_GOOD_PILE_UPS/$NUM_PILE_UPS good pile ups"
 
         if $VERBOSE; then
             echo -n ": "
-            jq '.badPileUps' <<<"$TEST_RESULT"
+            jq '.' <<<"$TEST_RESULT"
+
+            local FALSE_READS="$WORKDIR/false_reads"
+
+            if [[ ! -f "$FALSE_READS.dam" ]];
+            then
+                local FALSE_READ_IDS=($(jq '. | map(.falseReads) | flatten | unique | sort | .[]' <<<"$TEST_RESULT"))
+                local DAMAPPER_CMD=(
+                    $(json_log 'damapper' | jq --slurp --raw-output 'map(select(has("command") and .command[0] == "damapper")) | .[0].command[0:-2][]')
+                    "$TEST_DATA_MODREF.dam"
+                    "$FALSE_READS.dam"
+                )
+
+                pushd "$WORKDIR" > /dev/null
+                DBshow "$TEST_DATA_READS.dam" "${FALSE_READ_IDS[@]}" | \
+                    tee "$FALSE_READS.fasta" | \
+                    fasta2DAM -i "$FALSE_READS.dam" && \
+                    "${DAMAPPER_CMD[@]}"
+                popd > /dev/null
+            fi
         else
             echo
         fi
