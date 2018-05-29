@@ -33,6 +33,7 @@ import std.range : assumeSorted, chain, chunks, ElementType, enumerate, ForwardR
     walkLength, zip;
 import std.stdio : File, write, writeln;
 import std.string : outdent;
+import std.meta : AliasSeq;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
 import vibe.data.json : Json, toJson = serializeToJson;
 
@@ -3183,7 +3184,7 @@ class DJunctor
             }
         }
 
-        repetitiveRegions = repetitiveRegionsBuilder.data;
+        repetitiveRegions = union_(repetitiveRegionsBuilder.data);
         // dfmt off
         logJsonDebug(
             "numSelfAlignments", selfAlignment.length,
@@ -3207,7 +3208,6 @@ class DJunctor
         do
         {
             filterAlignments();
-            filterWeaklyAnchored();
             transferA2BCandidatesToB2A();
             findHits();
 
@@ -3246,6 +3246,7 @@ class DJunctor
         auto filters = tuple(
             new AmbiguousAlignmentChainsFilter(),
             new RedundantAlignmentChainsFilter(),
+            new WeaklyAnchoredAlignmentChainsFilter(repetitiveRegions, options.minAnchorLength),
         );
         // dfmt on
         AlignmentChain[] filterInput = catCandidates.a2b[];
@@ -3277,48 +3278,6 @@ class DJunctor
 
         return this;
     }
-
-    protected DJunctor filterWeaklyAnchored()
-    {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.filterWeaklyAnchored");
-
-        auto uselessAcc = appender!(size_t[]);
-        auto candidatesAcc = appender!(AlignmentChain[]);
-        alias isNotUseless = ac => !uselessAcc.data.canFind(ac.contigA.id);
-
-        foreach (alignment; catCandidates.a2b)
-        {
-            assert(alignment.order == AlignmentChain.Order.ref2read);
-            // Mark reads as weakly anchored if they are mostly anchored in a
-            // repetitive region
-            auto alignmentRegion = alignment.getRegion();
-            foreach (repetitiveRegion; repetitiveRegions)
-            {
-                auto differenceRegion = difference(alignmentRegion, repetitiveRegion);
-                bool isWeaklyAnchored = size(differenceRegion) <= options.minAnchorLength;
-
-                if (isWeaklyAnchored)
-                {
-                    uselessAcc ~= alignment.contigB.id;
-                }
-                else
-                {
-                    candidatesAcc ~= alignment;
-                }
-            }
-        }
-        auto weaklyAnchoredCandidates = uselessAcc.data.sort().uniq().array;
-
-        this.catUseless ~= weaklyAnchoredCandidates;
-        this.catCandidates.a2b = candidatesAcc.data;
-        this.catCandidates.b2a = this.catCandidates.b2a.filter!isNotUseless.array;
-
-        logJsonDiagnostic("weaklyAnchoredCandidates", weaklyAnchoredCandidates.toJson);
-        logJsonDiagnostic("state", "exit", "function", "djunctor.filterWeaklyAnchored");
-
-        return this;
-    }
-
 
     protected DJunctor transferA2BCandidatesToB2A()
     {
@@ -3938,6 +3897,37 @@ class AmbiguousAlignmentChainsFilter : ReadFilter
             .filter!isAmgiguouslyAlignedRead
             .joiner
             .inputRangeObject;
+    }
+}
+
+
+class WeaklyAnchoredAlignmentChainsFilter : AlignmentChainFilter
+{
+    size_t minAnchorLength;
+    const(Region[]) repetitiveRegions;
+
+    this(const(Region[]) repetitiveRegions, size_t minAnchorLength)
+    {
+        this.repetitiveRegions = repetitiveRegions;
+        this.minAnchorLength = minAnchorLength;
+    }
+
+    AlignmentChain[] opCall(AlignmentChain[] alignmentChains)
+    {
+        bool isStronglyAnchored(AlignmentChain alignment)
+        {
+            // Mark reads as weakly anchored if they are mostly anchored in a
+            // repetitive region
+            auto uniqueAlignmentRegion = difference(alignment.getRegion(), repetitiveRegions);
+            bool isWeaklyAnchored = size(uniqueAlignmentRegion) <= minAnchorLength;
+
+            return !isWeaklyAnchored;
+        }
+
+        return alignmentChains
+            .filter!isStronglyAnchored
+            .array;
+        // dfmt on
     }
 }
 
