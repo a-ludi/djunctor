@@ -3268,7 +3268,8 @@ class DJunctor
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.filterReads");
 
-        return this;
+        //return this;
+        assert(0, "quit");
     }
 
     protected DJunctor transferA2BCandidatesToB2A()
@@ -3869,7 +3870,7 @@ class AmbiguousAlignmentChainsFilter : ReadFilter
 {
     override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
     {
-        alias AlignmentsChunk = typeof(alignmentChains.chunkBy!haveEqualIds.front);
+        alias AlignmentsChunk = typeof(alignmentChains.filter!"a.isProper".chunkBy!haveEqualIds.front);
         bool isAmgiguouslyAlignedRead(AlignmentsChunk alignmentsChunk) {
             auto readAlignments = alignmentsChunk.array;
             readAlignments.sort!"a.score > b.score";
@@ -3885,6 +3886,7 @@ class AmbiguousAlignmentChainsFilter : ReadFilter
         }
 
         return alignmentChains
+            .filter!"a.isProper"
             .chunkBy!haveEqualIds
             .filter!isAmgiguouslyAlignedRead
             .joiner
