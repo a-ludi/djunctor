@@ -3160,32 +3160,12 @@ class DJunctor
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.assessRepeatStructure");
 
-        auto repetitiveRegionsBuilder = appender!(Region[]);
-
-        foreach (alignment; selfAlignment)
-        {
-            auto repetitiveAlignmentRegion = alignment.getRegion();
-            bool isInserted = false;
-            foreach (ref repetitiveRegion; repetitiveRegionsBuilder.data)
-            {
-                if (!empty(intersection(repetitiveAlignmentRegion, repetitiveRegion)))
-                {
-                    auto union_ = convexUnion(repetitiveAlignmentRegion, repetitiveRegion);
-                    repetitiveRegion.begin = union_.begin;
-                    repetitiveRegion.end = union_.end;
-                    isInserted = true;
-                    break;
-                }
-            }
-
-            if (!isInserted)
-            {
-                repetitiveRegionsBuilder ~= repetitiveAlignmentRegion;
-            }
-        }
-
-        repetitiveRegions = union_(repetitiveRegionsBuilder.data);
         // dfmt off
+        repetitiveRegions = selfAlignment
+            .map!getRegion
+            .array
+            .union_;
+
         logJsonDebug(
             "numSelfAlignments", selfAlignment.length,
             "repetitiveRegions", repetitiveRegions.toJson,
