@@ -9,6 +9,9 @@
 module djunctor.djunctor;
 
 import djunctor.commandline : Options;
+import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
+    getLocalAlignments, getMappings, getNumContigs, getTracePointDistance,
+    attachTracePoints, writeMask;
 import djunctor.util.fasta : parseFasta, parseFastaRecord, parsePacBioHeader,
     reverseComplement;
 import djunctor.util.log;
@@ -32,24 +35,6 @@ import std.stdio : File, write, writeln;
 import std.string : outdent;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
 import vibe.data.json : Json, toJson = serializeToJson;
-
-version (unittest)
-{
-    import djunctor.util.testing : MockCallable;
-    import djunctor.dazzler : origGetLocalAlignments = getLocalAlignments,
-        origGetMappings = getMappings;
-    import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
-        getNumContigs, getTracePointDistance, attachTracePoints, writeMask;
-
-    MockCallable!(AlignmentContainer!(AlignmentChain[]), const string, const Options) getLocalAlignments;
-    MockCallable!(origGetMappings!Options) getMappings;
-}
-else
-{
-    import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
-        getLocalAlignments, getMappings, getNumContigs, getTracePointDistance,
-        attachTracePoints, writeMask;
-}
 
 /// General container for alignment data.
 template AlignmentContainer(R)
