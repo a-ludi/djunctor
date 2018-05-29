@@ -2510,6 +2510,47 @@ unittest
     assertThrown!Exception(convexUnion(Region(0, 0, 10), Region(1, 0, 10)));
 }
 
+Region[] union_(in Region[] regions) pure
+{
+    auto sortedRegions = regions.dup.sort();
+
+    // dfmt off
+    return sortedRegions
+        .chunks(2)
+        .map!(regionsChunk => {
+            auto regionsPair = regionsChunk.array;
+
+            if (regionsPair.length != 2 || empty(intersection(regionsPair[0], regionsPair[1])))
+            {
+                return regionsPair.filter!(r => !empty(r)).array;
+            }
+            else
+            {
+                return [convexUnion(regionsPair[0], regionsPair[1])];
+            }
+        })
+        .map!"a()"
+        .join;
+    // dfmt on
+}
+/// ditto
+Region[] union_(in Region[] regions ...) pure
+{
+    return union_(regions);
+}
+
+///
+unittest
+{
+    // TODO
+    assert(union_(Region(0, 0, 15), Region(0, 5, 20)) == [Region(0, 0, 20)]);
+    assert(union_(Region(0, 0, 5), Region(0, 15, 20)) == [Region(0, 0, 5), Region(0, 15, 20)]);
+    assert(union_(Region(0, 0, 20), Region(0, 5, 15)) == [Region(0, 0, 20)]);
+    assert(union_(Region(0, 0, 20), Region(0, 25, 25)) == [Region(0, 0, 20)]);
+    assert(union_(Region(0, 25, 25), Region(0, 0, 20)) == [Region(0, 0, 20)]);
+    assert(union_(Region(0, 0, 10), Region(1, 0, 10)) == [Region(0, 0, 10), Region(1, 0, 10)]);
+}
+
 /// Returns the intersection of both regions; empty if `contigId`s differ.
 Region intersection(in Region aRegion, in Region bRegion) pure nothrow
 {
@@ -2567,16 +2608,48 @@ Region[] difference(in Region aRegion, in Region bRegion) pure nothrow
     ).filter!(part => !empty(part)).array;
     // dfmt on
 }
+/// ditto
+Region[] difference(in Region[] aRegions, in Region bRegion) pure
+{
+    return difference(aRegions, [bRegion]);
+}
+/// ditto
+Region[] difference(in Region aRegion, in Region[] bRegions) pure
+{
+    Region[] diffRegion = [aRegion];
+
+    foreach (bRegion; bRegions)
+    {
+        foreach (partialDiffRegion; diffRegion)
+        {
+            diffRegion = union_(diffRegion ~ difference(partialDiffRegion, bRegion));
+        }
+    }
+
+    return diffRegion;
+}
+/// ditto
+Region[] difference(in Region[] aRegions, in Region[] bRegions) pure
+{
+    Region[] diffRegion;
+
+    foreach (aRegion; aRegions)
+    {
+        diffRegion = union_(diffRegion ~ difference(aRegion, bRegions));
+    }
+
+    return diffRegion;
+}
 
 ///
 unittest
 {
-    assert(difference(Region(0, 0, 15), Region(0, 5, 20)) == Region(0, 0, 5));
-    assert(difference(Region(0, 0, 5), Region(0, 15, 20)) == Region(0, 0, 5));
-    assert(difference(Region(0, 0, 20), Region(0, 5, 15)) == Region(0, 0, 5));
-    assert(difference(Region(0, 0, 20), Region(0, 25, 25)) == Region(0, 0, 20));
-    assert(difference(Region(0, 25, 25), Region(0, 0, 20)) == Region(0, 25, 25));
-    assert(difference(Region(0, 0, 10), Region(1, 0, 10)) == Region(0, 0, 10));
+    assert(difference(Region(0, 0, 15), Region(0, 5, 20)) == [Region(0, 0, 5)]);
+    assert(difference(Region(0, 0, 5), Region(0, 15, 20)) == [Region(0, 0, 5)]);
+    assert(difference(Region(0, 0, 20), Region(0, 5, 15)) == [Region(0, 0, 5), Region(0, 15, 20)]);
+    assert(difference(Region(0, 0, 20), Region(0, 25, 25)) == [Region(0, 0, 20)]);
+    assert(difference(Region(0, 25, 25), Region(0, 0, 20)) == [Region(0, 25, 25)]);
+    assert(difference(Region(0, 0, 10), Region(1, 0, 10)) == [Region(0, 0, 10)]);
 }
 
 /// Returns the alignment region of alignmentChain.
