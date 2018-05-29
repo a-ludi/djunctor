@@ -19,16 +19,16 @@ import djunctor.util.math : absdiff, ceil, floor, mean, median;
 import djunctor.util.range : Comparator;
 import djunctor.util.string : indent;
 import core.exception : AssertError;
-import std.algorithm : all, any, canFind, chunkBy, each, equal, filter, find,
-    fold, group, isSorted, joiner, map, max, maxElement, min, sort, sum, swap,
+import std.algorithm : all, any, cache, canFind, chunkBy, each, equal, filter, find,
+    fold, group, isSorted, joiner, map, max, maxElement, min, multiwayUnion, setDifference, sort, sum, swap,
     SwapStrategy, uniq;
-import std.array : appender, Appender, array;
+import std.array : appender, Appender, array, join;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
 import std.exception : assertNotThrown, assertThrown;
 import std.format : format, formattedWrite;
 import std.math : abs, floor, sgn;
-import std.range : assumeSorted, chain, chunks, ElementType, enumerate, iota,
+import std.range : assumeSorted, chain, chunks, ElementType, enumerate, ForwardRange, InputRange, inputRangeObject, iota,
     isForwardRange, only, refRange, retro, slide, SortedRange, tail, take,
     walkLength, zip;
 import std.stdio : File, write, writeln;
@@ -246,7 +246,7 @@ struct AlignmentChain
         y = va + (lb - vb)
         ---
     */
-    bool isFullyContained()
+    bool isFullyContained() const
     {
         if (first.contigB.begin > first.contigA.begin)
         {
@@ -3076,8 +3076,7 @@ class DJunctor
             options.workdir,
         ));
         annotateOrder(readsAlignment, AlignmentChain.Order.ref2read);
-        catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup,
-                readsAlignment.b2a.dup);
+        catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup, []);
         logJsonDiagnostic("state", "exit", "function", "djunctor.init");
 
         return this;
@@ -3134,8 +3133,9 @@ class DJunctor
         logJsonDiagnostic("state", "enter", "function", "djunctor.mainLoop");
         do
         {
-            filterRedudant();
+            filterAlignments();
             filterWeaklyAnchored();
+            transferA2BCandidatesToB2A();
             findHits();
 
             // dfmt off
@@ -3165,64 +3165,42 @@ class DJunctor
         return this;
     }
 
-    protected DJunctor filterRedudant()
+    protected DJunctor filterAlignments()
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.filterRedudant");
+        logJsonDiagnostic("state", "enter", "function", "djunctor.filterReads");
 
-        auto sizeReserve = numEstimateUseless(catCandidates.a2b.length, iteration);
-        if (sizeReserve == 0)
-        {
-            // dfmt off
-            logJsonDiagnostic(
-                "state", "exit",
-                "function", "djunctor.filterRedudant",
-                "reason", "skipping: expecting zero useless reads",
-            );
-            // dfmt on
-
-            // Skip this step if we do not expect to find "useless" reads;
-            // it is not harmful to consider some "useless" reads as
-            // candidates (catCandidates).
-            return this;
-        }
-
-        auto uselessAcc = appender!(size_t[]);
-        auto candidatesAcc = appender!(AlignmentChain[]);
-        uselessAcc.reserve(sizeReserve);
-        alias isNotUseless = ac => !uselessAcc.data.canFind(ac.contigA.id);
-
-        foreach (alignmentsChunk; catCandidates.a2b.chunkBy!haveEqualIds)
-        {
-            auto alignments = alignmentsChunk.array;
-            alignments.sort!"a.score > b.score";
-
-            // Mark reads as useless if either: (s. issue #3)
-            // (a) The aligned read, ie. the alignment extended with the exceeding
-            //     read sequence on either end, is fully contained in a single
-            //     contig.
-            // (b) It aligns in multiple locations of one contig with
-            //     approximately equal quality.
-            if (alignments[0].isFullyContained || (alignments.length > 1
-                    && similarScore(alignments[0].score, alignments[1].score)))
-            {
-                uselessAcc ~= alignments[0].contigB.id;
-            }
-            else
-            {
-                candidatesAcc ~= alignments;
-            }
-        }
         // dfmt off
-        logJsonDiagnostic(
-            "numUselessExpected", sizeReserve,
-            "numUselessFound", uselessAcc.data.length,
+        auto filters = tuple(
+            new AmbiguousAlignmentChainsFilter(),
+            new RedundantAlignmentChainsFilter(),
         );
         // dfmt on
+        AlignmentChain[] filterInput = catCandidates.a2b[];
+        foreach (i, filter; filters)
+        {
+            auto filterOutput = filter(filterInput[]);
 
-        this.catUseless ~= uselessAcc.data;
-        this.catCandidates.a2b = candidatesAcc.data;
-        this.catCandidates.b2a = this.catCandidates.b2a.filter!isNotUseless.array;
-        logJsonDiagnostic("state", "exit", "function", "djunctor.filterRedudant");
+            assert(isSorted(filterOutput));
+            if (shouldLog(LogLevel.diagnostic)) {
+                // dfmt off
+                auto discardedAlignmentChains = setDifference(
+                    filterInput,
+                    filterOutput,
+                ).array;
+                logJsonDiagnostic(
+                    "filterStage", typeof(filter).stringof,
+                    "discardedAlignmentChains", discardedAlignmentChains.toJson,
+                );
+                // dfmt on
+            }
+
+            filterInput = filterOutput;
+        }
+        auto filterPiepelineOutput = filterInput;
+
+        this.catCandidates.a2b = filterPiepelineOutput;
+
+        logJsonDiagnostic("state", "exit", "function", "djunctor.filterReads");
 
         return this;
     }
@@ -3264,6 +3242,19 @@ class DJunctor
 
         logJsonDiagnostic("weaklyAnchoredCandidates", weaklyAnchoredCandidates.toJson);
         logJsonDiagnostic("state", "exit", "function", "djunctor.filterWeaklyAnchored");
+
+        return this;
+    }
+
+
+    protected DJunctor transferA2BCandidatesToB2A()
+    {
+        // dfmt off
+        catCandidates.b2a = readsAlignment.a2b
+            .map!getComplementaryOrder
+            .array;
+        catCandidates.b2a.sort();
+        // dfmt on
 
         return this;
     }
@@ -3808,6 +3799,75 @@ class DJunctor
         // dfmt on
     }
 }
+
+
+interface AlignmentChainFilter
+{
+    AlignmentChain[] opCall(AlignmentChain[] alignmentChains);
+}
+
+
+abstract class ReadFilter : AlignmentChainFilter
+{
+    AlignmentChain[] opCall(AlignmentChain[] alignmentChains)
+    {
+        assert(alignmentChains.map!(ac => ac.order == AlignmentChain.Order.ref2read).all);
+        // dfmt off
+        auto discardedReadIds = getDiscardedReadIds(alignmentChains)
+            .map!(ac => ac.contigB.id)
+            .array
+            .sort
+            .uniq
+            .array
+            .assumeSorted;
+        // dfmt on
+
+        return alignmentChains.filter!(ac => !discardedReadIds.contains(ac.contigB.id)).array;
+    }
+
+    InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains);
+}
+
+
+class RedundantAlignmentChainsFilter : ReadFilter
+{
+    override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
+    {
+        // Discard read if it has an alignment that – extended with the
+        // exceeding read sequence on either end – is fully contained in
+        // a single contig.
+        return inputRangeObject(alignmentChains.filter!(ac => ac.isFullyContained));
+    }
+}
+
+
+class AmbiguousAlignmentChainsFilter : ReadFilter
+{
+    override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
+    {
+        alias AlignmentsChunk = typeof(alignmentChains.chunkBy!haveEqualIds.front);
+        bool isAmgiguouslyAlignedRead(AlignmentsChunk alignmentsChunk) {
+            auto readAlignments = alignmentsChunk.array;
+            readAlignments.sort!"a.score > b.score";
+
+            // Discard read if it has an alignment that aligns in multiple
+            // locations of one contig with approximately equal quality.
+            // dfmt off
+            return (
+                readAlignments.length > 1 &&
+                DJunctor.similarScore(readAlignments[0].score, readAlignments[1].score)
+            );
+            // dfmt on
+        }
+
+        return alignmentChains
+            .chunkBy!haveEqualIds
+            .filter!isAmgiguouslyAlignedRead
+            .joiner
+            .inputRangeObject;
+    }
+}
+
 
 /**
     This realizes a transform which translates coordinates before insertions
