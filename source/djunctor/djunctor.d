@@ -227,6 +227,22 @@ struct AlignmentChain
             }
     }
 
+    /// This alignment is called proper iff it starts and ends at a read boundary.
+    @property bool isProper() const pure nothrow
+    {
+        // dfmt off
+        return (
+            first.contigA.begin == 0 ||
+            first.contigB.begin == 0
+        )
+        &&
+        (
+            first.contigA.end == contigA.length ||
+            first.contigB.end == contigB.length
+        );
+        // dfmt on
+    }
+
     /**
         Returns true if the aligned read `contigB` (with extensions on either
         end) is fully contained in the reference `contigA`.
