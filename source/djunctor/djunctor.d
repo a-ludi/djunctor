@@ -3236,9 +3236,9 @@ class DJunctor
 
         // dfmt off
         auto filters = tuple(
+            new WeaklyAnchoredAlignmentChainsFilter(repetitiveRegions, options.minAnchorLength),
             new AmbiguousAlignmentChainsFilter(),
             new RedundantAlignmentChainsFilter(),
-            new WeaklyAnchoredAlignmentChainsFilter(repetitiveRegions, options.minAnchorLength),
         );
         // dfmt on
         AlignmentChain[] filterInput = catCandidates.a2b[];
