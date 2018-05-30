@@ -17,6 +17,7 @@ import djunctor.util.fasta : parseFasta, parseFastaRecord, parsePacBioHeader,
 import djunctor.util.log;
 import djunctor.util.math : absdiff, ceil, floor, mean, median;
 import djunctor.util.range : Comparator;
+import djunctor.util.region : empty, Region, union_;
 import djunctor.util.string : indent;
 import core.exception : AssertError;
 import std.algorithm : all, any, cache, canFind, chunkBy, each, equal, filter, find,
@@ -2449,231 +2450,14 @@ unittest
     assert(pileUp[1][0].id == 3);
 }
 
-// dfmt off
-/**
-    Marks a region of on a contig. The designated interval is right-open.
-*/
-alias Region = Tuple!(
-    size_t, "contigId",
-    size_t, "begin",
-    size_t, "end",
-);
-// dfmt on
-
-/// Returns the size of region.
-size_t size(in Region region) pure nothrow
-{
-    return region.end - region.begin;
-}
-
-/// ditto
-size_t size(in Region[] regions) pure nothrow
-{
-    return regions.map!(region => size(region)).sum;
-}
-
-/// Returns true iff the region is empty.
-bool empty(in Region region) pure nothrow
-{
-    return region.begin >= region.end;
-}
-
-///
-unittest
-{
-    assert(empty(Region(0, 0, 0)));
-    assert(empty(Region(1, 42, 42)));
-    assert(!empty(Region(0, 0, 42)));
-    assert(!empty(Region(1, 42, 1337)));
-}
-
-/**
-    Returns the convex union of both regions.
-
-    Throws: Exception if `contigId`s differ.
-*/
-Region convexUnion(in Region aRegion, in Region bRegion) pure
-{
-    if (aRegion.contigId != bRegion.contigId)
-    {
-        throw new Exception("cannot build union of two regions on different contigs");
-    }
-    else if (empty(aRegion))
-    {
-        return bRegion;
-    }
-    else if (empty(bRegion))
-    {
-        return aRegion;
-    }
-
-    // dfmt off
-    return Region(
-        aRegion.contigId,
-        min(aRegion.begin, bRegion.begin),
-        max(aRegion.end, bRegion.end),
-    );
-    // dfmt on
-}
-
-///
-unittest
-{
-    assert(convexUnion(Region(0, 0, 15), Region(0, 5, 20)) == Region(0, 0, 20));
-    assert(convexUnion(Region(0, 0, 5), Region(0, 15, 20)) == Region(0, 0, 20));
-    assert(convexUnion(Region(0, 0, 20), Region(0, 5, 15)) == Region(0, 0, 20));
-    assert(convexUnion(Region(0, 0, 20), Region(0, 25, 25)) == Region(0, 0, 20));
-    assert(convexUnion(Region(0, 25, 25), Region(0, 0, 20)) == Region(0, 0, 20));
-    assertThrown!Exception(convexUnion(Region(0, 0, 10), Region(1, 0, 10)));
-}
-
-Region[] union_(in Region[] regions) pure
-{
-    auto sortedRegions = regions.dup.sort();
-
-    // dfmt off
-    return sortedRegions
-        .chunks(2)
-        .map!(regionsChunk => {
-            auto regionsPair = regionsChunk.array;
-
-            if (regionsPair.length != 2 || empty(intersection(regionsPair[0], regionsPair[1])))
-            {
-                return regionsPair.filter!(r => !empty(r)).array;
-            }
-            else
-            {
-                return [convexUnion(regionsPair[0], regionsPair[1])];
-            }
-        })
-        .map!"a()"
-        .join;
-    // dfmt on
-}
-/// ditto
-Region[] union_(in Region[] regions ...) pure
-{
-    return union_(regions);
-}
-
-///
-unittest
-{
-    // TODO
-    assert(union_(Region(0, 0, 15), Region(0, 5, 20)) == [Region(0, 0, 20)]);
-    assert(union_(Region(0, 0, 5), Region(0, 15, 20)) == [Region(0, 0, 5), Region(0, 15, 20)]);
-    assert(union_(Region(0, 0, 20), Region(0, 5, 15)) == [Region(0, 0, 20)]);
-    assert(union_(Region(0, 0, 20), Region(0, 25, 25)) == [Region(0, 0, 20)]);
-    assert(union_(Region(0, 25, 25), Region(0, 0, 20)) == [Region(0, 0, 20)]);
-    assert(union_(Region(0, 0, 10), Region(1, 0, 10)) == [Region(0, 0, 10), Region(1, 0, 10)]);
-}
-
-/// Returns the intersection of both regions; empty if `contigId`s differ.
-Region intersection(in Region aRegion, in Region bRegion) pure nothrow
-{
-    if (aRegion.contigId != bRegion.contigId)
-    {
-        return Region(0, 0, 0);
-    }
-
-    // dfmt off
-    return Region(
-        aRegion.contigId,
-        max(aRegion.begin, bRegion.begin),
-        min(aRegion.end, bRegion.end),
-    );
-    // dfmt on
-}
-
-///
-unittest
-{
-    assert(intersection(Region(0, 0, 15), Region(0, 5, 20)) == Region(0, 5, 15));
-    assert(empty(intersection(Region(0, 0, 5), Region(0, 15, 20))));
-    assert(intersection(Region(0, 0, 20), Region(0, 5, 15)) == Region(0, 5, 15));
-    assert(empty(intersection(Region(0, 0, 20), Region(0, 25, 25))));
-    assert(empty(intersection(Region(0, 25, 25), Region(0, 0, 20))));
-    assert(empty(intersection(Region(0, 0, 10), Region(1, 0, 10))));
-}
-
-/// Returns the set difference `aRegion - bRegion`; returns `[aRegion]` if
-/// regions do not intersect.
-Region[] difference(in Region aRegion, in Region bRegion) pure nothrow
-{
-    auto intersection = intersection(aRegion, bRegion);
-
-    if (empty(intersection))
-    {
-        return [aRegion];
-    }
-
-    auto x3 = intersection.end;
-    auto x4 = aRegion.end;
-
-    // dfmt off
-    return only(
-        Region(
-            aRegion.contigId,
-            aRegion.begin,
-            intersection.begin,
-        ),
-        Region(
-            aRegion.contigId,
-            intersection.end,
-            aRegion.end,
-        ),
-    ).filter!(part => !empty(part)).array;
-    // dfmt on
-}
-/// ditto
-Region[] difference(in Region[] aRegions, in Region bRegion) pure
-{
-    return difference(aRegions, [bRegion]);
-}
-/// ditto
-Region[] difference(in Region aRegion, in Region[] bRegions) pure
-{
-    Region[] diffRegion = [aRegion];
-
-    foreach (bRegion; bRegions)
-    {
-        foreach (partialDiffRegion; diffRegion)
-        {
-            diffRegion = union_(diffRegion ~ difference(partialDiffRegion, bRegion));
-        }
-    }
-
-    return diffRegion;
-}
-/// ditto
-Region[] difference(in Region[] aRegions, in Region[] bRegions) pure
-{
-    Region[] diffRegion;
-
-    foreach (aRegion; aRegions)
-    {
-        diffRegion = union_(diffRegion ~ difference(aRegion, bRegions));
-    }
-
-    return diffRegion;
-}
-
-///
-unittest
-{
-    assert(difference(Region(0, 0, 15), Region(0, 5, 20)) == [Region(0, 0, 5)]);
-    assert(difference(Region(0, 0, 5), Region(0, 15, 20)) == [Region(0, 0, 5)]);
-    assert(difference(Region(0, 0, 20), Region(0, 5, 15)) == [Region(0, 0, 5), Region(0, 15, 20)]);
-    assert(difference(Region(0, 0, 20), Region(0, 25, 25)) == [Region(0, 0, 20)]);
-    assert(difference(Region(0, 25, 25), Region(0, 0, 20)) == [Region(0, 25, 25)]);
-    assert(difference(Region(0, 0, 10), Region(1, 0, 10)) == [Region(0, 0, 10)]);
-}
+alias ReferenceMask = Region!(size_t, size_t, "contigId");
+alias ReferenceInterval = ReferenceMask.TaggedInterval;
 
 /// Returns the alignment region of alignmentChain.
-Region getRegion(in AlignmentChain alignmentChain) pure nothrow
+ReferenceMask getRegion(in AlignmentChain alignmentChain) pure nothrow
 {
     // dfmt off
-    return Region(
+    return ReferenceMask(
         alignmentChain.contigA.id,
         alignmentChain.first.contigA.begin,
         alignmentChain.last.contigA.end,
@@ -3089,7 +2873,7 @@ class DJunctor
     size_t numReferenceContigs;
     size_t numReads;
     AlignmentChain[] selfAlignment;
-    Region[] repetitiveRegions;
+    ReferenceMask repetitiveRegions;
     AlignmentContainer!(AlignmentChain[]) readsAlignment;
     const Options options;
     /// Set of read ids not to be considered in further processing.
@@ -3196,15 +2980,15 @@ class DJunctor
             {
                 auto maskName = format!"%s-%s"(options.repeatMask, assessorName);
 
-                writeMask(options.refDb, maskName, repetitiveRegions, options);
+                writeMask(options.refDb, maskName, repetitiveRegions.intervals, options);
             }
 
-            this.repetitiveRegions = union_(this.repetitiveRegions ~ repetitiveRegions);
+            this.repetitiveRegions |= repetitiveRegions;
         }
 
         if (options.repeatMask != null)
         {
-            writeMask(options.refDb, options.repeatMask, this.repetitiveRegions, options);
+            writeMask(options.refDb, options.repeatMask, this.repetitiveRegions.intervals, options);
         }
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.assessRepeatStructure");
@@ -3212,12 +2996,11 @@ class DJunctor
         return this;
     }
 
-    protected Region[] assessRepeatStructureWithSelfAlignments()
+    protected ReferenceMask assessRepeatStructureWithSelfAlignments()
     {
         // dfmt off
         return selfAlignment
             .map!getRegion
-            .array
             .union_;
         // dfmt on
     }
@@ -3922,9 +3705,9 @@ class AmbiguousAlignmentChainsFilter : ReadFilter
 class WeaklyAnchoredAlignmentChainsFilter : AlignmentChainFilter
 {
     size_t minAnchorLength;
-    const(Region[]) repetitiveRegions;
+    const(ReferenceMask) repetitiveRegions;
 
-    this(const(Region[]) repetitiveRegions, size_t minAnchorLength)
+    this(const(ReferenceMask) repetitiveRegions, size_t minAnchorLength)
     {
         this.repetitiveRegions = repetitiveRegions;
         this.minAnchorLength = minAnchorLength;
@@ -3936,8 +3719,8 @@ class WeaklyAnchoredAlignmentChainsFilter : AlignmentChainFilter
         {
             // Mark reads as weakly anchored if they are mostly anchored in a
             // repetitive region
-            auto uniqueAlignmentRegion = difference(alignment.getRegion(), repetitiveRegions);
-            bool isWeaklyAnchored = size(uniqueAlignmentRegion) <= minAnchorLength;
+            auto uniqueAlignmentRegion = getRegion(alignment) - repetitiveRegions;
+            bool isWeaklyAnchored = uniqueAlignmentRegion.size <= minAnchorLength;
 
             return !isWeaklyAnchored;
         }
