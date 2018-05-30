@@ -3680,7 +3680,7 @@ class RedundantAlignmentChainsFilter : ReadFilter
         // Discard read if it has an alignment that – extended with the
         // exceeding read sequence on either end – is fully contained in
         // a single contig.
-        return inputRangeObject(alignmentChains.filter!(ac => ac.isFullyContained));
+        return inputRangeObject(alignmentChains.filter!(ac => ac.isProper && ac.isFullyContained));
     }
 }
 
