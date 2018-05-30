@@ -19,7 +19,7 @@ import std.range.primitives : ElementType, isForwardRange;
 import std.traits : hasMember, isSomeString;
 import vibe.data.json : serializeToJsonString;
 
-/// Possible returns codes of the commandline execution.
+/// Possible returns codes of the command line execution.
 enum ReturnCode
 {
     ok,
@@ -147,7 +147,7 @@ struct Options
     @Help("list of options to pass to `daligner`")
     string[] dalignerOptions = [];
 
-    @Option("dmapper-options")
+    @Option("damapper-options")
     @Help("list of options to pass to `damapper`")
     string[] damapperOptions = [];
 
@@ -199,8 +199,8 @@ struct Options
     // dfmt on
 
     @Option("confidence", "c")
-    @Help("discard pile ups with <ulong>% confidence if too large/small")
-    size_t confidence = 95;
+    @Help("discard pile ups with <double>% confidence if too large/small")
+    double confidence = 95.0;
 
     @Option("input-provide-method", "p")
     @Help("use this method to provide the input files in the working directory")

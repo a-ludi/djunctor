@@ -9,14 +9,15 @@
 */
 module djunctor.util.region;
 
-import std.algorithm : all, cache, chunkBy, cmp, filter, fold, map, max, min, sort, sum;
+import std.algorithm : all, cache, chunkBy, cmp, filter, fold, map, max, min,
+    sort, sum;
 import std.array : appender, array, join;
 import std.exception : assertThrown;
 import std.format : format;
-import std.range : assumeSorted, chunks, ElementType, InputRange, inputRangeObject, isInputRange, only;
+import std.range : assumeSorted, chunks, ElementType, InputRange,
+    inputRangeObject, isInputRange, only;
 import std.traits : isNumeric, Unqual;
 import std.stdio : writeln;
-
 
 /// Returns the type of the property `tag` of `T`.
 template TagType(T)
@@ -73,7 +74,7 @@ static class MismatchingTagsException(Tag) : Exception
     Throws: MismatchingTagsException if tags do not match.
 */
 void enforceMatchingTags(Taggable)(in Taggable taggableA, in Taggable taggableB) pure
-    if (isTaggable!Taggable)
+        if (isTaggable!Taggable)
 {
     alias Tag = TagType!Taggable;
 
@@ -86,7 +87,8 @@ void enforceMatchingTags(Taggable)(in Taggable taggableA, in Taggable taggableB)
 /**
     A Region is a set of tagged intervals where differently tagged intervals are distinct.
 */
-struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
+struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
+{
     static assert(isNumeric!Number, "interval limits must be numeric");
 
     /**
@@ -101,7 +103,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
         Number end;
         static if (!(tagAlias is null) && tagAlias != "tag")
         {
-            mixin("alias "~tagAlias~" = tag;");
+            mixin("alias " ~ tagAlias ~ " = tag;");
         }
 
         invariant
@@ -154,7 +156,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
 
             TaggedInterval convexHullInterval = intervals[0];
 
-            foreach (interval; intervals[1..$])
+            foreach (interval; intervals[1 .. $])
             {
                 enforceMatchingTags(convexHullInterval, interval);
 
@@ -186,8 +188,8 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
             alias R = Region!(int, int);
             alias TI = R.TaggedInterval;
 
-            assert(TI.convexHull(TI(0, 10, 20), TI(0,  0,  5)) == TI(0,  0, 20));
-            assert(TI.convexHull(TI(0, 10, 20), TI(0,  5, 15)) == TI(0,  5, 20));
+            assert(TI.convexHull(TI(0, 10, 20), TI(0, 0, 5)) == TI(0, 0, 20));
+            assert(TI.convexHull(TI(0, 10, 20), TI(0, 5, 15)) == TI(0, 5, 20));
             assert(TI.convexHull(TI(0, 10, 20), TI(0, 12, 18)) == TI(0, 10, 20));
             assert(TI.convexHull(TI(0, 10, 20), TI(0, 10, 20)) == TI(0, 10, 20));
             assert(TI.convexHull(TI(0, 10, 20), TI(0, 15, 25)) == TI(0, 10, 25));
@@ -197,7 +199,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
 
         /// Returns the intersection of both intervals; empty if `tag`s differ.
         TaggedInterval opBinary(string op)(in TaggedInterval other) const pure nothrow
-            if (op == "&")
+                if (op == "&")
         {
             if (this.tag != other.tag)
             {
@@ -222,8 +224,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
         }
 
         /// ditto
-        TaggedInterval opOpAssign(string op)(in TaggedInterval other)
-            if (op == "&")
+        TaggedInterval opOpAssign(string op)(in TaggedInterval other) if (op == "&")
         {
             {
                 auto tmp = this & other;
@@ -241,8 +242,8 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
             alias R = Region!(int, int);
             alias TI = R.TaggedInterval;
 
-            assert((TI(0, 10, 20) & TI(0,  0,  5)).empty);
-            assert((TI(0, 10, 20) & TI(0,  5, 15)) == TI(0, 10, 15));
+            assert((TI(0, 10, 20) & TI(0, 0, 5)).empty);
+            assert((TI(0, 10, 20) & TI(0, 5, 15)) == TI(0, 10, 15));
             assert((TI(0, 10, 20) & TI(0, 12, 18)) == TI(0, 12, 18));
             assert((TI(0, 10, 20) & TI(0, 10, 20)) == TI(0, 10, 20));
             assert((TI(0, 10, 20) & TI(0, 15, 25)) == TI(0, 15, 20));
@@ -251,8 +252,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
         }
 
         /// Returns the difference of both intervals.
-        Region opBinary(string op)(in TaggedInterval other) const
-            if (op == "-")
+        Region opBinary(string op)(in TaggedInterval other) const if (op == "-")
         {
             auto intersection = this & other;
 
@@ -285,8 +285,8 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
             alias R = Region!(int, int);
             alias TI = R.TaggedInterval;
 
-            assert(TI(0, 10, 20) - TI(0,  0,  5) == R([TI(0, 10, 20)]));
-            assert(TI(0, 10, 20) - TI(0,  5, 15) == R([TI(0, 15, 20)]));
+            assert(TI(0, 10, 20) - TI(0, 0, 5) == R([TI(0, 10, 20)]));
+            assert(TI(0, 10, 20) - TI(0, 5, 15) == R([TI(0, 15, 20)]));
             assert(TI(0, 10, 20) - TI(0, 12, 18) == R([TI(0, 10, 12), TI(0, 18, 20)]));
             assert(TI(0, 10, 20) - TI(0, 10, 20) == R([]));
             assert(TI(0, 10, 20) - TI(0, 15, 25) == R([TI(0, 10, 15)]));
@@ -310,13 +310,13 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
             alias R = Region!(int, int);
             alias TI = R.TaggedInterval;
 
-            assert(TI(0, 10, 20)  > TI(0,  0,  5));
-            assert(TI(0, 10, 20)  > TI(0,  5, 15));
-            assert(TI(0, 10, 20)  < TI(0, 12, 18));
-            assert(TI(0, 10, 20)  < TI(0, 15, 25));
+            assert(TI(0, 10, 20) > TI(0, 0, 5));
+            assert(TI(0, 10, 20) > TI(0, 5, 15));
+            assert(TI(0, 10, 20) < TI(0, 12, 18));
+            assert(TI(0, 10, 20) < TI(0, 15, 25));
             assert(TI(0, 10, 20) == TI(0, 10, 20));
-            assert(TI(0, 10, 20)  < TI(0, 25, 30));
-            assert(TI(0, 10, 20)  < TI(1, 25, 30));
+            assert(TI(0, 10, 20) < TI(0, 25, 30));
+            assert(TI(0, 10, 20) < TI(1, 25, 30));
         }
 
         /// Returns true iff the tagged intervals intersect.
@@ -331,8 +331,8 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
             alias R = Region!(int, int);
             alias TI = R.TaggedInterval;
 
-            assert(!TI(0, 10, 20).intersects(TI(0,  0,  5)));
-            assert(TI(0, 10, 20).intersects(TI(0,  5, 15)));
+            assert(!TI(0, 10, 20).intersects(TI(0, 0, 5)));
+            assert(TI(0, 10, 20).intersects(TI(0, 5, 15)));
             assert(TI(0, 10, 20).intersects(TI(0, 12, 18)));
             assert(TI(0, 10, 20).intersects(TI(0, 15, 25)));
             assert(TI(0, 10, 20).intersects(TI(0, 10, 20)));
@@ -352,8 +352,8 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
             alias R = Region!(int, int);
             alias TI = R.TaggedInterval;
 
-            assert(!TI(0, 10, 20).isStrictlyBefore(TI(0,  0,  5)));
-            assert(!TI(0, 10, 20).isStrictlyBefore(TI(0,  5, 15)));
+            assert(!TI(0, 10, 20).isStrictlyBefore(TI(0, 0, 5)));
+            assert(!TI(0, 10, 20).isStrictlyBefore(TI(0, 5, 15)));
             assert(!TI(0, 10, 20).isStrictlyBefore(TI(0, 12, 18)));
             assert(!TI(0, 10, 20).isStrictlyBefore(TI(0, 15, 25)));
             assert(!TI(0, 10, 20).isStrictlyBefore(TI(0, 10, 20)));
@@ -373,8 +373,8 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
             alias R = Region!(int, int);
             alias TI = R.TaggedInterval;
 
-            assert(TI(0, 10, 20).isStrictlyAfter(TI(0,  0,  5)));
-            assert(!TI(0, 10, 20).isStrictlyAfter(TI(0,  5, 15)));
+            assert(TI(0, 10, 20).isStrictlyAfter(TI(0, 0, 5)));
+            assert(!TI(0, 10, 20).isStrictlyAfter(TI(0, 5, 15)));
             assert(!TI(0, 10, 20).isStrictlyAfter(TI(0, 12, 18)));
             assert(!TI(0, 10, 20).isStrictlyAfter(TI(0, 15, 25)));
             assert(!TI(0, 10, 20).isStrictlyAfter(TI(0, 10, 20)));
@@ -412,9 +412,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
         assert((ti1 & ti3).empty);
     }
 
-
     TaggedInterval[] _intervals;
-
 
     this(TaggedInterval[] intervals)
     {
@@ -430,7 +428,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
 
         auto region = R([TI(0, 15, 20), TI(0, 5, 10), TI(0, 0, 10)]);
 
-        // Intervals get implictly normalized.
+        // Intervals get implicitly normalized.
         assert(region.intervals == [TI(0, 0, 10), TI(0, 15, 20)]);
     }
 
@@ -569,7 +567,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
             {
                 if (intervalA.empty)
                 {
-                    return inputRangeObject(cast(TaggedInterval[]) []);
+                    return inputRangeObject(cast(TaggedInterval[])[]);
                 }
                 else
                 {
@@ -596,8 +594,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
     }
 
     /// Computes the union of all tagged intervals.
-    Region opBinary(string op)(in Region other) const
-        if (op == "|")
+    Region opBinary(string op)(in Region other) const if (op == "|")
     {
         return Region(this._intervals.dup ~ other._intervals.dup);
     }
@@ -608,8 +605,8 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
         alias R = Region!(int, int);
         alias TI = R.TaggedInterval;
 
-        assert((R(0, 10, 20) | R(0,  0,  5)) == R([TI(0, 10, 20), TI(0,  0,  5)]));
-        assert((R(0, 10, 20) | R(0,  5, 15)) == R(0,  5, 20));
+        assert((R(0, 10, 20) | R(0, 0, 5)) == R([TI(0, 10, 20), TI(0, 0, 5)]));
+        assert((R(0, 10, 20) | R(0, 5, 15)) == R(0, 5, 20));
         assert((R(0, 10, 20) | R(0, 12, 18)) == R(0, 10, 20));
         assert((R(0, 10, 20) | R(0, 10, 20)) == R(0, 10, 20));
         assert((R(0, 10, 20) | R(0, 15, 25)) == R(0, 10, 25));
@@ -618,8 +615,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
     }
 
     /// Computes the intersection of the two regions.
-    Region opBinary(string op)(in Region other) const
-        if (op == "&")
+    Region opBinary(string op)(in Region other) const if (op == "&")
     {
         if (this.empty || other.empty)
         {
@@ -628,7 +624,6 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
 
         auto intersectionAcc = appender!(TaggedInterval[]);
         intersectionAcc.reserve(this._intervals.length + other._intervals.length);
-
 
         foreach (lhsInterval; this._intervals)
         {
@@ -651,12 +646,12 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
 
                 if (tmpIntersection.empty)
                 {
-                    // Intersection is empty; stop trying rhs intervals.
+                    // Intersection is empty; stop trying rhsIntervals.
                     break;
                 }
             }
 
-            if(!tmpIntersection.empty)
+            if (!tmpIntersection.empty)
             {
                 intersectionAcc ~= tmpIntersection;
             }
@@ -671,8 +666,8 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
         alias R = Region!(int, int);
         alias TI = R.TaggedInterval;
 
-        assert((R(0, 10, 20) & R(0,  0,  5)) == R([]));
-        assert((R(0, 10, 20) & R(0,  5, 15)) == R(0, 10, 15));
+        assert((R(0, 10, 20) & R(0, 0, 5)) == R([]));
+        assert((R(0, 10, 20) & R(0, 5, 15)) == R(0, 10, 15));
         assert((R(0, 10, 20) & R(0, 12, 18)) == R(0, 12, 18));
         assert((R(0, 10, 20) & R(0, 10, 20)) == R(0, 10, 20));
         assert((R(0, 10, 20) & R(0, 15, 25)) == R(0, 15, 20));
@@ -680,8 +675,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
         assert((R(0, 10, 20) & R(1, 25, 30)) == R([]));
     }
 
-    Region opBinary(string op)(in TaggedInterval interval) const
-        if (op == "-")
+    Region opBinary(string op)(in TaggedInterval interval) const if (op == "-")
     {
         if (interval.empty)
         {
@@ -708,8 +702,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
         return Region(differenceAcc.data);
     }
 
-    Region opBinary(string op)(in Region other) const
-        if (op == "-")
+    Region opBinary(string op)(in Region other) const if (op == "-")
     {
         if (other.empty)
         {
@@ -718,7 +711,6 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
 
         auto differenceAcc = appender!(TaggedInterval[]);
         differenceAcc.reserve(this._intervals.length + other._intervals.length);
-
 
         foreach (lhsInterval; this._intervals)
         {
@@ -732,7 +724,8 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
 
             foreach (rhsInterval; intersectingRhs)
             {
-                if (tmpDifference.empty || tmpDifference._intervals[$ - 1].isStrictlyBefore(rhsInterval))
+                if (tmpDifference.empty
+                        || tmpDifference._intervals[$ - 1].isStrictlyBefore(rhsInterval))
                 {
                     // Remaining rhsItervals will not intersect anymore.
                     break;
@@ -741,7 +734,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
                 tmpDifference -= rhsInterval;
             }
 
-            if(!tmpDifference.empty)
+            if (!tmpDifference.empty)
             {
                 differenceAcc ~= tmpDifference._intervals;
             }
@@ -756,8 +749,8 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
         alias R = Region!(int, int);
         alias TI = R.TaggedInterval;
 
-        assert((R(0, 10, 20) - R(0,  0,  5)) == R(0, 10, 20));
-        assert((R(0, 10, 20) - R(0,  5, 15)) == R(0, 15, 20));
+        assert((R(0, 10, 20) - R(0, 0, 5)) == R(0, 10, 20));
+        assert((R(0, 10, 20) - R(0, 5, 15)) == R(0, 15, 20));
         assert((R(0, 10, 20) - R(0, 12, 18)) == R([TI(0, 10, 12), TI(0, 18, 20)]));
         assert((R(0, 10, 20) - R(0, 10, 20)).empty);
         assert((R(0, 10, 20) - R(0, 15, 25)) == R(0, 10, 15));
@@ -766,11 +759,11 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init) {
     }
 
     Region opOpAssign(string op, T)(in T other)
-        if (is(T : Region) || is(T : TaggedInterval))
+            if (is(T : Region) || is(T : TaggedInterval))
     {
         static if (op == "|" || op == "&" || op == "-")
         {
-            mixin("auto tmp = this "~op~" other;");
+            mixin("auto tmp = this " ~ op ~ " other;");
 
             this._intervals = tmp._intervals;
 
@@ -794,7 +787,7 @@ unittest
     See_Also: Region.empty, Region.TaggedInterval.empty
 */
 bool empty(T)(in T thing) pure nothrow
-    if (is(T : Region!Args, Args...) || is(T : Region!Args.TaggedInterval, Args...))
+        if (is(T : Region!Args, Args...) || is(T : Region!Args.TaggedInterval, Args...))
 {
     return thing.empty;
 }
@@ -822,7 +815,7 @@ unittest
     See_Also: Region.opBinary!"|", Region.TaggedInterval.opBinary!"|"
 */
 auto union_(Range)(Range regions)
-    if (isInputRange!Range && is(ElementType!Range : Region!Args, Args...))
+        if (isInputRange!Range && is(ElementType!Range : Region!Args, Args...))
 {
     alias Region = Unqual!(ElementType!Range);
 

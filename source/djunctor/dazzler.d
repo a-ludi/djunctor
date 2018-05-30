@@ -1,5 +1,5 @@
 /**
-    Defines bindinds and utilities to/for the dazzler commands.
+    Defines bindings and utilities to/for the dazzler commands.
 
     Copyright: © 2018 Arne Ludwig <arne.ludwig@posteo.de>
     License: Subject to the terms of the MIT license, as written in the
@@ -71,9 +71,9 @@ enum ProvideMethod
 }
 
 /**
-    Provide dbFile in workdir.
+    Provide dbFile in `workdir`.
 
-    Returns: Workdir location of the dbFile.
+    Returns: Path of the dbFile in `workdir`.
 */
 string provideDamFileInWorkdir(in string dbFile, ProvideMethod provideMethod, in string workdir)
 {
@@ -142,7 +142,6 @@ private auto processGeneratedLasFiles(Options)(in string dbA, in string dbB, in 
             auto lasFileList = __traits(getMember, lasFileLists, order);
             auto dbFiles = typeof(lasFileLists).getOrdered!order(dbA, dbB);
 
-            //lasort(lasFileList);
             // dfmt off
             auto alignmentChains =
                 lasFileList
@@ -225,7 +224,7 @@ private auto readAlignmentList(S)(in S lasDump) if (isSomeString!S)
     alias sameContigsInvolved = (part1, part2) =>
         part1.contigA.id == part2.contigA.id &&
         part1.contigB.id == part2.contigB.id;
-    /// Returns true iff part1 and part2 belong to the same chain.
+    /// Returns true iff `part1` and `part2` belong to the same chain.
     alias isChainContinuation = (part1, part2) =>
         (
             part1.chainPartType == ChainPartType.start &&
@@ -1155,7 +1154,7 @@ unittest
 }
 
 /**
-    Self-dalign dbFile and build consenus using daccord.
+    Self-dalign dbFile and build consensus using daccord.
 
     Returns: list of consensus DBs.
 */

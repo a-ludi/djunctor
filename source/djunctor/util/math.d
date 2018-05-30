@@ -13,7 +13,7 @@ import std.conv : to;
 import std.range : ElementType, isForwardRange, walkLength;
 import std.traits : isIntegral, isNumeric;
 
-/// Caluclate the mean of range.
+/// Calculate the mean of range.
 ElementType!Range mean(Range)(Range values) if (isForwardRange!Range)
 {
     auto sum = values.sum;
@@ -34,7 +34,7 @@ unittest
     }
 }
 
-/// Caluclate the median of range.
+/// Calculate the median of range.
 ElementType!Range median(Range)(Range values) if (__traits(compiles, sort(values)))
 {
     assert(values.length > 0, "median is undefined for empty set");
@@ -82,7 +82,7 @@ unittest
 
     Returns: x rounded upward according to base.
 */
-Integer ceil(Integer)(in Integer x, in Integer base) pure nothrow 
+Integer ceil(Integer)(in Integer x, in Integer base) pure nothrow
         if (isIntegral!Integer)
 {
     // dfmt off
@@ -106,7 +106,7 @@ unittest
 
     Returns: x rounded downward according to base.
 */
-Integer floor(Integer)(in Integer x, in Integer base) pure nothrow 
+Integer floor(Integer)(in Integer x, in Integer base) pure nothrow
         if (isIntegral!Integer)
 {
     return (x / base) * base;

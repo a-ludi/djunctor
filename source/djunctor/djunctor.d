@@ -20,18 +20,18 @@ import djunctor.util.range : Comparator;
 import djunctor.util.region : empty, Region, union_;
 import djunctor.util.string : indent;
 import core.exception : AssertError;
-import std.algorithm : all, any, cache, canFind, chunkBy, each, equal, filter, find,
-    fold, group, isSorted, joiner, map, max, maxElement, min, multiwayUnion, setDifference, sort, sum, swap,
-    SwapStrategy, uniq;
+import std.algorithm : all, any, cache, canFind, chunkBy, each, equal, filter,
+    find, fold, group, isSorted, joiner, map, max, maxElement, min,
+    multiwayUnion, setDifference, sort, sum, swap, SwapStrategy, uniq;
 import std.array : appender, Appender, array, join;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
 import std.exception : assertNotThrown, assertThrown;
 import std.format : format, formattedWrite;
 import std.math : abs, floor, sgn;
-import std.range : assumeSorted, chain, chunks, ElementType, enumerate, ForwardRange, InputRange, inputRangeObject, iota,
-    isForwardRange, only, refRange, retro, slide, SortedRange, tail, take,
-    walkLength, zip;
+import std.range : assumeSorted, chain, chunks, ElementType, enumerate,
+    ForwardRange, InputRange, inputRangeObject, iota, isForwardRange, only,
+    refRange, retro, slide, SortedRange, tail, take, walkLength, zip;
 import std.stdio : File, write, writeln;
 import std.string : outdent;
 import std.meta : AliasSeq;
@@ -720,7 +720,7 @@ unittest
 
     **Note:** the order is relative to the orientation of the opposite contig.
 */
-bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
+bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure 
         if (contig == "contigA" || contig == "contigB")
 {
     assert(__traits(getMember, ac1, contig) == __traits(getMember, ac2, contig),
@@ -2942,6 +2942,7 @@ class DJunctor
         ));
         // dfmt on
         assessRepeatStructure();
+        // dfmt off
         readsAlignment = getMappings(options.refDb, options.readsDb, const(ReadsToRefAlignmentOptions)(
             options.damapperOptions ~ [
                 format!"-e%f"((1 - options.referenceErrorRate) * (1 - options.readsErrorRate)),
@@ -2949,6 +2950,7 @@ class DJunctor
             options.ladumpOptions[].array,
             options.workdir,
         ));
+        // dfmt on
         annotateOrder(readsAlignment, AlignmentChain.Order.ref2read);
         catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup, []);
         logJsonDiagnostic("state", "exit", "function", "djunctor.init");
@@ -2960,9 +2962,11 @@ class DJunctor
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.assessRepeatStructure");
 
+        // dfmt off
         auto assessors = tuple(
             () => assessRepeatStructureWithSelfAlignments(),
         );
+        // dfmt on
 
         foreach (assessor; assessors)
         {
@@ -2988,7 +2992,8 @@ class DJunctor
 
         if (options.repeatMask != null)
         {
-            writeMask(options.refDb, options.repeatMask, this.repetitiveRegions.intervals, options);
+            writeMask(options.refDb, options.repeatMask,
+                    this.repetitiveRegions.intervals, options);
         }
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.assessRepeatStructure");
@@ -3054,7 +3059,8 @@ class DJunctor
             auto filterOutput = filter(filterInput[]);
 
             assert(isSorted(filterOutput));
-            if (shouldLog(LogLevel.diagnostic)) {
+            if (shouldLog(LogLevel.diagnostic))
+            {
                 // dfmt off
                 auto discardedAlignmentChains = setDifference(
                     filterInput,
@@ -3317,6 +3323,7 @@ class DJunctor
             string workdir;
         }
 
+        // dfmt off
         string consensusDb = getConsensus(croppedDbResult.dbFile, croppedDbResult.readId, const(ConsensusAlignmentOptions)(
             options.daccordOptions,
             options.dalignerOptions ~ [
@@ -3326,6 +3333,7 @@ class DJunctor
             options.dbsplitOptions,
             options.workdir,
         ));
+        // dfmt on
 
         debug logJsonDebug("consensusDb", consensusDb);
 
@@ -3400,7 +3408,8 @@ class DJunctor
 
         if (insertionInfo.isExtension)
         {
-            auto effectiveExtensionLength = getEffectiveExtensionLength(insertionInfo, endContigLength);
+            auto effectiveExtensionLength = getEffectiveExtensionLength(insertionInfo,
+                    endContigLength);
 
             if (effectiveExtensionLength < minExtensionLength)
             {
@@ -3506,11 +3515,18 @@ class DJunctor
         return parseFastaRecord(getFastaEntries(dbRef.dbFile, [dbRef.contigId + 0], options).front);
     }
 
-    protected size_t getEffectiveExtensionLength(in CoordinateTransform.Insertion insertionInfo, in size_t endContigLength) const
+    // dfmt off
+    protected size_t getEffectiveExtensionLength(
+        in CoordinateTransform.Insertion insertionInfo,
+        in size_t endContigLength
+    ) const
+    // dfmt on
     {
+        // dfmt off
         return insertionInfo.isFrontExtension
             ? insertionInfo.length - insertionInfo.end.idx
             : insertionInfo.length - (endContigLength - insertionInfo.begin.idx);
+        // dfmt on
     }
 
     protected DJunctor finish()
@@ -3632,12 +3648,10 @@ class DJunctor
     }
 }
 
-
 interface AlignmentChainFilter
 {
     AlignmentChain[] opCall(AlignmentChain[] alignmentChains);
 }
-
 
 abstract class ReadFilter : AlignmentChainFilter
 {
@@ -3660,7 +3674,6 @@ abstract class ReadFilter : AlignmentChainFilter
     InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains);
 }
 
-
 class RedundantAlignmentChainsFilter : ReadFilter
 {
     override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
@@ -3672,13 +3685,15 @@ class RedundantAlignmentChainsFilter : ReadFilter
     }
 }
 
-
 class AmbiguousAlignmentChainsFilter : ReadFilter
 {
     override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
     {
-        alias AlignmentsChunk = typeof(alignmentChains.filter!"a.isProper".chunkBy!haveEqualIds.front);
-        bool isAmgiguouslyAlignedRead(AlignmentsChunk alignmentsChunk) {
+        alias AlignmentsChunk = typeof(
+                alignmentChains.filter!"a.isProper".chunkBy!haveEqualIds.front);
+
+        bool isAmgiguouslyAlignedRead(AlignmentsChunk alignmentsChunk)
+        {
             auto readAlignments = alignmentsChunk.array;
             readAlignments.sort!"a.score > b.score";
 
@@ -3692,15 +3707,16 @@ class AmbiguousAlignmentChainsFilter : ReadFilter
             // dfmt on
         }
 
+        // dfmt off
         return alignmentChains
             .filter!"a.isProper"
             .chunkBy!haveEqualIds
             .filter!isAmgiguouslyAlignedRead
             .joiner
             .inputRangeObject;
+        // dfmt on
     }
 }
-
 
 class WeaklyAnchoredAlignmentChainsFilter : AlignmentChainFilter
 {
@@ -3725,13 +3741,13 @@ class WeaklyAnchoredAlignmentChainsFilter : AlignmentChainFilter
             return !isWeaklyAnchored;
         }
 
+        // dfmt off
         return alignmentChains
             .filter!isStronglyAnchored
             .array;
         // dfmt on
     }
 }
-
 
 /**
     This realizes a transform which translates coordinates before insertions
