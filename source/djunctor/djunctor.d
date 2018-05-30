@@ -3176,26 +3176,50 @@ class DJunctor
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.assessRepeatStructure");
 
-        // dfmt off
-        repetitiveRegions = selfAlignment
-            .map!getRegion
-            .array
-            .union_;
-
-        logJsonDebug(
-            "numSelfAlignments", selfAlignment.length,
-            "repetitiveRegions", repetitiveRegions.toJson,
+        auto assessors = tuple(
+            () => assessRepeatStructureWithSelfAlignments(),
         );
-        // dfmt on
+
+        foreach (assessor; assessors)
+        {
+            immutable assessorName = typeof(assessor).stringof;
+            auto repetitiveRegions = assessor();
+
+            // dfmt off
+            logJsonDebug(
+                "assessor", assessorName,
+                "repetitiveRegions", repetitiveRegions.toJson,
+            );
+            // dfmt on
+
+            if (shouldLog(LogLevel.diagnostic) && options.repeatMask != null)
+            {
+                auto maskName = format!"%s-%s"(options.repeatMask, assessorName);
+
+                writeMask(options.refDb, maskName, repetitiveRegions, options);
+            }
+
+            this.repetitiveRegions = union_(this.repetitiveRegions ~ repetitiveRegions);
+        }
 
         if (options.repeatMask != null)
         {
-            writeMask(options.refDb, options.repeatMask, repetitiveRegions, options);
+            writeMask(options.refDb, options.repeatMask, this.repetitiveRegions, options);
         }
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.assessRepeatStructure");
 
         return this;
+    }
+
+    protected Region[] assessRepeatStructureWithSelfAlignments()
+    {
+        // dfmt off
+        return selfAlignment
+            .map!getRegion
+            .array
+            .union_;
+        // dfmt on
     }
 
     protected DJunctor mainLoop()
