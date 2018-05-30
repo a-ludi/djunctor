@@ -3081,8 +3081,7 @@ class DJunctor
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.filterReads");
 
-        //return this;
-        assert(0, "quit");
+        return this;
     }
 
     protected DJunctor transferA2BCandidatesToB2A()
