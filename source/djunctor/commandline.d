@@ -149,7 +149,9 @@ struct Options
 
     @Option("damapper-options")
     @Help("list of options to pass to `damapper`")
-    string[] damapperOptions = [];
+    string[] damapperOptions = [
+        "-n.7", // produce the 30 % best chains
+    ];
 
     @Option("daccord-options")
     @Help("list of options to pass to `daccord`")
@@ -174,7 +176,6 @@ struct Options
         "-c", // output alignment coordinates
         "-d", // output number of differences for each local alignment
         "-l", // output lengths of the contigs
-        "-o", // output proper overlaps only
     ];
     // dfmt on
 
@@ -184,7 +185,6 @@ struct Options
     string[] ladumpTraceOptions = [
         "-c", // output alignment coordinates
         "-t", // output number of differences for each local alignment
-        "-o", // output proper overlaps only
     ];
     // dfmt on
 
