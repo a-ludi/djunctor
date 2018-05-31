@@ -555,42 +555,79 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
 
     protected void normalize()
     {
-        alias Chunk = typeof(_intervals.sort.chunks(2).front);
-
-        InputRange!TaggedInterval mergeIntervals(Chunk chunk)
+        if (_intervals.length == 0)
         {
-            TaggedInterval[] intervalPair = chunk.array;
-            auto intervalA = intervalPair[0];
-            auto intervalB = intervalPair[$ - 1];
+            return;
+        }
 
-            if (intervalA == intervalB)
+        _intervals.sort();
+        TaggedInterval accInterval = _intervals[0];
+        size_t insertIdx = 0;
+
+        foreach (i, intervalB; _intervals[1 .. $])
+        {
+            if (intervalB.empty)
             {
-                if (intervalA.empty)
-                {
-                    return inputRangeObject(cast(TaggedInterval[])[]);
-                }
-                else
-                {
-                    return inputRangeObject(only(intervalA));
-                }
+                continue;
             }
-            else if ((intervalA & intervalB).empty)
+            else if (accInterval.intersects(intervalB))
             {
-                return inputRangeObject(intervalPair.filter!"!a.empty");
+                // If two intervals intersect their union is the same as the convex hull of both.
+                accInterval = TaggedInterval.convexHull(accInterval, intervalB);
             }
             else
             {
-                return inputRangeObject(only(TaggedInterval.convexHull(intervalA, intervalB)));
+                if (!accInterval.empty)
+                {
+                    _intervals[insertIdx++] = accInterval;
+                }
+                accInterval = intervalB;
             }
         }
 
-        // dfmt off
-        _intervals = _intervals
-            .sort
-            .chunks(2)
-            .map!mergeIntervals
-            .join;
-        // dfmt on
+        if (!accInterval.empty)
+        {
+            _intervals[insertIdx++] = accInterval;
+        }
+        _intervals.length = insertIdx;
+    }
+
+    unittest
+    {
+        alias R = Region!(int, int);
+        alias TI = R.TaggedInterval;
+
+        auto region = R([
+            TI(3, 8349, 8600),
+            TI(3, 8349, 8349),
+            TI(3, 8349, 8850),
+            TI(3, 8349, 9100),
+            TI(3, 8349, 8349),
+            TI(3, 8349, 9350),
+            TI(3, 8349, 9600),
+            TI(3, 8349, 8349),
+            TI(3, 8349, 9900),
+            TI(3, 8349, 10150),
+            TI(3, 8349, 8349),
+            TI(3, 8349, 10400),
+            TI(3, 8349, 10650),
+            TI(3, 8349, 10800),
+            TI(3, 8499, 10800),
+            TI(3, 8749, 10800),
+            TI(3, 8749, 8749),
+            TI(3, 8999, 10800),
+            TI(3, 9249, 10800),
+            TI(3, 9549, 10800),
+            TI(3, 9799, 10800),
+            TI(3, 10049, 10800),
+            TI(3, 10299, 10800),
+            TI(3, 10549, 10800),
+        ]);
+        auto normalizedRegion = R([
+            TI(3, 8349, 10800),
+        ]);
+
+        assert(region == normalizedRegion);
     }
 
     /// Computes the union of all tagged intervals.
@@ -773,6 +810,50 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
         {
             static assert(0, "unsupported operator: " ~ op);
         }
+    }
+
+    unittest
+    {
+        alias R = Region!(int, int);
+        alias TI = R.TaggedInterval;
+
+        R accRegion;
+        auto inputRegion1 = R([
+            TI(3, 8349, 8600),
+            TI(3, 8349, 8850),
+            TI(3, 8349, 9100),
+            TI(3, 8349, 9350),
+            TI(3, 8349, 9600),
+            TI(3, 8349, 9900),
+            TI(3, 8349, 10150),
+            TI(3, 8349, 10400),
+            TI(3, 8349, 10650),
+            TI(3, 8349, 10800),
+            TI(3, 8499, 10800),
+            TI(3, 8749, 10800),
+            TI(3, 8999, 10800),
+            TI(3, 9249, 10800),
+            TI(3, 9549, 10800),
+            TI(3, 9799, 10800),
+            TI(3, 10049, 10800),
+            TI(3, 10299, 10800),
+            TI(3, 10549, 10800),
+        ]);
+        auto inputRegion2 = R([
+            TI(3, 2297, 11371),
+        ]);
+        auto expectedResult = R([
+            TI(3, 2297, 11371),
+        ]);
+
+        accRegion |= inputRegion1;
+
+        assert(accRegion == inputRegion1);
+
+        accRegion |= inputRegion2;
+
+        assert(accRegion == expectedResult);
+        assert((inputRegion1 | inputRegion2) == expectedResult);
     }
 }
 
