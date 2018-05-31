@@ -238,8 +238,8 @@ struct AlignmentChain
         )
         &&
         (
-            first.contigA.end == contigA.length ||
-            first.contigB.end == contigB.length
+            last.contigA.end == contigA.length ||
+            last.contigB.end == contigB.length
         );
         // dfmt on
     }
