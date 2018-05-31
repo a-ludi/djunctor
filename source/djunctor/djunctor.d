@@ -3007,6 +3007,7 @@ class DJunctor
         // dfmt off
         auto assessmentStages = tuple(
             assessmentStage(new SelfAlignmentInducedRepeatAssessor(), selfAlignment),
+            assessmentStage(new LocalReadAlignmentInducedRepeatAssessor(), readsAlignment.a2b),
         );
         // dfmt on
 
@@ -3032,6 +3033,13 @@ class DJunctor
             this.repetitiveRegions |= repetitiveRegions;
         }
 
+        // dfmt off
+        logJsonDebug(
+            "assessor", "finalResult",
+            "repetitiveRegions", this.repetitiveRegions.intervals.toJson,
+        );
+        // dfmt on
+
         if (options.repeatMask != null)
         {
             writeMask(options.refDb, options.repeatMask,
@@ -3040,8 +3048,7 @@ class DJunctor
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.assessRepeatStructure");
 
-        //return this;
-        assert(0, "quit");
+        return this;
     }
 
     protected DJunctor filterAlignments()
@@ -3761,8 +3768,25 @@ class SelfAlignmentInducedRepeatAssessor : RepeatAssessor
 {
     ReferenceMask opCall(const(AlignmentChain[]) selfAlignments)
     {
+        assert(selfAlignments.all!(ac => ac.order == AlignmentChain.Order.none));
+
         // dfmt off
         return selfAlignments
+            .map!getRegion
+            .union_;
+        // dfmt on
+    }
+}
+
+class LocalReadAlignmentInducedRepeatAssessor : RepeatAssessor
+{
+    ReferenceMask opCall(const(AlignmentChain[]) readsAlignments)
+    {
+        assert(readsAlignments.all!(ac => ac.order == AlignmentChain.Order.ref2read));
+
+        // dfmt off
+        return readsAlignments
+            .filter!"!a.isProper"
             .map!getRegion
             .union_;
         // dfmt on
