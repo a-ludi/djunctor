@@ -125,7 +125,7 @@ struct Options
 
     @Option("reference-error")
     @Help("estimated error rate in reference")
-    double referenceErrorRate = .05;
+    double referenceErrorRate = .01;
 
     @Option("min-anchor-length")
     @Help("alignment need to have at least this length of unique anchoring sequence")
