@@ -1349,6 +1349,19 @@ void writeMask(Region, Options)(in string dbFile, in string maskName,
     );
     // dfmt on
 
+    if (regions.length == 0)
+    {
+        // dfmt off
+        logJsonDiagnostic(
+            "notice", "skipping empty mask",
+            "dbFile", dbFile,
+            "maskName", maskName,
+        );
+        // dfmt on
+
+        return;
+    }
+
     auto dbName = dbFile.baseName.stripExtension;
     auto maskHeader = File(format!"%s/.%s.%s.anno"(options.workdir, dbName, maskName), "wb");
     auto maskData = File(format!"%s/.%s.%s.data"(options.workdir, dbName, maskName), "wb");
@@ -1375,7 +1388,7 @@ void writeMask(Region, Options)(in string dbFile, in string maskName,
     {
         assert(maskRegion.contigId >= currentContig);
 
-        if (maskRegion.contigId > currentContig)
+        while (maskRegion.contigId > currentContig)
         {
             maskHeader.rawWrite([dataPointer]);
             ++currentContig;
