@@ -31,7 +31,7 @@ import std.stdio : File, writeln;
 import std.string : lineSplitter, outdent;
 import std.traits : hasMember, isIntegral, isSomeChar, isSomeString, Unqual;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
-import vibe.data.json : Json, serializeToJson;
+import vibe.data.json : Json, toJson = serializeToJson;
 
 /// File suffixes of hidden DB files.
 private immutable hiddenDbFileSuffixes = [".bps", ".hdr", ".idx"];
@@ -792,8 +792,8 @@ private size_t attachTracePointDumps(AlignmentChain*[] alignmentChains,
 
         // dfmt off
         debug logJsonDebug(
-            "acFingerprint", acFingerprint.serializeToJson,
-            "tpdFingerprint", tpdFingerprint.serializeToJson,
+            "acFingerprint", acFingerprint.toJson,
+            "tpdFingerprint", tpdFingerprint.toJson,
         );
         // dfmt on
 
@@ -1026,7 +1026,7 @@ private auto readDbDump(S, Range)(S dbDump, Range recordNumbers, in size_t lineL
         // dfmt off
         debug logJsonDebug(
             "isSkipping", sortedRecordNumbers.length > 0 && !sortedRecordNumbers.contains(recordNumber),
-            "wantedRecordNumbers", recordNumbers.serializeToJson,
+            "wantedRecordNumbers", recordNumbers.toJson,
             "recordNumber", recordNumber,
             "headerLine", headerLine,
         );
