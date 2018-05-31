@@ -720,7 +720,7 @@ unittest
 
     **Note:** the order is relative to the orientation of the opposite contig.
 */
-bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure 
+bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
         if (contig == "contigA" || contig == "contigB")
 {
     assert(__traits(getMember, ac1, contig) == __traits(getMember, ac2, contig),
@@ -2940,9 +2940,6 @@ class DJunctor
             options.ladumpOptions[].filter!"a != \"-o\"".array,
             options.workdir,
         ));
-        // dfmt on
-        assessRepeatStructure();
-        // dfmt off
         readsAlignment = getMappings(options.refDb, options.readsDb, const(ReadsToRefAlignmentOptions)(
             options.damapperOptions ~ [
                 format!"-e%f"((1 - options.referenceErrorRate) * (1 - options.readsErrorRate)),
@@ -2958,63 +2955,12 @@ class DJunctor
         return this;
     }
 
-    protected DJunctor assessRepeatStructure()
-    {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.assessRepeatStructure");
-
-        // dfmt off
-        auto assessors = tuple(
-            () => assessRepeatStructureWithSelfAlignments(),
-        );
-        // dfmt on
-
-        foreach (assessor; assessors)
-        {
-            immutable assessorName = typeof(assessor).stringof;
-            auto repetitiveRegions = assessor();
-
-            // dfmt off
-            logJsonDebug(
-                "assessor", assessorName,
-                "repetitiveRegions", repetitiveRegions.toJson,
-            );
-            // dfmt on
-
-            if (shouldLog(LogLevel.diagnostic) && options.repeatMask != null)
-            {
-                auto maskName = format!"%s-%s"(options.repeatMask, assessorName);
-
-                writeMask(options.refDb, maskName, repetitiveRegions.intervals, options);
-            }
-
-            this.repetitiveRegions |= repetitiveRegions;
-        }
-
-        if (options.repeatMask != null)
-        {
-            writeMask(options.refDb, options.repeatMask,
-                    this.repetitiveRegions.intervals, options);
-        }
-
-        logJsonDiagnostic("state", "exit", "function", "djunctor.assessRepeatStructure");
-
-        return this;
-    }
-
-    protected ReferenceMask assessRepeatStructureWithSelfAlignments()
-    {
-        // dfmt off
-        return selfAlignment
-            .map!getRegion
-            .union_;
-        // dfmt on
-    }
-
     protected DJunctor mainLoop()
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.mainLoop");
         do
         {
+            assessRepeatStructure();
             filterAlignments();
             transferA2BCandidatesToB2A();
             findHits();
@@ -3040,6 +2986,62 @@ class DJunctor
         logJsonDiagnostic("state", "exit", "function", "djunctor.mainLoop");
 
         return this;
+    }
+
+    protected DJunctor assessRepeatStructure()
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.assessRepeatStructure");
+
+        // dfmt off
+        alias AssessmentStage(Assessor : RepeatAssessor) = Tuple!(
+            Assessor, "assessor",
+            const(AlignmentChain[]), "input",
+        );
+        // dfmt on
+
+        AssessmentStage!Assessor assessmentStage(Assessor : RepeatAssessor)(Assessor assessor, const(AlignmentChain[]) input)
+        {
+            return typeof(return)(assessor, input);
+        }
+
+        // dfmt off
+        auto assessmentStages = tuple(
+            assessmentStage(new SelfAlignmentInducedRepeatAssessor(), selfAlignment),
+        );
+        // dfmt on
+
+        foreach (stage; assessmentStages)
+        {
+            immutable assessorName = typeof(stage.assessor).stringof;
+            auto repetitiveRegions = stage.assessor(stage.input);
+
+            // dfmt off
+            logJsonDebug(
+                "assessor", assessorName,
+                "repetitiveRegions", repetitiveRegions.intervals.toJson,
+            );
+            // dfmt on
+
+            if (shouldLog(LogLevel.diagnostic) && options.repeatMask != null)
+            {
+                auto maskName = format!"%s-%s"(options.repeatMask, assessorName);
+
+                writeMask(options.refDb, maskName, repetitiveRegions.intervals, options);
+            }
+
+            this.repetitiveRegions |= repetitiveRegions;
+        }
+
+        if (options.repeatMask != null)
+        {
+            writeMask(options.refDb, options.repeatMask,
+                    this.repetitiveRegions.intervals, options);
+        }
+
+        logJsonDiagnostic("state", "exit", "function", "djunctor.assessRepeatStructure");
+
+        //return this;
+        assert(0, "quit");
     }
 
     protected DJunctor filterAlignments()
@@ -3744,6 +3746,25 @@ class WeaklyAnchoredAlignmentChainsFilter : AlignmentChainFilter
         return alignmentChains
             .filter!isStronglyAnchored
             .array;
+        // dfmt on
+    }
+}
+
+interface MaskAssessor(T)
+{
+    ReferenceMask opCall(T input);
+}
+
+alias RepeatAssessor = MaskAssessor!(const(AlignmentChain[]));
+
+class SelfAlignmentInducedRepeatAssessor : RepeatAssessor
+{
+    ReferenceMask opCall(const(AlignmentChain[]) selfAlignments)
+    {
+        // dfmt off
+        return selfAlignments
+            .map!getRegion
+            .union_;
         // dfmt on
     }
 }
