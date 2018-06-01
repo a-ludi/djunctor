@@ -9,7 +9,7 @@
 module djunctor.dazzler;
 
 import djunctor.commandline : hasOption, isOptionsList;
-import djunctor.djunctor : AlignmentChain, AlignmentContainer;
+import djunctor.alignments : AlignmentChain, AlignmentContainer;
 import djunctor.util.fasta : parseFastaRecord;
 import djunctor.util.log;
 import djunctor.util.range : arrayChunks;
