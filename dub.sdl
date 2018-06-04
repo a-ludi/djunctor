@@ -5,4 +5,5 @@ copyright "Copyright © 2018, Arne Ludwig <arne.ludwig@posteo.de>"
 license "MIT"
 
 dependency "darg" version="~>0.0.4"
+dependency "dstats" version="~>1.0.5"
 dependency "vibe-d:data" version="~>0.8.4-alpha.1"

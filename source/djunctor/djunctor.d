@@ -23,6 +23,7 @@ import djunctor.util.math : absdiff, ceil, floor, mean, median;
 import djunctor.util.range : Comparator;
 import djunctor.util.region : empty, Region, union_;
 import djunctor.util.string : indent;
+import dstats.distrib : invPoissonCDF;
 import core.exception : AssertError;
 import std.algorithm : all, any, cache, canFind, chunkBy, each, equal, filter,
     find, fold, group, isSorted, joiner, map, max, maxElement, min,
@@ -585,45 +586,83 @@ class DJunctor
         return this;
     }
 
+    protected double alignmentCoverage(in AlignmentChain[] alignments) const
+    {
+        alias AlignmentsPerContig = typeof(alignments.chunkBy!"a.contigA.id == b.contigA.id".front);
+        static double coveredBases(AlignmentsPerContig alignmentsPerContig)
+        {
+            return alignmentsPerContig.map!(ac => ac.coveredBases!"contigA").sum;
+        }
+
+        auto totalContigLength = alignments
+            .chunkBy!"a.contigA.id == b.contigA.id"
+            .map!"a.front.contigA.length"
+            .sum;
+        auto totalCoveredBases = alignments
+            .chunkBy!"a.contigA.id == b.contigA.id"
+            .map!coveredBases
+            .sum;
+
+        return totalCoveredBases.to!double / totalContigLength.to!double;
+    }
+
     protected DJunctor assessRepeatStructure()
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.assessRepeatStructure");
 
+
+        auto selfCoverage = alignmentCoverage(selfAlignment);
+        auto selfCoverageConfidenceInterval = tuple(
+            invPoissonCDF(1 - options.confidence, selfCoverage),
+            invPoissonCDF(options.confidence, selfCoverage),
+        );
+        auto readsCoverage = alignmentCoverage(readsAlignment.a2b);
+        auto readsCoverageConfidenceInterval = tuple(
+            invPoissonCDF(1 - options.confidence, readsCoverage),
+            invPoissonCDF(options.confidence, readsCoverage),
+        );
+        logJsonDebug(
+            "selfCoverage", selfCoverage,
+            "selfCoverageConfidenceInterval", selfCoverageConfidenceInterval.toJson,
+            "readsCoverage", readsCoverage,
+            "readsCoverageConfidenceInterval", readsCoverageConfidenceInterval.toJson,
+        );
+
         // dfmt off
         alias AssessmentStage(Assessor : RepeatAssessor) = Tuple!(
+            string, "name",
             Assessor, "assessor",
             const(AlignmentChain[]), "input",
         );
         // dfmt on
 
-        AssessmentStage!Assessor assessmentStage(Assessor : RepeatAssessor)(Assessor assessor,
+        AssessmentStage!Assessor assessmentStage(Assessor : RepeatAssessor)(string name, Assessor assessor,
                 const(AlignmentChain[]) input)
         {
-            return typeof(return)(assessor, input);
+            return typeof(return)(name, assessor, input);
         }
 
         // dfmt off
         auto assessmentStages = tuple(
-            assessmentStage(new SelfAlignmentInducedRepeatAssessor(), selfAlignment),
-            assessmentStage(new LocalReadAlignmentInducedRepeatAssessor(), readsAlignment.a2b),
+            assessmentStage("self-alignment", new BadAlignmentCoverageAssessor(selfCoverageConfidenceInterval.expand), selfAlignment),
+            assessmentStage("reads-alignment", new BadAlignmentCoverageAssessor(readsCoverageConfidenceInterval.expand), readsAlignment.a2b),
         );
         // dfmt on
 
         foreach (stage; assessmentStages)
         {
-            immutable assessorName = typeof(stage.assessor).stringof;
             auto repetitiveRegions = stage.assessor(stage.input);
 
             // dfmt off
             logJsonDebug(
-                "assessor", assessorName,
+                "assessor", stage.name,
                 "repetitiveRegions", repetitiveRegions.intervals.toJson,
             );
             // dfmt on
 
             if (shouldLog(LogLevel.diagnostic) && options.repeatMask != null)
             {
-                auto maskName = format!"%s-%s"(options.repeatMask, assessorName);
+                auto maskName = format!"%s-%s"(options.repeatMask, stage.name);
 
                 writeMask(options.refDb, maskName, repetitiveRegions.intervals, options);
             }
@@ -1362,40 +1401,11 @@ interface MaskAssessor(T)
 
 alias RepeatAssessor = MaskAssessor!(const(AlignmentChain[]));
 
-class SelfAlignmentInducedRepeatAssessor : RepeatAssessor
-{
-    ReferenceMask opCall(const(AlignmentChain[]) selfAlignments)
-    {
-        assert(selfAlignments.all!(ac => ac.order == AlignmentChain.Order.none));
-
-        // dfmt off
-        return selfAlignments
-            .map!getRegion
-            .union_;
-        // dfmt on
-    }
-}
-
-class LocalReadAlignmentInducedRepeatAssessor : RepeatAssessor
-{
-    ReferenceMask opCall(const(AlignmentChain[]) readsAlignments)
-    {
-        assert(readsAlignments.all!(ac => ac.order == AlignmentChain.Order.ref2read));
-
-        // dfmt off
-        return readsAlignments
-            .filter!"!a.isProper"
-            .map!getRegion
-            .union_;
-        // dfmt on
-    }
-}
-
 /**
     Mask reference regions where the alignment coverage is not within set limits. This helps to
     identify repetitive or bad quality regions.
 */
-struct BadAlignmentCoverageAssessor
+class BadAlignmentCoverageAssessor : RepeatAssessor
 {
     double lowerLimit;
     double upperLimit;
@@ -1516,7 +1526,7 @@ struct BadAlignmentCoverageAssessor
     }
 
     /// Apply the assessor to the given set of alignment.
-    ReferenceMask opCall(const(AlignmentChain[]) alignments)
+    override ReferenceMask opCall(const(AlignmentChain[]) alignments)
     {
         if (alignments.length == 0)
         {

@@ -201,8 +201,8 @@ struct Options
     // dfmt on
 
     @Option("confidence", "c")
-    @Help("discard pile ups with <double>% confidence if too large/small")
-    double confidence = 95.0;
+    @Help("mask region were coverage is out of confidence interval with <double> confidence")
+    double confidence = .95;
 
     @Option("input-provide-method", "p")
     @Help("use this method to provide the input files in the working directory")
