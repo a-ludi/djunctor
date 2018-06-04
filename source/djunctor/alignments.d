@@ -317,6 +317,11 @@ struct AlignmentChain
         return last.contigA.end - first.contigA.begin;
     }
 
+    @property size_t coveredBases(string contig)() const pure
+    {
+        return localAlignments.map!("a." ~ contig ~ ".end - a." ~ contig ~ ".begin").sum;
+    }
+
     unittest
     {
         with (Complement) with (LocalAlignment)
