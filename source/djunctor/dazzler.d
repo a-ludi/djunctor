@@ -1400,7 +1400,11 @@ void writeMask(Region, Options)(in string dbFile, in string maskName,
             dataPointer += typeof(maskRegion.begin).sizeof + typeof(maskRegion.end).sizeof;
         }
     }
-    maskHeader.rawWrite([dataPointer]);
+
+    foreach (emptyContig; currentContig .. numReads + 1)
+    {
+        maskHeader.rawWrite([dataPointer]);
+    }
 }
 
 private
