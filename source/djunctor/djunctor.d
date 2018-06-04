@@ -8,7 +8,10 @@
 */
 module djunctor.djunctor;
 
-import djunctor.alignments : AlignmentChain, AlignmentContainer, annotateOrder, buildPileUps, getAlignmentChainRefs, getComplementaryOrder, getInsertionSize, getType, haveEqualIds, isBackExtension, isFrontExtension, isGap, isValid, PileUp, ReadAlignment, ReadAlignmentType;
+import djunctor.alignments : AlignmentChain, AlignmentContainer, annotateOrder,
+    buildPileUps, getAlignmentChainRefs, getComplementaryOrder,
+    getInsertionSize, getType, haveEqualIds, isBackExtension, isFrontExtension,
+    isGap, isValid, PileUp, ReadAlignment, ReadAlignmentType;
 import djunctor.commandline : Options;
 import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
     getLocalAlignments, getMappings, getNumContigs, getTracePointDistance,
@@ -31,13 +34,12 @@ import std.exception : assertNotThrown, assertThrown;
 import std.format : format, formattedWrite;
 import std.math : abs, floor, sgn;
 import std.range : assumeSorted, chain, chunks, ElementType, enumerate,
-    ForwardRange, InputRange, inputRangeObject, iota, isForwardRange, isInputRange, only,
-    retro, slide, SortedRange, tail, take, walkLength, zip;
+    ForwardRange, InputRange, inputRangeObject, iota, isForwardRange,
+    isInputRange, only, retro, slide, SortedRange, tail, take, walkLength, zip;
 import std.stdio : File, write, writeln;
 import std.string : outdent;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
 import vibe.data.json : Json, toJson = serializeToJson;
-
 
 /// Start the `djunctor` algorithm with preprocessed options.
 void runWithOptions(in ref Options options)
@@ -594,7 +596,8 @@ class DJunctor
         );
         // dfmt on
 
-        AssessmentStage!Assessor assessmentStage(Assessor : RepeatAssessor)(Assessor assessor, const(AlignmentChain[]) input)
+        AssessmentStage!Assessor assessmentStage(Assessor : RepeatAssessor)(Assessor assessor,
+                const(AlignmentChain[]) input)
         {
             return typeof(return)(assessor, input);
         }
@@ -1446,7 +1449,8 @@ struct BadAlignmentCoverageAssessor
                 {
                     size_t alignmentChainId = 0;
                     size_t contReadId = 0;
-                    AlignmentChain getDummyAlignment(size_t contigId, size_t contigLength, size_t beginIdx, size_t endIdx)
+                    AlignmentChain getDummyAlignment(size_t contigId,
+                            size_t contigLength, size_t beginIdx, size_t endIdx)
                     {
                         // dfmt off
                         return AlignmentChain(
@@ -1519,6 +1523,7 @@ struct BadAlignmentCoverageAssessor
             return ReferenceMask();
         }
 
+        static immutable OK = CoverageZone.ok;
         auto maskAcc = appender!(ReferenceInterval[]);
         auto masker = Masker();
         auto changeEvents = coverageChanges(alignments);
@@ -1536,16 +1541,14 @@ struct BadAlignmentCoverageAssessor
 
             // dfmt off
             if (
-                !masker.isMasking && (
-                    newZone != CoverageZone.ok ||
-                    (currentZone == CoverageZone.ok && currentZone != newZone)
-                )
+                !masker.isMasking &&
+                (newZone != OK || (currentZone == OK && currentZone != newZone))
             )
             // dfmt on
             {
                 masker.start(event.contigId, event.position);
             }
-            else if (masker.isMasking && currentZone != CoverageZone.ok && newZone == CoverageZone.ok)
+            else if (masker.isMasking && currentZone != OK && newZone == OK)
             {
                 maskAcc ~= masker.finish(event.position);
             }
@@ -1590,11 +1593,13 @@ struct BadAlignmentCoverageAssessor
 
     private CoverageZone coverageZone(in int coverage) const pure nothrow
     {
+        // dfmt off
         return coverage < lowerLimit
             ? CoverageZone.low
             : coverage > upperLimit
                 ? CoverageZone.high
                 : CoverageZone.ok;
+        // dfmt on
     }
 
     private static struct Masker
@@ -1670,7 +1675,7 @@ struct BadAlignmentCoverageAssessor
         }
 
         private static CoverageChangeRange create(Range)(Range alignments)
-            if (isInputRange!Range && is(ElementType!Range : const(AlignmentChain)))
+                if (isInputRange!Range && is(ElementType!Range : const(AlignmentChain)))
         {
             if (alignments.length == 0)
             {

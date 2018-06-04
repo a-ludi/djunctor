@@ -11,7 +11,8 @@ module djunctor.alignments;
 import djunctor.util.log;
 import djunctor.util.math : absdiff, mean;
 import core.exception : AssertError;
-import std.algorithm : all, any, chunkBy, equal, filter, isSorted, map, max, min, sort, sum, swap;
+import std.algorithm : all, any, chunkBy, equal, filter, isSorted, map, max,
+    min, sort, sum, swap;
 import std.array : appender, Appender, array;
 import std.conv : to;
 import std.exception : assertNotThrown, assertThrown;
@@ -703,7 +704,7 @@ unittest
 
     **Note:** the order is relative to the orientation of the opposite contig.
 */
-bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
+bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure 
         if (contig == "contigA" || contig == "contigB")
 {
     assert(__traits(getMember, ac1, contig) == __traits(getMember, ac2, contig),

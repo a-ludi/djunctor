@@ -149,9 +149,11 @@ struct Options
 
     @Option("damapper-options")
     @Help("list of options to pass to `damapper`")
+    // dfmt off
     string[] damapperOptions = [
         "-n.7", // produce the 30 % best chains
     ];
+    // dfmt on
 
     @Option("daccord-options")
     @Help("list of options to pass to `daccord`")

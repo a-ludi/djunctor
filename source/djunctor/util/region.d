@@ -597,6 +597,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
         alias R = Region!(int, int);
         alias TI = R.TaggedInterval;
 
+        // dfmt off
         auto region = R([
             TI(3, 8349, 8600),
             TI(3, 8349, 8349),
@@ -626,6 +627,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
         auto normalizedRegion = R([
             TI(3, 8349, 10800),
         ]);
+        // dfmt on
 
         assert(region == normalizedRegion);
     }
@@ -818,6 +820,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
         alias TI = R.TaggedInterval;
 
         R accRegion;
+        // dfmt off
         auto inputRegion1 = R([
             TI(3, 8349, 8600),
             TI(3, 8349, 8850),
@@ -845,6 +848,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
         auto expectedResult = R([
             TI(3, 2297, 11371),
         ]);
+        // dfmt on
 
         accRegion |= inputRegion1;
 
@@ -867,7 +871,7 @@ unittest
 
     See_Also: Region.empty, Region.TaggedInterval.empty
 */
-bool empty(T)(in T thing) pure nothrow
+bool empty(T)(in T thing) pure nothrow 
         if (is(T : Region!Args, Args...) || is(T : Region!Args.TaggedInterval, Args...))
 {
     return thing.empty;

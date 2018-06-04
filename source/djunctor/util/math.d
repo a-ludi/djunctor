@@ -82,7 +82,7 @@ unittest
 
     Returns: x rounded upward according to base.
 */
-Integer ceil(Integer)(in Integer x, in Integer base) pure nothrow
+Integer ceil(Integer)(in Integer x, in Integer base) pure nothrow 
         if (isIntegral!Integer)
 {
     // dfmt off
@@ -106,7 +106,7 @@ unittest
 
     Returns: x rounded downward according to base.
 */
-Integer floor(Integer)(in Integer x, in Integer base) pure nothrow
+Integer floor(Integer)(in Integer x, in Integer base) pure nothrow 
         if (isIntegral!Integer)
 {
     return (x / base) * base;
