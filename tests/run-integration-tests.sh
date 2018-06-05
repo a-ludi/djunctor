@@ -162,7 +162,7 @@ function backup_results()
     local FILE_LIST="$(mktemp --tmpdir djunctor-integration-tests.XXXXXX.files.lst)"
 
     pushd "$WORKDIR" > /dev/null
-    find . -print0 > "$FILE_LIST"
+    find . -type f -print0 > "$FILE_LIST"
     tar -czf "$RESULTS_ARCHIVE" \
         --exclude='*.fasta' \
         --verbatim-files-from \
@@ -241,6 +241,7 @@ function prepare_tests()
 
     pushd "$WORKDIR" > /dev/null
     daligner "${RESULT_TO_REFERENCE_DALIGNER_OPTS}" "$TEST_DATA_REF.dam" "$RESULT_DB"
+    daligner "${RESULT_TO_REFERENCE_DALIGNER_OPTS}" "$TEST_DATA_MODREF.dam" "$RESULT_DB"
     popd > /dev/null
 }
 
@@ -471,6 +472,32 @@ function join()
 }
 
 
+function align_classified_reads_against_reference_mod()
+{
+    set -x
+    local CLASS="$1"
+    local READS_PATH="$WORKDIR/$CLASS"
+
+    if [[ ! -f "$READS_PATH.dam" ]];
+    then
+        local READ_IDS=($(jq '. | map(.'"$CLASS"') | flatten | unique | sort | .[]'))
+        echo "${READ_IDS[@]}"
+        local DAMAPPER_CMD=(
+            $(json_log 'damapper' | jq --slurp --raw-output 'map(select(has("command") and .command[0] == "damapper")) | .[0].command[0:-2][]')
+            "$TEST_DATA_MODREF.dam"
+            "$READS_PATH.dam"
+        )
+
+        pushd "$WORKDIR" > /dev/null
+        DBshow "$TEST_DATA_READS.dam" "${READ_IDS[@]}" | \
+            tee "$READS_PATH.fasta" | \
+            fasta2DAM -i "$READS_PATH.dam" && \
+            "${DAMAPPER_CMD[@]}"
+        popd > /dev/null
+        fi
+    set +x
+}
+
 #-----------------------------------------------------------------------------
 # Test Cases
 #-----------------------------------------------------------------------------
@@ -631,7 +658,7 @@ function test_pile_ups_contain_enough_valid_read()
     local MIN_CORRECT_READS_RATIO="0.5"
     local COMPUTED_PILE_UPS="$(json_log 'pileUps' | \
         jq -c 'select(has("pileUps")) | .pileUps | map({ type: .type, contigs: (.readAlignments | map(.[0].contigB.id) | unique | sort), reads: (.readAlignments | map(.[0].contigA.id) | unique | sort) })')"
-    local TRUE_PILE_UPS="$(jq -c 'map({ contigs, reads: (.reads | map(.readId) | unique | sort) })' < "$WORKDIR/pile_ups.json")"
+    local TRUE_PILE_UPS="$(jq -c 'map({ contigs, reads: (.reads | map(.readId) | sort | unique) })' < "$WORKDIR/pile_ups.json")"
     local TEST_RESULT="$(jq '
         def correctReadsRatio: (.correctReads | length) / (.computedReads | length);
         def trueReadsFoundRatio: (.correctReads | length) / (.trueReads | length);
@@ -642,8 +669,9 @@ function test_pile_ups_contain_enough_valid_read()
             contigs,
             type,
             isGoodEnough: isGoodPileUp,
-            trueReads: .correctReads,
-            falseReads: (.computedReads - .correctReads),
+            correctReads: .correctReads,
+            incorrectReads: (.computedReads - .correctReads),
+            discardedReads: (.trueReads - .computedReads),
             correctReadsRatio: correctReadsRatio,
             trueReadsFoundRatio: trueReadsFoundRatio,
         };
@@ -657,18 +685,19 @@ function test_pile_ups_contain_enough_valid_read()
             .contigs as $contigs |
             $truePileUps |
             map(
+                .reads as $trueReads |
                 select(
                     ($type == "front" and .contigs[1] == $contigs[0]) or
                     ($type == "gap" and .contigs == $contigs) or
                     ($type == "back" and .contigs[0] == $contigs[0])
                 ) |
-                ($computedReads - ($computedReads - .reads)) as $correctReads |
+                ($computedReads - ($computedReads - $trueReads)) as $correctReads |
                 {
                     contigs: $contigs,
                     type: $type,
                     correctReads: $correctReads,
                     computedReads: $computedReads,
-                    trueReads: .reads,
+                    trueReads: $trueReads,
                 }
             ) |
             select(length > 0)
@@ -687,24 +716,8 @@ function test_pile_ups_contain_enough_valid_read()
             echo -n ": "
             jq '.' <<<"$TEST_RESULT"
 
-            local FALSE_READS="$WORKDIR/false_reads"
-
-            if [[ ! -f "$FALSE_READS.dam" ]];
-            then
-                local FALSE_READ_IDS=($(jq '. | map(.falseReads) | flatten | unique | sort | .[]' <<<"$TEST_RESULT"))
-                local DAMAPPER_CMD=(
-                    $(json_log 'damapper' | jq --slurp --raw-output 'map(select(has("command") and .command[0] == "damapper")) | .[0].command[0:-2][]')
-                    "$TEST_DATA_MODREF.dam"
-                    "$FALSE_READS.dam"
-                )
-
-                pushd "$WORKDIR" > /dev/null
-                DBshow "$TEST_DATA_READS.dam" "${FALSE_READ_IDS[@]}" | \
-                    tee "$FALSE_READS.fasta" | \
-                    fasta2DAM -i "$FALSE_READS.dam" && \
-                    "${DAMAPPER_CMD[@]}"
-                popd > /dev/null
-            fi
+            align_classified_reads_against_reference_mod 'incorrectReads' <<<"$TEST_RESULT"
+            align_classified_reads_against_reference_mod 'discardedReads' <<<"$TEST_RESULT"
         else
             echo
         fi
