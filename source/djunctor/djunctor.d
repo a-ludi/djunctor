@@ -594,6 +594,7 @@ class DJunctor
             return alignmentsPerContig.map!(ac => ac.coveredBases!"contigA").sum;
         }
 
+        // dfmt off
         auto totalContigLength = alignments
             .chunkBy!"a.contigA.id == b.contigA.id"
             .map!"a.front.contigA.length"
@@ -602,6 +603,7 @@ class DJunctor
             .chunkBy!"a.contigA.id == b.contigA.id"
             .map!coveredBases
             .sum;
+        // dfmt on
 
         return totalCoveredBases.to!double / totalContigLength.to!double;
     }
@@ -610,17 +612,19 @@ class DJunctor
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.assessRepeatStructure");
 
-
         auto selfCoverage = alignmentCoverage(selfAlignment);
+        auto readsCoverage = alignmentCoverage(readsAlignment.a2b);
+        // dfmt off
         auto selfCoverageConfidenceInterval = tuple(
             invPoissonCDF(1 - options.confidence, selfCoverage),
             invPoissonCDF(options.confidence, selfCoverage),
         );
-        auto readsCoverage = alignmentCoverage(readsAlignment.a2b);
         auto readsCoverageConfidenceInterval = tuple(
             invPoissonCDF(1 - options.confidence, readsCoverage),
             invPoissonCDF(options.confidence, readsCoverage),
         );
+
+        // dfmt on
         logJsonDebug(
             "selfCoverage", selfCoverage,
             "selfCoverageConfidenceInterval", selfCoverageConfidenceInterval.toJson,
@@ -636,8 +640,8 @@ class DJunctor
         );
         // dfmt on
 
-        AssessmentStage!Assessor assessmentStage(Assessor : RepeatAssessor)(string name, Assessor assessor,
-                const(AlignmentChain[]) input)
+        AssessmentStage!Assessor assessmentStage(Assessor : RepeatAssessor)(string name,
+                Assessor assessor, const(AlignmentChain[]) input)
         {
             return typeof(return)(name, assessor, input);
         }
