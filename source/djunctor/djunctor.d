@@ -699,6 +699,7 @@ class DJunctor
         // dfmt off
         auto filters = tuple(
             new WeaklyAnchoredAlignmentChainsFilter(repetitiveRegions, options.minAnchorLength),
+            new ImproperAlignmentChainsFilter(),
             new AmbiguousAlignmentChainsFilter(),
             new RedundantAlignmentChainsFilter(),
         );
@@ -1323,31 +1324,42 @@ abstract class ReadFilter : AlignmentChainFilter
     InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains);
 }
 
+/// Discard improper alignments.
+class ImproperAlignmentChainsFilter : ReadFilter
+{
+    override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
+    {
+        return inputRangeObject(alignmentChains.filter!"a.isProper");
+    }
+}
+
+/// Discard read if it has an alignment that – extended with the
+/// exceeding read sequence on either end – is fully contained in
+/// a single contig.
 class RedundantAlignmentChainsFilter : ReadFilter
 {
     override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
     {
-        // Discard read if it has an alignment that – extended with the
-        // exceeding read sequence on either end – is fully contained in
-        // a single contig.
-        return inputRangeObject(alignmentChains.filter!(ac => ac.isProper && ac.isFullyContained));
+        assert(alignmentChains.map!"a.isProper".all);
+
+        return inputRangeObject(alignmentChains.filter!(ac => ac.isFullyContained));
     }
 }
 
+/// Discard read if it has an alignment that aligns in multiple
+/// locations of one contig with approximately equal quality.
 class AmbiguousAlignmentChainsFilter : ReadFilter
 {
     override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
     {
         alias AlignmentsChunk = typeof(
-                alignmentChains.filter!"a.isProper".chunkBy!haveEqualIds.front);
+                alignmentChains.chunkBy!haveEqualIds.front);
 
         bool isAmgiguouslyAlignedRead(AlignmentsChunk alignmentsChunk)
         {
             auto readAlignments = alignmentsChunk.array;
             readAlignments.sort!"a.score > b.score";
 
-            // Discard read if it has an alignment that aligns in multiple
-            // locations of one contig with approximately equal quality.
             // dfmt off
             return (
                 readAlignments.length > 1 &&
@@ -1356,9 +1368,10 @@ class AmbiguousAlignmentChainsFilter : ReadFilter
             // dfmt on
         }
 
+        assert(alignmentChains.map!"a.isProper".all);
+
         // dfmt off
         return alignmentChains
-            .filter!"a.isProper"
             .chunkBy!haveEqualIds
             .filter!isAmgiguouslyAlignedRead
             .joiner
