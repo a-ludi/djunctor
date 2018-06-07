@@ -18,9 +18,11 @@ import std.conv : to;
 import std.exception : assertNotThrown, assertThrown;
 import std.format : format;
 import std.math : sgn;
-import std.range : assumeSorted, chunks, enumerate, only;
+import std.range : assumeSorted, chunks, enumerate, only, retro;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
 import vibe.data.json : toJson = serializeToJson;
+
+debug import std.stdio : writeln;
 
 /// General container for alignment data.
 template AlignmentContainer(R)
@@ -2366,35 +2368,104 @@ AlignmentChain getComplementaryOrder(in AlignmentChain alignmentChain) pure
         contigA: alignmentChain.contigB,
         contigB: alignmentChain.contigA,
         complement: alignmentChain.complement,
-        localAlignments: [AlignmentChain.LocalAlignment(
-            AlignmentChain.LocalAlignment.Locus(
-                alignmentChain.first.contigB.begin,
-                alignmentChain.last.contigB.end,
-            ),
-            AlignmentChain.LocalAlignment.Locus(
-                alignmentChain.first.contigA.begin,
-                alignmentChain.last.contigA.end,
-            ),
-        )],
-        order: alignmentChain.order.reverse
+        order: alignmentChain.order.reverse,
     };
     // dfmt on
 
     if (complementary.complement)
     {
-        static foreach (contig; ["contigA", "contigB"])
-        {
-            static foreach (coord; ["begin", "end"])
-                mixin("complementary.localAlignments[0]." ~ contig ~ "." ~ coord ~ " = complementary."
-                        ~ contig ~ ".length - complementary.localAlignments[0]."
-                        ~ contig ~ "." ~ coord ~ ";");
-            mixin("swap(complementary.localAlignments[0]." ~ contig
-                    ~ ".begin, complementary.localAlignments[0]." ~ contig ~ ".end);");
-        }
-
+        // dfmt off
+        complementary.localAlignments = alignmentChain
+            .localAlignments
+            .retro
+            .map!(la => AlignmentChain.LocalAlignment(
+                AlignmentChain.LocalAlignment.Locus(
+                    alignmentChain.contigB.length - la.contigB.end,
+                    alignmentChain.contigB.length - la.contigB.begin,
+                ),
+                AlignmentChain.LocalAlignment.Locus(
+                    alignmentChain.contigA.length - la.contigA.end,
+                    alignmentChain.contigA.length - la.contigA.begin,
+                ),
+                la.numDiffs,
+            ))
+            .array;
+        // dfmt on
+    } else {
+        // dfmt off
+        complementary.localAlignments = alignmentChain
+            .localAlignments
+            .map!(la => AlignmentChain.LocalAlignment(
+                la.contigB,
+                la.contigA,
+                la.numDiffs,
+            ))
+            .array;
+        // dfmt on
     }
 
     return complementary;
+}
+
+unittest
+{
+    alias Complement = AlignmentChain.Complement;
+    alias Order = AlignmentChain.Order;
+    alias LocalAlignment = AlignmentChain.LocalAlignment;
+
+    // dfmt off
+    AlignmentChain normalOrderAC = {
+        contigA: AlignmentChain.Contig(1, 1000),
+        contigB: AlignmentChain.Contig(2, 500),
+        complement: Complement.yes,
+        localAlignments: [
+            LocalAlignment(
+                LocalAlignment.Locus(0, 10),
+                LocalAlignment.Locus(0, 10),
+                1
+            ),
+            LocalAlignment(
+                LocalAlignment.Locus(20, 50),
+                LocalAlignment.Locus(30, 60),
+                2
+            ),
+            LocalAlignment(
+                LocalAlignment.Locus(600, 1000),
+                LocalAlignment.Locus(100, 500),
+                3
+            ),
+        ],
+        0,
+        Order.ref2read,
+    };
+    AlignmentChain complementaryOrderAC = {
+        contigA: AlignmentChain.Contig(2, 500),
+        contigB: AlignmentChain.Contig(1, 1000),
+        complement: Complement.yes,
+        localAlignments: [
+            LocalAlignment(
+                LocalAlignment.Locus(0, 400),
+                LocalAlignment.Locus(0, 400),
+                3
+            ),
+            LocalAlignment(
+                LocalAlignment.Locus(440, 470),
+                LocalAlignment.Locus(950, 980),
+                2
+            ),
+            LocalAlignment(
+                LocalAlignment.Locus(490, 500),
+                LocalAlignment.Locus(990, 1000),
+                1
+            ),
+        ],
+        0,
+        Order.read2ref,
+    };
+    // dfmt on
+
+    debug writeln(getComplementaryOrder(normalOrderAC));
+    assert(getComplementaryOrder(normalOrderAC) == complementaryOrderAC);
 }
 
 /// Returns a list of pointers to all involved alignment chains.
