@@ -1821,7 +1821,9 @@ PileUp[] buildPileUps(AlignmentContainer!(AlignmentChain[]) candidates) pure
         }
     }
 
-    debug logJsonDebug("pileStructure", pileUpsByGap.map!"a.length".map!toJson.array);
+    debug logJsonDebug("pileStructure", pileUpsByGap.map!"a.length"
+            .map!toJson
+            .array);
 
     return pileUpsByGap;
 }
@@ -2391,7 +2393,9 @@ AlignmentChain getComplementaryOrder(in AlignmentChain alignmentChain) pure
             ))
             .array;
         // dfmt on
-    } else {
+    }
+    else
+    {
         // dfmt off
         complementary.localAlignments = alignmentChain
             .localAlignments

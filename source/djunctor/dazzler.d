@@ -1045,7 +1045,9 @@ private auto readDbDump(S, Range)(S dbDump, Range recordNumbers, in size_t lineL
         return fastaData.data;
     };
 
-    return byRecordSplitter(dbDump).map!parseRecord.map!"a()".filter!`!(a is null)`;
+    return byRecordSplitter(dbDump).map!parseRecord
+        .map!"a()"
+        .filter!`!(a is null)`;
 }
 
 unittest

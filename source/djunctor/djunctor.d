@@ -624,16 +624,12 @@ class DJunctor
             invPoissonCDF(alphaHalf, readsCoverage),
             invPoissonCDF(1 - alphaHalf, readsCoverage),
         );
-
-        // dfmt on
         logJsonDebug(
             "selfCoverage", selfCoverage,
             "selfCoverageConfidenceInterval", selfCoverageConfidenceInterval.toJson,
             "readsCoverage", readsCoverage,
             "readsCoverageConfidenceInterval", readsCoverageConfidenceInterval.toJson,
         );
-
-        // dfmt off
         alias AssessmentStage(Assessor : RepeatAssessor) = Tuple!(
             string, "name",
             Assessor, "assessor",
@@ -706,11 +702,13 @@ class DJunctor
         );
         // dfmt on
         AlignmentChain[] filterInput = catCandidates.a2b[];
+        // dfmt off
         logJsonDiagnostic(
             "filterStage", "Input",
             "discardedAlignmentChains", Json.emptyArray,
             "keptAlignmentChains", filterInput.toJson,
         );
+        // dfmt on
         foreach (i, filter; filters)
         {
             auto filterOutput = filter(filterInput[]);
@@ -1359,8 +1357,7 @@ class AmbiguousAlignmentChainsFilter : ReadFilter
 {
     override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
     {
-        alias AlignmentsChunk = typeof(
-                alignmentChains.chunkBy!haveEqualIds.front);
+        alias AlignmentsChunk = typeof(alignmentChains.chunkBy!haveEqualIds.front);
 
         bool isAmgiguouslyAlignedRead(AlignmentsChunk alignmentsChunk)
         {
