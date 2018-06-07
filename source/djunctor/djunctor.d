@@ -612,16 +612,17 @@ class DJunctor
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.assessRepeatStructure");
 
+        auto alphaHalf = (1 - options.confidence) / 2;
         auto selfCoverage = alignmentCoverage(selfAlignment);
         auto readsCoverage = alignmentCoverage(readsAlignment.a2b);
         // dfmt off
         auto selfCoverageConfidenceInterval = tuple(
-            invPoissonCDF(1 - options.confidence, selfCoverage),
-            invPoissonCDF(options.confidence, selfCoverage),
+            invPoissonCDF(alphaHalf, selfCoverage),
+            invPoissonCDF(1 - alphaHalf, selfCoverage),
         );
         auto readsCoverageConfidenceInterval = tuple(
-            invPoissonCDF(1 - options.confidence, readsCoverage),
-            invPoissonCDF(options.confidence, readsCoverage),
+            invPoissonCDF(alphaHalf, readsCoverage),
+            invPoissonCDF(1 - alphaHalf, readsCoverage),
         );
 
         // dfmt on
