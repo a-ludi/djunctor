@@ -474,14 +474,12 @@ function join()
 
 function align_classified_reads_against_reference_mod()
 {
-    set -x
     local CLASS="$1"
     local READS_PATH="$WORKDIR/$CLASS"
 
     if [[ ! -f "$READS_PATH.dam" ]];
     then
         local READ_IDS=($(jq '. | map(.'"$CLASS"') | flatten | unique | sort | .[]'))
-        echo "${READ_IDS[@]}"
         local DAMAPPER_CMD=(
             $(json_log 'damapper' | jq --slurp --raw-output 'map(select(has("command") and .command[0] == "damapper")) | .[0].command[0:-2][]')
             "$TEST_DATA_MODREF.dam"
@@ -495,7 +493,6 @@ function align_classified_reads_against_reference_mod()
             "${DAMAPPER_CMD[@]}"
         popd > /dev/null
         fi
-    set +x
 }
 
 #-----------------------------------------------------------------------------
@@ -671,7 +668,7 @@ function test_pile_ups_contain_enough_valid_read()
             isGoodEnough: isGoodPileUp,
             correctReads: .correctReads,
             incorrectReads: (.computedReads - .correctReads),
-            discardedReads: (.trueReads - .computedReads),
+            unusedReads: (.trueReads - .computedReads),
             correctReadsRatio: correctReadsRatio,
             trueReadsFoundRatio: trueReadsFoundRatio,
         };
@@ -717,7 +714,7 @@ function test_pile_ups_contain_enough_valid_read()
             jq '.' <<<"$TEST_RESULT"
 
             align_classified_reads_against_reference_mod 'incorrectReads' <<<"$TEST_RESULT"
-            align_classified_reads_against_reference_mod 'discardedReads' <<<"$TEST_RESULT"
+            align_classified_reads_against_reference_mod 'unusedReads' <<<"$TEST_RESULT"
         else
             echo
         fi
