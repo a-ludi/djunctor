@@ -511,17 +511,14 @@ function test_short_extension_skipped()
         'extensionLength'
 }
 
-FRONT_EXTENSION_8_LENGTH=2953
-FRONT_EXTENSION_9_LENGTH=2643
+FRONT_EXTENSION_8_LENGTH=2952
 
 function test_front_extension_found()
 {
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
         '.[0].gapInfo | map(select(.type == "front")) | map(.contigIds) == [
-            [1],
-            [8],
-            [9]
+            [8]
         ]' \
         '.[0].gapInfo | map(select(.type == "front") | .contigIds)' \
         'gapInfo'
@@ -531,7 +528,6 @@ function test_front_extensions_filled()
 {
     local INSINFO=(
         '{beginContig: 8, endContig: 8, extensionLength: '"$FRONT_EXTENSION_8_LENGTH"'}'
-        '{beginContig: 9, endContig: 9, extensionLength: '"$FRONT_EXTENSION_9_LENGTH"'}'
     )
 
     expect_json \
@@ -559,8 +555,7 @@ function test_back_extension_found()
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
         '.[0].gapInfo | map(select(.type == "back")) | map(.contigIds) == [
-            [7],
-            [8]
+            [7]
         ]' \
         '.[0].gapInfo | map(select(.type == "back") | .contigIds)' \
         'gapInfo'
@@ -569,8 +564,7 @@ function test_back_extension_found()
 function test_back_extensions_filled()
 {
     local INSINFO=(
-        '{beginContig: 7, endContig: 7, extensionLength: 7532}'
-        '{beginContig: 8, endContig: 8, extensionLength: 8323}'
+        '{beginContig: 7, endContig: 7, extensionLength: 11842}'
     )
 
     expect_json \
@@ -603,7 +597,8 @@ function test_gaps_found()
             [3, 4],
             [4, 5],
             [5, 6],
-            [6, 7]
+            [6, 7],
+            [8, 9]
         ]' \
         '.[0].gapInfo | map(select(.type == "gap") | .contigIds)' \
         'gapInfo'
@@ -612,12 +607,13 @@ function test_gaps_found()
 function test_gaps_filled()
 {
     local INSINFO=(
-        '{beginContig: 1, endContig: 2, gapEnd:  12400}'  #   8300 + 4100 =  12400
+        '{beginContig: 1, endContig: 2, gapEnd:  12401}'  #   8300 + 4100 =  12400
         '{beginContig: 2, endContig: 3, gapEnd:  16800}'  #   8350 + 8450 =  16800
-        '{beginContig: 3, endContig: 4, gapEnd: 130700}'  # 125700 + 5000 = 130700
-        '{beginContig: 4, endContig: 5, gapEnd:  15000}'  #  10000 + 5000 =  15000
+        '{beginContig: 3, endContig: 4, gapEnd: 130701}'  # 125700 + 5000 = 130700
+        '{beginContig: 4, endContig: 5, gapEnd:  15006}'  #  10000 + 5000 =  15000
         '{beginContig: 5, endContig: 6, gapEnd:  28750}'  #  25750 + 3000 =  28750
         '{beginContig: 6, endContig: 7, gapEnd:  15250}'  #  12750 + 2500 =  15250
+        '{beginContig: 8, endContig: 9, gapEnd:  24900}'  #  21400 + 3500 =  24900
     )
 
     expect_json \
@@ -645,14 +641,17 @@ function test_merged_result()
 {
     expect_json \
         '. | has("numReferenceContigs")' \
-        '.[0] | .numReferenceContigs == 9 and (.contigSources | length) == 3 and (.contigSources | length) == (.contigSources | unique_by(.[1].dbFile) | length)' \
+        '.[0] |
+            .numReferenceContigs == 9 and
+            (.contigSources | length) == 2 and
+            (.contigSources | length) == (.contigSources | unique_by(.[1].dbFile) | length)' \
         'map({ numReferenceContigs, contigSources })' \
         'numReferenceContigs'
 }
 
 function test_pile_ups_contain_enough_valid_read()
 {
-    local MIN_CORRECT_READS_RATIO="0.5"
+    local MIN_CORRECT_READS_RATIO="0.9"
     local COMPUTED_PILE_UPS="$(json_log 'pileUps' | \
         jq -c 'select(has("pileUps")) | .pileUps | map({ type: .type, contigs: (.readAlignments | map(.[0].contigB.id) | unique | sort), reads: (.readAlignments | map(.[0].contigA.id) | unique | sort) })')"
     local TRUE_PILE_UPS="$(jq -c 'map({ contigs, reads: (.reads | map(.readId) | sort | unique) })' < "$WORKDIR/pile_ups.json")"
@@ -703,7 +702,7 @@ function test_pile_ups_contain_enough_valid_read()
         map(buildOutput)
     ' <<<"{\"truePileUps\":$TRUE_PILE_UPS,\"computedPileUps\":$COMPUTED_PILE_UPS}")"
 
-    if ! jq --exit-status '.badPileUps | length == 0' <<<"$TEST_RESULT" &> /dev/null; then
+    if ! jq --exit-status 'map(select(.isGoodEnough | not)) | length == 0' <<<"$TEST_RESULT" &> /dev/null; then
         local NUM_PILE_UPS="$(jq -r 'length' <<<"$TEST_RESULT")"
         local NUM_GOOD_PILE_UPS="$(jq -r 'map(select(.isGoodEnough)) | length' <<<"$TEST_RESULT")"
 
@@ -745,7 +744,7 @@ function test_number_of_iterations()
 
 function test_coordinate_transform__contig_1()
 {
-    # This is the transformed coordinate after *perfect* gap filling
+    # This is the transformed coordinate after *perfect* (+ small error) gap filling
     expect_transformed_coord \
         1 42 \
         1 $((42))
@@ -753,50 +752,50 @@ function test_coordinate_transform__contig_1()
 
 function test_coordinate_transform__contig_2()
 {
-    # This is the transformed coordinate after *perfect* gap filling
+    # This is the transformed coordinate after *perfect* (+ small error) gap filling
     expect_transformed_coord \
         2 42 \
-        1 $((42 + 12400))
+        1 $((42 + 12400 + 1))
 }
 
 function test_coordinate_transform__contig_3()
 {
-    # This is the transformed coordinate after *perfect* gap filling
+    # This is the transformed coordinate after *perfect* (+ small error) gap filling
     expect_transformed_coord \
         3 42 \
-        1 $((42 + 29200))
+        1 $((42 + 29200 + 1))
 }
 
 function test_coordinate_transform__contig_4()
 {
-    # This is the transformed coordinate after *perfect* (+ 1 error) gap filling
+    # This is the transformed coordinate after *perfect* (+ small error) gap filling
     expect_transformed_coord \
         4 42 \
-        1 $((42 + 159900 + 1))
+        1 $((42 + 159900 + 2))
 }
 
 function test_coordinate_transform__contig_5()
 {
-    # This is the transformed coordinate after *perfect* (+ 7 error) gap filling
+    # This is the transformed coordinate after *perfect* (+ small error) gap filling
     expect_transformed_coord \
         5 42 \
-        1 $((42 + 174900 + 7))
+        1 $((42 + 174900 + 8))
 }
 
 function test_coordinate_transform__contig_6()
 {
-    # This is the transformed coordinate after *perfect* (+ 13 error) gap filling
+    # This is the transformed coordinate after *perfect* (+ small error) gap filling
     expect_transformed_coord \
         6 42 \
-        1 $((42 + 203650 + 13))
+        1 $((42 + 203650 + 8))
 }
 
 function test_coordinate_transform__contig_7()
 {
-    # This is the transformed coordinate after *perfect* (+ 13 error) gap filling
+    # This is the transformed coordinate after *perfect* (+ small error) gap filling
     expect_transformed_coord \
         7 42 \
-        1 $((42 + 218900 + 13))
+        1 $((42 + 218900 + 8))
 }
 
 function test_coordinate_transform__contig_8()
@@ -808,11 +807,10 @@ function test_coordinate_transform__contig_8()
 
 function test_coordinate_transform__contig_9()
 {
-    # This is the transformed coordinate after the
-    # (imperfect) front extension of contig 9
+    # This is the transformed coordinate after *perfect* (+ small error) gap filling
     expect_transformed_coord \
         9 42 \
-        3 $((42 + FRONT_EXTENSION_9_LENGTH))
+        2 $((42 + 24900 + FRONT_EXTENSION_8_LENGTH))
 }
 
 
