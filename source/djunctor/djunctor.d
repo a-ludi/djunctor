@@ -727,9 +727,9 @@ class DJunctor
 
             filterInput = filterOutput;
         }
-        auto filterPiepelineOutput = filterInput;
+        auto filterPipelineOutput = filterInput;
 
-        this.catCandidates.a2b = filterPiepelineOutput;
+        this.catCandidates.a2b = filterPipelineOutput;
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.filterReads");
 
