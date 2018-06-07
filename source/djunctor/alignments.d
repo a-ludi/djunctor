@@ -2362,6 +2362,7 @@ AlignmentChain getComplementaryOrder(in AlignmentChain alignmentChain) pure
 {
     // dfmt off
     AlignmentChain complementary = {
+        id: alignmentChain.id,
         contigA: alignmentChain.contigB,
         contigB: alignmentChain.contigA,
         complement: alignmentChain.complement,
