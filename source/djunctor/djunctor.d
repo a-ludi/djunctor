@@ -745,7 +745,7 @@ class DJunctor
     protected DJunctor transferA2BCandidatesToB2A()
     {
         // dfmt off
-        catCandidates.b2a = readsAlignment.a2b
+        catCandidates.b2a = catCandidates.a2b
             .map!getComplementaryOrder
             .array;
         catCandidates.b2a.sort();
