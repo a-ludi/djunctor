@@ -1604,7 +1604,7 @@ class BadAlignmentCoverageAssessor : RepeatAssessor
         auto alignments = getTestAlignments();
         alias CoverageChange = CoverageChangeRange.CoverageChange;
 
-        auto assessor = BadAlignmentCoverageAssessor(3, 5);
+        auto assessor = new BadAlignmentCoverageAssessor(3, 5);
         // dfmt off
         assert(assessor(alignments) == ReferenceMask([
             ReferenceInterval(1,  0,  5),
