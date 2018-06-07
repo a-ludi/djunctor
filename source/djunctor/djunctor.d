@@ -706,6 +706,11 @@ class DJunctor
         );
         // dfmt on
         AlignmentChain[] filterInput = catCandidates.a2b[];
+        logJsonDiagnostic(
+            "filterStage", "Input",
+            "discardedAlignmentChains", Json.emptyArray,
+            "keptAlignmentChains", filterInput.toJson,
+        );
         foreach (i, filter; filters)
         {
             auto filterOutput = filter(filterInput[]);
@@ -721,6 +726,7 @@ class DJunctor
                 logJsonDiagnostic(
                     "filterStage", typeof(filter).stringof,
                     "discardedAlignmentChains", discardedAlignmentChains.toJson,
+                    "keptAlignmentChains", filterOutput.toJson,
                 );
                 // dfmt on
             }
