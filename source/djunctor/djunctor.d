@@ -1306,7 +1306,7 @@ interface AlignmentChainFilter
 
 abstract class ReadFilter : AlignmentChainFilter
 {
-    AlignmentChain[] opCall(AlignmentChain[] alignmentChains)
+    override AlignmentChain[] opCall(AlignmentChain[] alignmentChains)
     {
         assert(alignmentChains.map!(ac => ac.order == AlignmentChain.Order.ref2read).all);
         // dfmt off
@@ -1326,11 +1326,11 @@ abstract class ReadFilter : AlignmentChainFilter
 }
 
 /// Discard improper alignments.
-class ImproperAlignmentChainsFilter : ReadFilter
+class ImproperAlignmentChainsFilter : AlignmentChainFilter
 {
-    override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
+    override AlignmentChain[] opCall(AlignmentChain[] alignmentChains)
     {
-        return inputRangeObject(alignmentChains.filter!"a.isProper");
+        return alignmentChains.filter!"a.isProper".array;
     }
 }
 
