@@ -1325,7 +1325,6 @@ class AmbiguousAlignmentChainsFilter : ReadFilter
         bool isAmgiguouslyAlignedRead(AlignmentsChunk alignmentsChunk)
         {
             auto readAlignments = alignmentsChunk.array;
-            // TODO use getInsertionScore
             readAlignments.sort!"a.score > b.score";
 
             // dfmt off
