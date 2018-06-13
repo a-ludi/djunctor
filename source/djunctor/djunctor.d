@@ -893,20 +893,29 @@ class DJunctor
     {
         immutable shortAlignmentPenaltyMagnitude = AlignmentChain.maxScore / 512;
         immutable notSpanningPenaltyMagnitude = AlignmentChain.maxScore / 2;
+        immutable improperAlignmentPenaltyMagnitude = AlignmentChain.maxScore / 8;
 
+        long numAlignments = readAlignment.length;
         long expectedAlignmentCount = pileUpType == ReadAlignmentType.gap ? 2 : 1;
         // FIXME subtract the masked regions
-        long avgAlignmentLength = readAlignment[].map!"a.totalLength".sum / readAlignment.length;
-        long avgAlignmentScore = readAlignment[].map!"a.score".sum / readAlignment.length;
+        long avgAlignmentLength = readAlignment[].map!"a.totalLength".sum / numAlignments;
+        long avgAlignmentScore = readAlignment[].map!"a.score".sum / numAlignments;
         long shortAlignmentPenalty = floor(shortAlignmentPenaltyMagnitude * (
                 (options.goodAnchorLength + 1) / avgAlignmentLength.to!float) ^^ 2).to!size_t;
         // dfmt off
         long notSpanningPenalty = preferSpanning
-            ? (expectedAlignmentCount - readAlignment.length) * notSpanningPenaltyMagnitude
+            ? (expectedAlignmentCount - numAlignments) * notSpanningPenaltyMagnitude
             : 0;
         // dfmt on
-        // TODO add penalty for improper alignments
-        size_t score = max(0, avgAlignmentScore - shortAlignmentPenalty - notSpanningPenalty);
+        long improperAlignmentPenalty = readAlignment[].map!"a.isProper ? 0 : 1".sum * improperAlignmentPenaltyMagnitude / numAlignments;
+        // dfmt off
+        size_t score = max(0, (
+              avgAlignmentScore
+            - shortAlignmentPenalty
+            - notSpanningPenalty
+            - improperAlignmentPenalty
+        ));
+        // dfmt on
 
         // dfmt off
         debug logJsonDebug(
