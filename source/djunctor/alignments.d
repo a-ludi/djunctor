@@ -1752,8 +1752,7 @@ PileUp[] buildPileUps(AlignmentChain[] candidates)
         .chunkBy!isSameRead
         .map!array
         .map!ReadAlignment
-        .filter!"a.isValid" // TODO: this might discard "good" reads which span
-                            //       a whole contig extending it on both ends.
+        .filter!"a.isValid"
         .map!forceInOrder
         .array;
     // dfmt on
