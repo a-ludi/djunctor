@@ -137,7 +137,7 @@ struct Options
 
     @Option("min-reads-per-pile-up")
     @Help("alignment anchors with at least this length will get no penalty")
-    size_t minReadsPerPileUp = 3;
+    size_t minReadsPerPileUp = 5;
 
     @Option("repeat-mask")
     @Help("if given write inferred repeat mask into a Dazzler mask with this name")
