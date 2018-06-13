@@ -8,7 +8,7 @@
 */
 module djunctor.djunctor;
 
-import djunctor.alignments : AlignmentChain, buildPileUps, getAlignmentChainRefs,
+import djunctor.alignments : AlignmentChain, alignmentCoverage, buildPileUps, getAlignmentChainRefs,
     getType, haveEqualIds, isGap, isValid, PileUp, ReadAlignment, ReadAlignmentType;
 import djunctor.commandline : Options;
 import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
@@ -570,29 +570,6 @@ class DJunctor
         logJsonDiagnostic("state", "exit", "function", "djunctor.mainLoop");
 
         return this;
-    }
-
-    // TODO move to djunctor.alignments!?
-    protected double alignmentCoverage(in AlignmentChain[] alignments) const
-    {
-        alias AlignmentsPerContig = typeof(alignments.chunkBy!"a.contigA.id == b.contigA.id".front);
-        static double coveredBases(AlignmentsPerContig alignmentsPerContig)
-        {
-            return alignmentsPerContig.map!(ac => ac.coveredBases!"contigA").sum;
-        }
-
-        // dfmt off
-        auto totalContigLength = alignments
-            .chunkBy!"a.contigA.id == b.contigA.id"
-            .map!"a.front.contigA.length"
-            .sum;
-        auto totalCoveredBases = alignments
-            .chunkBy!"a.contigA.id == b.contigA.id"
-            .map!coveredBases
-            .sum;
-        // dfmt on
-
-        return totalCoveredBases.to!double / totalContigLength.to!double;
     }
 
     protected DJunctor assessRepeatStructure()

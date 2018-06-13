@@ -667,6 +667,97 @@ unittest
             }
 }
 
+/// Calculates the coverage of the contigs by the given alignments. Only
+/// contigs involved in the alignments are regarded.
+double alignmentCoverage(in AlignmentChain[] alignments)
+{
+    static double coveredBases(T)(T alignmentsPerContig)
+    {
+        return alignmentsPerContig.map!(ac => ac.coveredBases!"contigA").sum;
+    }
+
+    auto alignmentsPerContig = alignments.chunkBy!"a.contigA.id == b.contigA.id";
+    // dfmt off
+    auto totalContigLength = alignmentsPerContig
+        .save
+        .map!"a.front.contigA.length"
+        .sum;
+    auto totalCoveredBases = alignmentsPerContig
+        .save
+        .map!coveredBases
+        .sum;
+    // dfmt on
+
+    return totalCoveredBases.to!double / totalContigLength.to!double;
+}
+
+unittest
+{
+    // dfmt off
+    auto alignments = [
+        AlignmentChain(
+            0,
+            AlignmentChain.Contig(1, 100),
+            AlignmentChain.Contig(1, 50),
+            AlignmentChain.Complement.no,
+            [
+                AlignmentChain.LocalAlignment(
+                    AlignmentChain.LocalAlignment.Locus(0, 10),
+                    AlignmentChain.LocalAlignment.Locus(40, 50),
+                    0
+                ),
+            ],
+        ),
+        AlignmentChain(
+            1,
+            AlignmentChain.Contig(1, 100),
+            AlignmentChain.Contig(2, 30),
+            AlignmentChain.Complement.yes,
+            [
+                AlignmentChain.LocalAlignment(
+                    AlignmentChain.LocalAlignment.Locus(10, 20),
+                    AlignmentChain.LocalAlignment.Locus(0, 10),
+                    0
+                ),
+                AlignmentChain.LocalAlignment(
+                    AlignmentChain.LocalAlignment.Locus(30, 40),
+                    AlignmentChain.LocalAlignment.Locus(20, 30),
+                    0
+                ),
+            ],
+        ),
+        AlignmentChain(
+            2,
+            AlignmentChain.Contig(1, 100),
+            AlignmentChain.Contig(3, 20),
+            AlignmentChain.Complement.no,
+            [
+                AlignmentChain.LocalAlignment(
+                    AlignmentChain.LocalAlignment.Locus(40, 60),
+                    AlignmentChain.LocalAlignment.Locus(0, 20),
+                    0
+                ),
+            ],
+        ),
+        AlignmentChain(
+            3,
+            AlignmentChain.Contig(1, 100),
+            AlignmentChain.Contig(4, 50),
+            AlignmentChain.Complement.yes,
+            [
+                AlignmentChain.LocalAlignment(
+                    AlignmentChain.LocalAlignment.Locus(70, 100),
+                    AlignmentChain.LocalAlignment.Locus(0, 30),
+                    0
+                ),
+            ],
+        ),
+    ];
+    // dfmt on
+
+    assert(alignmentCoverage(alignments) == 80.0/100.0);
+}
+
 /// Type of the read alignment.
 static enum ReadAlignmentType
 {
