@@ -765,8 +765,7 @@ class DJunctor
 
         // dfmt off
         auto pileUps = buildPileUps(catCandidates)
-            // TODO replace with `minimumPileUpCoverage`
-            .filter!(pileUp => pileUp.length >= options.minAbsolutePileUpSize)
+            .filter!(pileUp => pileUp.length >= options.minReadsPerPileUp)
             .array;
         // dfmt on
 

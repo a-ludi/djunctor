@@ -135,9 +135,9 @@ struct Options
     @Help("alignment anchors with at least this length will get no penalty")
     size_t goodAnchorLength = 1000;
 
-    @Option("min-absolute-pile-up-size")
+    @Option("min-reads-per-pile-up")
     @Help("alignment anchors with at least this length will get no penalty")
-    size_t minAbsolutePileUpSize = 5;
+    size_t minReadsPerPileUp = 3;
 
     @Option("repeat-mask")
     @Help("if given write inferred repeat mask into a Dazzler mask with this name")
