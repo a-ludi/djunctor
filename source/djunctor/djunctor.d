@@ -891,17 +891,19 @@ class DJunctor
             in ReadAlignmentType pileUpType,
             in Flag!"preferSpanning" preferSpanning = No.preferSpanning) pure
     {
-        immutable shortAlignmentPenaltyMagnitude = AlignmentChain.maxScore / 512;
+        immutable shortAnchorPenaltyMagnitude = AlignmentChain.maxScore / 512;
         immutable notSpanningPenaltyMagnitude = AlignmentChain.maxScore / 2;
         immutable improperAlignmentPenaltyMagnitude = AlignmentChain.maxScore / 8;
 
         long numAlignments = readAlignment.length;
         long expectedAlignmentCount = pileUpType == ReadAlignmentType.gap ? 2 : 1;
-        // FIXME subtract the masked regions
-        long avgAlignmentLength = readAlignment[].map!"a.totalLength".sum / numAlignments;
+        auto alignmentAnchor = readAlignment[].map!getRegion.fold!"a | b" - repetitiveRegions;
+        long avgAnchorSize = alignmentAnchor.size / numAlignments;
+        debug long avgAlignmentLength = readAlignment[].map!"a.totalLength".sum / numAlignments;
+        debug assert(avgAnchorSize <= avgAlignmentLength);
         long avgAlignmentScore = readAlignment[].map!"a.score".sum / numAlignments;
-        long shortAlignmentPenalty = floor(shortAlignmentPenaltyMagnitude * (
-                (options.goodAnchorLength + 1) / avgAlignmentLength.to!float) ^^ 2).to!size_t;
+        long shortAnchorPenalty = floor(shortAnchorPenaltyMagnitude * (
+                (options.goodAnchorLength + 1) / avgAnchorSize.to!float) ^^ 2).to!size_t;
         // dfmt off
         long notSpanningPenalty = preferSpanning
             ? (expectedAlignmentCount - numAlignments) * notSpanningPenaltyMagnitude
@@ -911,7 +913,7 @@ class DJunctor
         // dfmt off
         size_t score = max(0, (
               avgAlignmentScore
-            - shortAlignmentPenalty
+            - shortAnchorPenalty
             - notSpanningPenalty
             - improperAlignmentPenalty
         ));
@@ -920,9 +922,10 @@ class DJunctor
         // dfmt off
         debug logJsonDebug(
             "expectedAlignmentCount", expectedAlignmentCount,
+            "avgAnchorSize", avgAnchorSize,
             "avgAlignmentLength", avgAlignmentLength,
             "avgAlignmentScore", avgAlignmentScore,
-            "shortAlignmentPenalty", shortAlignmentPenalty,
+            "shortAnchorPenalty", shortAnchorPenalty,
             "score", score,
         );
         // dfmt on

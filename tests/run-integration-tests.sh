@@ -511,13 +511,14 @@ function test_short_extension_skipped()
         'extensionLength'
 }
 
-FRONT_EXTENSION_8_LENGTH=2952
+FRONT_EXTENSION_8_LENGTH=2953
 
 function test_front_extension_found()
 {
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
         '.[0].gapInfo | map(select(.type == "front")) | map(.contigIds) == [
+            [1],
             [8]
         ]' \
         '.[0].gapInfo | map(select(.type == "front") | .contigIds)' \
