@@ -8,10 +8,8 @@
 */
 module djunctor.djunctor;
 
-import djunctor.alignments : AlignmentChain, AlignmentContainer, annotateOrder,
-    buildPileUps, getAlignmentChainRefs, getComplementaryOrder,
-    getInsertionSize, getType, haveEqualIds, isBackExtension, isFrontExtension,
-    isGap, isValid, PileUp, ReadAlignment, ReadAlignmentType;
+import djunctor.alignments : AlignmentChain, buildPileUps, getAlignmentChainRefs,
+    getType, haveEqualIds, isGap, isValid, PileUp, ReadAlignment, ReadAlignmentType;
 import djunctor.commandline : Options;
 import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
     getLocalAlignments, getMappings, getNumContigs, getTracePointDistance,
@@ -100,16 +98,16 @@ CroppingRefPosition getCroppingRefPositions(const PileUp pileUp, in size_t trace
 
     if (frontAlignments.length > 0 && backAlignments.length > 0)
     {
-        frontContig = frontAlignments[0].contigB.id;
-        backContig = backAlignments[0].contigB.id;
+        frontContig = frontAlignments[0].contigA.id;
+        backContig = backAlignments[0].contigA.id;
     }
     else if (frontAlignments.length > 0)
     {
-        frontContig = backContig = frontAlignments[0].contigB.id;
+        frontContig = backContig = frontAlignments[0].contigA.id;
     }
     else if (backAlignments.length > 0)
     {
-        backContig = frontContig = backAlignments[0].contigB.id;
+        backContig = frontContig = backAlignments[0].contigA.id;
     }
     else
     {
@@ -127,10 +125,11 @@ CroppingRefPosition getCroppingRefPositions(const PileUp pileUp, in size_t trace
 }
 
 CroppingSlice getCroppingSlice(const AlignmentChain alignmentChain,
-        in CroppingRefPosition croppingRefPosition) pure
+        in CroppingRefPosition croppingRefPosition)
 {
+    auto alignment = const(ReadAlignment)(alignmentChain);
+    auto alignmentType = alignment.type;
     auto tracePointDistance = alignmentChain.tracePointDistance;
-    auto alignmentType = [alignmentChain.getComplementaryOrder].getType;
     // dfmt off
     auto refPos = alignmentType == ReadAlignmentType.front
         ? croppingRefPosition.frontIdx
@@ -194,15 +193,10 @@ size_t getCommonBackTracePoint(const AlignmentChain[] alignmentChains, in size_t
 {
     // dfmt off
     auto alignmentSlices = alignmentChains
-        .map!(ac => ac.complement
-            ? tuple(
-                ac.contigB.length - ac.first.contigB.begin + 0,
-                ac.contigB.length - ac.last.contigB.end + 0,
-            )
-            : tuple(
-                ac.last.contigB.end + 0,
-                ac.first.contigB.begin + 0,
-            ))
+        .map!(ac => tuple(
+            ac.last.contigA.end + 0,
+            ac.first.contigA.begin + 0,
+        ))
         .array;
     // dfmt on
 
@@ -213,7 +207,7 @@ size_t getCommonBackTracePoint(const AlignmentChain[] alignmentChains, in size_t
     // dfmt off
     debug logJsonDebug(
         "alignmentSlices", alignmentSlices.map!"[a[0], a[1]]".array.toJson,
-        "contigBIds", alignmentChains.map!"a.contigB.id".array.toJson,
+        "contigAIds", alignmentChains.map!"a.contigA.id".array.toJson,
         "type", "back",
     );
     // dfmt on
@@ -320,15 +314,10 @@ size_t getCommonFrontTracePoint(const AlignmentChain[] alignmentChains, in size_
 {
     // dfmt off
     auto alignmentSlices = alignmentChains
-        .map!(ac => ac.complement
-            ? tuple(
-                ac.contigB.length - ac.last.contigB.end + 0,
-                ac.contigB.length - ac.first.contigB.begin + 0,
-            )
-            : tuple(
-                ac.first.contigB.begin + 0,
-                ac.last.contigB.end + 0,
-            ))
+        .map!(ac => tuple(
+            ac.first.contigA.begin + 0,
+            ac.last.contigA.end + 0,
+        ))
         .array;
     // dfmt on
 
@@ -339,7 +328,7 @@ size_t getCommonFrontTracePoint(const AlignmentChain[] alignmentChains, in size_
     // dfmt off
     debug logJsonDebug(
         "alignmentSlices", alignmentSlices.map!"[a[0], a[1]]".array.toJson,
-        "contigBIds", alignmentChains.map!"a.contigB.id".array.toJson,
+        "contigAIds", alignmentChains.map!"a.contigA.id".array.toJson,
         "type", "front",
     );
     // dfmt on
@@ -472,12 +461,12 @@ class DJunctor
     size_t numReads;
     AlignmentChain[] selfAlignment;
     ReferenceMask repetitiveRegions;
-    AlignmentContainer!(AlignmentChain[]) readsAlignment;
+    AlignmentChain[] readsAlignment;
     const Options options;
     /// Set of read ids not to be considered in further processing.
     size_t[] catUseless;
     /// Set of alignments to be considered in further processing.
-    AlignmentContainer!(AlignmentChain[]) catCandidates;
+    AlignmentChain[] catCandidates;
     /// Set of alignments to be used for gap filling.
     Hit[] catHits;
     /// Access contigs distributed over several DBs by ID.
@@ -546,8 +535,7 @@ class DJunctor
             options.workdir,
         ));
         // dfmt on
-        annotateOrder(readsAlignment, AlignmentChain.Order.ref2read);
-        catCandidates = AlignmentContainer!(AlignmentChain[])(readsAlignment.a2b.dup, []);
+        catCandidates = readsAlignment.dup;
         logJsonDiagnostic("state", "exit", "function", "djunctor.init");
 
         return this;
@@ -560,15 +548,13 @@ class DJunctor
         {
             assessRepeatStructure();
             filterAlignments();
-            transferA2BCandidatesToB2A();
             findHits();
 
             // dfmt off
             logJsonDiagnostic(
                 "iteration", iteration,
                 "uselessReads", catUseless.toJson,
-                "numCandiatesA2b", catCandidates.a2b.length,
-                "numCandiatesB2a", catCandidates.b2a.length,
+                "numCandiates", catCandidates.length,
                 "numHits", catHits.length
             );
             // dfmt on
@@ -586,6 +572,7 @@ class DJunctor
         return this;
     }
 
+    // TODO move to djunctor.alignments!?
     protected double alignmentCoverage(in AlignmentChain[] alignments) const
     {
         alias AlignmentsPerContig = typeof(alignments.chunkBy!"a.contigA.id == b.contigA.id".front);
@@ -614,7 +601,7 @@ class DJunctor
 
         auto alphaHalf = (1 - options.confidence) / 2;
         auto selfCoverage = alignmentCoverage(selfAlignment);
-        auto readsCoverage = alignmentCoverage(readsAlignment.a2b);
+        auto readsCoverage = alignmentCoverage(readsAlignment);
         // dfmt off
         auto selfCoverageConfidenceInterval = tuple(
             invPoissonCDF(alphaHalf, selfCoverage),
@@ -646,7 +633,7 @@ class DJunctor
         // dfmt off
         auto assessmentStages = tuple(
             assessmentStage("self-alignment", new BadAlignmentCoverageAssessor(selfCoverageConfidenceInterval.expand), selfAlignment),
-            assessmentStage("reads-alignment", new BadAlignmentCoverageAssessor(readsCoverageConfidenceInterval.expand), readsAlignment.a2b),
+            assessmentStage("reads-alignment", new BadAlignmentCoverageAssessor(readsCoverageConfidenceInterval.expand), readsAlignment),
         );
         // dfmt on
 
@@ -701,7 +688,7 @@ class DJunctor
             new RedundantAlignmentChainsFilter(),
         );
         // dfmt on
-        AlignmentChain[] filterInput = catCandidates.a2b[];
+        AlignmentChain[] filterInput = catCandidates[];
         // dfmt off
         logJsonDiagnostic(
             "filterStage", "Input",
@@ -733,21 +720,9 @@ class DJunctor
         }
         auto filterPipelineOutput = filterInput;
 
-        this.catCandidates.a2b = filterPipelineOutput;
+        this.catCandidates = filterPipelineOutput;
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.filterReads");
-
-        return this;
-    }
-
-    protected DJunctor transferA2BCandidatesToB2A()
-    {
-        // dfmt off
-        catCandidates.b2a = catCandidates.a2b
-            .map!getComplementaryOrder
-            .array;
-        catCandidates.b2a.sort();
-        // dfmt on
 
         return this;
     }
@@ -790,6 +765,7 @@ class DJunctor
 
         // dfmt off
         auto pileUps = buildPileUps(catCandidates)
+            // TODO replace with `minimumPileUpCoverage`
             .filter!(pileUp => pileUp.length >= options.minAbsolutePileUpSize)
             .array;
         // dfmt on
@@ -799,7 +775,7 @@ class DJunctor
         logJsonDebug("pileUps", pileUps
             .map!(pileUp => Json([
                 "type": Json(pileUp.getType.to!string),
-                "readAlignments": pileUp.toJson,
+                "readAlignments": pileUp.map!"a[]".array.toJson,
             ]))
             .array
             .toJson);
@@ -825,12 +801,11 @@ class DJunctor
     protected Hit getCroppedPileUpDb(PileUp pileUp)
     {
         auto pileUpType = pileUp.getType;
-        auto complementaryPileUp = pileUp.getComplementaryOrder(readsAlignment.a2b);
-        fetchTracePoints(complementaryPileUp);
-        auto tracePointDistance = complementaryPileUp[0][0].tracePointDistance;
+        fetchTracePoints(pileUp);
+        auto tracePointDistance = pileUp[0][0].tracePointDistance;
         auto croppingRefPositions = pileUp.getCroppingRefPositions(tracePointDistance);
         logJsonDebug("croppingRefPositions", croppingRefPositions.toJson);
-        size_t[] readIds = pileUp.map!"a[0].contigA.id".array;
+        size_t[] readIds = pileUp.map!"a[0].contigB.id + 0".array;
         // dfmt off
         auto rawFastaEntries = zip(
             readIds,
@@ -844,14 +819,14 @@ class DJunctor
         size_t bestInsertionIdx;
         AlignmentChain.Complement bestInsertionComplement;
 
-        foreach (croppedDbIdx, complementaryReadAlignment; complementaryPileUp)
+        foreach (croppedDbIdx, readAlignment; pileUp)
         {
             immutable dummyFastaEntry = typeof(rawFastaEntries.front[1])();
-            auto readId = complementaryReadAlignment[0].contigB.id;
+            auto readId = readAlignment[0].contigB.id;
             auto rawFastaEntry = rawFastaEntries.equalRange(tuple(readId,
                     dummyFastaEntry)).front[1];
             immutable lineSep = typeof(rawFastaEntry).lineSep;
-            auto readCroppingSlice = complementaryReadAlignment.map!(
+            auto readCroppingSlice = readAlignment[].map!(
                     alignmentChain => alignmentChain.getCroppingSlice(croppingRefPositions))
                 .fold!((aSlice, bSlice) => intersection(aSlice, bSlice));
             auto insertionLength = readCroppingSlice[1] - readCroppingSlice[0];
@@ -859,16 +834,16 @@ class DJunctor
             // dfmt off
             debug logJsonDebug(
                 "readId", readId,
-                "complement", complementaryReadAlignment[0].complement,
-                "rawReadCroppingSlices", complementaryReadAlignment.map!(alignmentChain => alignmentChain.getCroppingSlice(croppingRefPositions)).array.toJson,
+                "complement", readAlignment[0].complement,
+                "rawReadCroppingSlices", readAlignment[].map!(alignmentChain => alignmentChain.getCroppingSlice(croppingRefPositions)).array.toJson,
                 "readCroppingSlice", readCroppingSlice.toJson,
                 "croppedReadLength", readCroppingSlice[1] - readCroppingSlice[0],
             );
             // dfmt on
 
-            if (complementaryReadAlignment[0].complement)
+            if (readAlignment[0].complement)
             {
-                auto readLength = complementaryReadAlignment[0].contigB.length;
+                auto readLength = readAlignment[0].contigB.length;
 
                 foreach (ref endpoint; readCroppingSlice)
                     endpoint = readLength - endpoint;
@@ -876,7 +851,7 @@ class DJunctor
             }
             assert(readCroppingSlice[0] < readCroppingSlice[1], "invalid/empty read cropping slice");
 
-            size_t insertionScore = getInsertionScore(complementaryReadAlignment,
+            size_t insertionScore = getInsertionScore(readAlignment,
                     pileUpType, Yes.preferSpanning);
 
             if (insertionScore > bestInsertionScore)
@@ -884,7 +859,7 @@ class DJunctor
                 bestInsertionScore = insertionScore;
                 bestInsertionLength = insertionLength;
                 bestInsertionIdx = croppedDbIdx;
-                bestInsertionComplement = complementaryReadAlignment[0].complement;
+                bestInsertionComplement = readAlignment[0].complement;
             }
 
             auto croppedLength = readCroppingSlice[1] - readCroppingSlice[0];
@@ -900,7 +875,7 @@ class DJunctor
             croppedFastaEntry ~= newHeader;
             croppedFastaEntry ~= lineSep;
             // dfmt off
-            auto croppedSequence = complementaryReadAlignment[0].complement
+            auto croppedSequence = readAlignment[0].complement
                 ? rawFastaEntry[readCroppingSlice[0] .. readCroppingSlice[1]].array.reverseComplement
                 : rawFastaEntry[readCroppingSlice[0] .. readCroppingSlice[1]].array;
             // dfmt on
@@ -944,8 +919,9 @@ class DJunctor
         immutable notSpanningPenaltyMagnitude = AlignmentChain.maxScore / 2;
 
         long expectedAlignmentCount = pileUpType == ReadAlignmentType.gap ? 2 : 1;
-        long avgAlignmentLength = readAlignment.map!"a.totalLength".sum / readAlignment.length;
-        long avgAlignmentScore = readAlignment.map!"a.score".sum / readAlignment.length;
+        // FIXME subtract the masked regions
+        long avgAlignmentLength = readAlignment[].map!"a.totalLength".sum / readAlignment.length;
+        long avgAlignmentScore = readAlignment[].map!"a.score".sum / readAlignment.length;
         long shortAlignmentPenalty = floor(shortAlignmentPenaltyMagnitude * (
                 (options.goodAnchorLength + 1) / avgAlignmentLength.to!float) ^^ 2).to!size_t;
         // dfmt off
@@ -953,6 +929,7 @@ class DJunctor
             ? (expectedAlignmentCount - readAlignment.length) * notSpanningPenaltyMagnitude
             : 0;
         // dfmt on
+        // TODO add penalty for improper alignments
         size_t score = max(0, avgAlignmentScore - shortAlignmentPenalty - notSpanningPenalty);
 
         // dfmt off
@@ -1133,7 +1110,7 @@ class DJunctor
         logJsonDebug(
             "step", "insertHits",
             "type", insertionInfo.type.to!string,
-            "contigIds", refContigIds.map!Json.array,
+            "contigIds", refContigIds.array.toJson,
             "readId", readId,
             "complement", complement.to!bool,
             "insertSequence", insertSequence.array.to!string,
@@ -1260,7 +1237,7 @@ class DJunctor
         static auto getGapInfo(in PileUp pileUp)
         {
             bool isGap = pileUp.isGap;
-            auto type = isGap ? ReadAlignmentType.gap : pileUp[0].getType;
+            auto type = isGap ? ReadAlignmentType.gap : pileUp[0].type;
 
             alias lengthFilter = p => isGap ? p.length == 2 : p.length == 1;
 
@@ -1269,24 +1246,23 @@ class DJunctor
                 "type": Json(type.to!string),
                 "contigIds": pileUp
                     .filter!lengthFilter
-                    .map!(readAlignment => readAlignment
-                        .map!"a.contigB.id"
-                        .map!Json
+                    .map!(readAlignment => readAlignment[]
+                        .map!"a.contigA.id"
                         .array)
                     .front
-                    .Json,
+                    .toJson,
                 "estimateLengthMean": pileUp
                     .filter!lengthFilter
-                    .map!getInsertionSize
+                    .map!"a.getInsertionSize"
                     .array
                     .mean
-                    .Json,
+                    .toJson,
                 "estimateLengthMedian": pileUp
                     .filter!lengthFilter
-                    .map!getInsertionSize
+                    .map!"a.getInsertionSize"
                     .array
                     .median
-                    .Json,
+                    .toJson,
                 "numReads": Json(pileUp.length),
             ]);
             // dfmt on
@@ -1312,7 +1288,6 @@ abstract class ReadFilter : AlignmentChainFilter
 {
     override AlignmentChain[] opCall(AlignmentChain[] alignmentChains)
     {
-        assert(alignmentChains.map!(ac => ac.order == AlignmentChain.Order.ref2read).all);
         // dfmt off
         auto discardedReadIds = getDiscardedReadIds(alignmentChains)
             .map!(ac => ac.contigB.id)
@@ -1362,6 +1337,7 @@ class AmbiguousAlignmentChainsFilter : ReadFilter
         bool isAmgiguouslyAlignedRead(AlignmentsChunk alignmentsChunk)
         {
             auto readAlignments = alignmentsChunk.array;
+            // TODO use getInsertionScore
             readAlignments.sort!"a.score > b.score";
 
             // dfmt off

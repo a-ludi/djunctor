@@ -9,10 +9,10 @@
 module djunctor.alignments;
 
 import djunctor.util.log;
-import djunctor.util.math : absdiff, mean;
+import djunctor.util.math : absdiff;
 import core.exception : AssertError;
 import std.algorithm : all, any, chunkBy, equal, filter, isSorted, map, max,
-    min, sort, sum, swap;
+    mean, min, sort, sum, swap, SwapStrategy;
 import std.array : appender, Appender, array;
 import std.conv : to;
 import std.exception : assertNotThrown, assertThrown;
@@ -23,50 +23,6 @@ import std.typecons : Flag, No, tuple, Tuple, Yes;
 import vibe.data.json : toJson = serializeToJson;
 
 debug import std.stdio : writeln;
-
-/// General container for alignment data.
-template AlignmentContainer(R)
-{
-    struct AlignmentContainer
-    {
-        static immutable orders = tuple("a2b", "b2a");
-        R a2b;
-        R b2a;
-
-        static auto getOrdered(T)(in string order, T thingA, T thingB) pure nothrow
-        {
-            if (order == "a2b")
-                return tuple(thingA, thingB);
-            else if (order == "b2a")
-                return tuple(thingB, thingA);
-            else
-                assert(0, "illegal value");
-        }
-
-        unittest
-        {
-            assert(getOrdered("a2b", 0, 1) == tuple(0, 1));
-            assert(getOrdered("b2a", 0, 1) == tuple(1, 0));
-            assertThrown!AssertError(getOrdered("foo", 0, 1));
-        }
-
-        static auto getOrdered(string order, T)(T thingA, T thingB) pure nothrow
-                if (order == "a2b" || order == "b2a")
-        {
-            static if (order == "a2b")
-                return tuple(thingA, thingB);
-            else
-                return tuple(thingB, thingA);
-        }
-
-        unittest
-        {
-            assert(getOrdered!"a2b"(0, 1) == tuple(0, 1));
-            assert(getOrdered!"b2a"(0, 1) == tuple(1, 0));
-            assert(!__traits(compiles, getOrdered!"foo"(0, 1)));
-        }
-    }
-}
 
 /**
     Holds a chain of local alignments that form a compound alignment. An AlignmentChain should
@@ -106,13 +62,6 @@ struct AlignmentChain
         yes = true,
     }
 
-    static enum Order : int
-    {
-        none,
-        ref2read,
-        read2ref,
-    }
-
     static immutable maxScore = 2 ^^ 16;
 
     size_t id;
@@ -121,7 +70,6 @@ struct AlignmentChain
     Complement complement;
     LocalAlignment[] localAlignments;
     size_t tracePointDistance;
-    Order order;
 
     invariant
     {
@@ -563,36 +511,6 @@ struct AlignmentChain
     }
 }
 
-AlignmentChain.Order reverse(in AlignmentChain.Order order) pure nothrow
-{
-    final switch (order)
-    {
-    case AlignmentChain.Order.none:
-        return AlignmentChain.Order.none;
-    case AlignmentChain.Order.ref2read:
-        return AlignmentChain.Order.read2ref;
-    case AlignmentChain.Order.read2ref:
-        return AlignmentChain.Order.ref2read;
-    }
-}
-
-AlignmentContainer!(AlignmentChain[]) annotateOrder(ref AlignmentContainer!(
-        AlignmentChain[]) alignmentContainer, in AlignmentChain.Order a2bOrder) nothrow
-{
-    foreach (ref alignmentChain; alignmentContainer.a2b)
-    {
-        alignmentChain.order = a2bOrder;
-    }
-
-    auto b2aOrder = a2bOrder.reverse;
-    foreach (ref alignmentChain; alignmentContainer.b2a)
-    {
-        alignmentChain.order = b2aOrder;
-    }
-
-    return alignmentContainer;
-}
-
 bool idsPred(in AlignmentChain ac1, in AlignmentChain ac2) pure
 {
     auto cmpValue = ac1.compareIds(ac2);
@@ -707,18 +625,17 @@ unittest
 }
 
 /**
-    Returns true iff ac1 begins before ac2.
-
-    **Note:** the order is relative to the orientation of the opposite contig.
+    Returns true iff ac1 begins before ac2 in "`contigA`-order".
 */
-bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure 
+bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
         if (contig == "contigA" || contig == "contigB")
 {
     assert(__traits(getMember, ac1, contig) == __traits(getMember, ac2, contig),
             "alignment chains do not belong to the same contig");
+    static if (contig == "contigB")
+        assert(ac1.complement == ac2.complement, "alignment chains must both align complemented or not");
 
-    return __traits(getMember, ac1.first, contig).begin < __traits(getMember,
-            ac2.first, contig).begin;
+    return __traits(getMember, ac1.first, contig).begin < __traits(getMember, ac2.first, contig).begin;
 }
 
 unittest
@@ -739,7 +656,7 @@ unittest
                     foreach (j; 0 .. acs.length)
                     {
                         auto compareValue = isBefore!"contigA"(acs[i], acs[j]);
-                        alias errorMessage = (expValue) => format!"expected idsPred(%s, %s) to be %s but got %s"(
+                        alias errorMessage = (expValue) => format!"expected isBefore!\"contigA\"(%s, %s) to be %s but got %s"(
                                 acs[i], acs[j], expValue, compareValue);
 
                         if (i < j)
@@ -750,24 +667,6 @@ unittest
             }
 }
 
-/**
-    If readAlignment is a gap return true iff the first alignment begins
-    before the second alignment on the reference (contigB); otherwise
-    returns true.
-*/
-bool isInReferenceOrder(in ReadAlignment readAlignment) pure nothrow
-{
-    return !readAlignment.isGap || isBefore!"contigA"(readAlignment[0],
-            readAlignment[1]) != readAlignment[0].complement;
-}
-
-/**
-    Alignment of a read against the reference. This is either one or two
-    alignment chains which belong to the same read and one or two reference
-    contig(s).
-*/
-alias ReadAlignment = AlignmentChain[];
-
 /// Type of the read alignment.
 static enum ReadAlignmentType
 {
@@ -777,968 +676,1037 @@ static enum ReadAlignmentType
 }
 
 /**
-    Returns true iff the read alignment is valid, ie. it is either an
-    extension or gap.
+    Alignment of a read against the reference. This is either one or two
+    alignment chains which belong to the same read and one or two reference
+    contig(s).
 */
-bool isValid(in ReadAlignment readAlignment) pure nothrow
+struct ReadAlignment
 {
-    assert(readAlignment[0].order == AlignmentChain.Order.read2ref,
-            "only applicable for read2ref alignments");
-    return readAlignment.isExtension ^ readAlignment.isGap;
-}
+    AlignmentChain[2] _alignments;
+    size_t _length;
 
-/**
-    Get the type of the read alignment.
-
-    See_Also: `isFrontExtension`, `isBackExtension`, `isGap`
-*/
-ReadAlignmentType getType(in ReadAlignment readAlignment) pure nothrow
-{
-    assert(readAlignment[0].order == AlignmentChain.Order.read2ref,
-            "only applicable for read2ref alignments");
-    assert(readAlignment.isValid, "invalid read alignment");
-
-    if (readAlignment.isGap)
+    this(in AlignmentChain[] alignments...)
     {
-        return ReadAlignmentType.gap;
-    }
-    else if (readAlignment.isFrontExtension)
-    {
-        return ReadAlignmentType.front;
-    }
-    else
-    {
-        return ReadAlignmentType.back;
-    }
-}
+        if (1 <= alignments.length && alignments.length <= 2)
+        {
+            this._length = alignments.length;
 
-/**
-    Returns true iff the read alignment is an extension, ie. it is a front or
-    back extension.
-
-    See_Also: `isFrontExtension`, `isBackExtension`
-*/
-bool isExtension(in ReadAlignment readAlignment) pure nothrow
-{
-    assert(readAlignment[0].order == AlignmentChain.Order.read2ref,
-            "only applicable for read2ref alignments");
-    return readAlignment.isFrontExtension ^ readAlignment.isBackExtension;
-}
-
-/**
-    Returns true iff the read alignment is an front extension, ie. it is an
-    extension and reaches over the front of the reference contig.
-
-    ---
-    Case 1 (complement alignment):
-
-              0             ry lr
-        ref   |--<--<--<-+-<-+--|
-                         | | |
-        read          |--+->-+->-->-->--|
-                      0     ay         la
-
-    Case 2 (non-complement alignment):
-
-                      0  rx
-        ref           |--+->-+->-->-->--|
-                         | | |
-        read  |-->-->-->-+->-+--|
-              0          ax
-    ---
-*/
-bool isFrontExtension(in ReadAlignment readAlignment) pure nothrow
-{
-    assert(readAlignment[0].order == AlignmentChain.Order.read2ref,
-            "only applicable for read2ref alignments");
-    if (readAlignment.length != 1)
-    {
-        return false;
-    }
-
-    auto alignment = readAlignment[0];
-
-    if (alignment.complement)
-    {
-        auto readExtensionLength = alignment.contigA.length - alignment.last.contigA.end;
-        auto referenceExtensionLength = alignment.contigB.length - alignment.last.contigB.end;
-
-        return readExtensionLength > referenceExtensionLength;
-    }
-    else
-    {
-        auto readExtensionLength = alignment.first.contigA.begin;
-        auto referenceExtensionLength = alignment.first.contigB.begin;
-
-        return readExtensionLength > referenceExtensionLength;
-    }
-}
-
-/**
-    Returns true iff the read alignment is an back extension, ie. it is an
-    extension and reaches over the back of the reference contig.
-
-    ---
-    Case 1 (complement alignment):
-
-                      0  rx
-        ref           |--+-<-+-<--<--<--|
-                         | | |
-        read  |-->-->-->-+->-+--|
-              0          ax
-
-    Case 2 (non-complement alignment):
-
-              0             ry lr
-        ref   |-->-->-->-+->-+--|
-                         | | |
-        read          |--+->-+->-->-->--|
-                      0     ay         la
-    ---
-*/
-bool isBackExtension(in ReadAlignment readAlignment) pure nothrow
-{
-    assert(readAlignment[0].order == AlignmentChain.Order.read2ref,
-            "only applicable for read2ref alignments");
-    if (readAlignment.length != 1)
-    {
-        return false;
-    }
-
-    auto alignment = readAlignment[0];
-
-    if (alignment.complement)
-    {
-        auto readExtensionLength = alignment.first.contigA.begin;
-        auto referenceExtensionLength = alignment.first.contigB.begin;
-
-        return readExtensionLength > referenceExtensionLength;
-    }
-    else
-    {
-        auto readExtensionLength = alignment.contigA.length - alignment.last.contigA.end;
-        auto referenceExtensionLength = alignment.contigB.length - alignment.last.contigB.end;
-
-        return readExtensionLength > referenceExtensionLength;
-    }
-}
-
-/**
-    Returns true iff the read alignment spans a gap, ie. two alignments on
-    different reference contigs with different individual extension type are
-    involved.
-
-    ---
-    Case 1 (complement alignment):
-
-              0             ry lr   0             ry lr
-        ref   |--<--<--<-+-<-+--|   |--+-<-+-<-+-<-+--|
-                         | | |         | | |
-        read          |--+->-+->-->-->-+->-+--|
-                      0     ay         la
-
-    Case 1 (complement alignment):
-
-              0             ry lr1  0 rx             lr2
-        ref   |-->-->-->-+->-+--|   |--+->-+->-+->-+--|
-                         | | |         | | |
-        read          |--+->-+->-->-->-+->-+--|
-                      0     ay         bx     la
-    ---
-*/
-bool isGap(in ReadAlignment readAlignment) pure nothrow
-{
-    // dfmt off
-    return readAlignment.length == 2 &&
-        readAlignment[0].contigB.id != readAlignment[1].contigB.id &&
-        readAlignment[0 .. 1].isExtension && readAlignment[1 .. 2].isExtension &&
-        (readAlignment[0 .. 1].isBackExtension == readAlignment[1 .. 2].isFrontExtension);
-    // dfmt on
-}
-
-unittest
-{
-    with (AlignmentChain) with (LocalAlignment) with (Complement)
+            foreach (i, alignment; alignments)
             {
-                // dfmt off
-                auto testCases = [
-                    "innerAlignmentComplement": tuple(
-                        [
-                            AlignmentChain(
-                                1,
-                                Contig(1, 10),
-                                Contig(1, 100),
-                                no,
-                                [
-                                    LocalAlignment(
-                                        Locus(0, 1),
-                                        Locus(10, 11),
-                                        0,
-                                    ),
-                                    LocalAlignment(
-                                        Locus(9, 10),
-                                        Locus(19, 20),
-                                        0,
-                                    ),
-                                ],
-                                0,
-                                Order.read2ref,
-                            ),
-                        ],
-                        No.isValid,
-                        ReadAlignmentType.front,
-                        No.isExtension,
-                        No.isFrontExtension,
-                        No.isBackExtension,
-                        No.isGap,
-                    ),
-                    "innerAlignmentComplement": tuple(
-                        [
-                            AlignmentChain(
-                                2,
-                                Contig(1, 10),
-                                Contig(1, 100),
-                                yes,
-                                [
-                                    LocalAlignment(
-                                        Locus(0, 1),
-                                        Locus(10, 11),
-                                        0,
-                                    ),
-                                    LocalAlignment(
-                                        Locus(9, 10),
-                                        Locus(19, 20),
-                                        0,
-                                    ),
-                                ],
-                                0,
-                                Order.read2ref,
-                            ),
-                        ],
-                        No.isValid,
-                        ReadAlignmentType.front,
-                        No.isExtension,
-                        No.isFrontExtension,
-                        No.isBackExtension,
-                        No.isGap,
-                    ),
-                    "frontExtension": tuple(
-                        [
-                            AlignmentChain(
-                                3,
-                                Contig(1, 10),
-                                Contig(1, 100),
-                                no,
-                                [
-                                    LocalAlignment(
-                                        Locus(5, 6),
-                                        Locus(2, 3),
-                                        0,
-                                    ),
-                                    LocalAlignment(
-                                        Locus(9, 10),
-                                        Locus(5, 6),
-                                        0,
-                                    ),
-                                ],
-                                0,
-                                Order.read2ref,
-                            ),
-                        ],
-                        Yes.isValid,
-                        ReadAlignmentType.front,
-                        Yes.isExtension,
-                        Yes.isFrontExtension,
-                        No.isBackExtension,
-                        No.isGap,
-                    ),
-                    "frontExtensionComplement": tuple(
-                        [
-                            AlignmentChain(
-                                4,
-                                Contig(1, 10),
-                                Contig(1, 100),
-                                yes,
-                                [
-                                    LocalAlignment(
-                                        Locus(0, 1),
-                                        Locus(94, 95),
-                                        0,
-                                    ),
-                                    LocalAlignment(
-                                        Locus(4, 5),
-                                        Locus(97, 98),
-                                        0,
-                                    ),
-                                ],
-                                0,
-                                Order.read2ref,
-                            ),
-                        ],
-                        Yes.isValid,
-                        ReadAlignmentType.front,
-                        Yes.isExtension,
-                        Yes.isFrontExtension,
-                        No.isBackExtension,
-                        No.isGap,
-                    ),
-                    "backExtension": tuple(
-                        [
-                            AlignmentChain(
-                                5,
-                                Contig(1, 10),
-                                Contig(1, 100),
-                                no,
-                                [
-                                    LocalAlignment(
-                                        Locus(0, 1),
-                                        Locus(94, 95),
-                                        0,
-                                    ),
-                                    LocalAlignment(
-                                        Locus(4, 5),
-                                        Locus(97, 98),
-                                        0,
-                                    ),
-                                ],
-                                0,
-                                Order.read2ref,
-                            ),
-                        ],
-                        Yes.isValid,
-                        ReadAlignmentType.back,
-                        Yes.isExtension,
-                        No.isFrontExtension,
-                        Yes.isBackExtension,
-                        No.isGap,
-                    ),
-                    "backExtensionComplement": tuple(
-                        [
-                            AlignmentChain(
-                                6,
-                                Contig(1, 10),
-                                Contig(1, 100),
-                                yes,
-                                [
-                                    LocalAlignment(
-                                        Locus(5, 6),
-                                        Locus(2, 3),
-                                        0,
-                                    ),
-                                    LocalAlignment(
-                                        Locus(9, 10),
-                                        Locus(5, 6),
-                                        0,
-                                    ),
-                                ],
-                                0,
-                                Order.read2ref,
-                            ),
-                        ],
-                        Yes.isValid,
-                        ReadAlignmentType.back,
-                        Yes.isExtension,
-                        No.isFrontExtension,
-                        Yes.isBackExtension,
-                        No.isGap,
-                    ),
-                    "gap": tuple(
-                        [
-                            AlignmentChain(
-                                7,
-                                Contig(1, 10),
-                                Contig(1, 100),
-                                no,
-                                [
-                                    LocalAlignment(
-                                        Locus(0, 1),
-                                        Locus(94, 95),
-                                        0,
-                                    ),
-                                    LocalAlignment(
-                                        Locus(4, 5),
-                                        Locus(97, 98),
-                                        0,
-                                    ),
-                                ],
-                                0,
-                                Order.read2ref,
-                            ),
-                            AlignmentChain(
-                                8,
-                                Contig(1, 10),
-                                Contig(2, 100),
-                                no,
-                                [
-                                    LocalAlignment(
-                                        Locus(5, 6),
-                                        Locus(2, 3),
-                                        0,
-                                    ),
-                                    LocalAlignment(
-                                        Locus(9, 10),
-                                        Locus(5, 6),
-                                        0,
-                                    ),
-                                ],
-                                0,
-                                Order.read2ref,
-                            ),
-                        ],
-                        Yes.isValid,
-                        ReadAlignmentType.gap,
-                        No.isExtension,
-                        No.isFrontExtension,
-                        No.isBackExtension,
-                        Yes.isGap,
-                    ),
-                    "gapComplement": tuple(
-                        [
-                            AlignmentChain(
-                                9,
-                                Contig(1, 10),
-                                Contig(1, 100),
-                                yes,
-                                [
-                                    LocalAlignment(
-                                        Locus(5, 6),
-                                        Locus(2, 3),
-                                        0,
-                                    ),
-                                    LocalAlignment(
-                                        Locus(9, 10),
-                                        Locus(5, 6),
-                                        0,
-                                    ),
-                                ],
-                                0,
-                                Order.read2ref,
-                            ),
-                            AlignmentChain(
-                                10,
-                                Contig(1, 10),
-                                Contig(2, 100),
-                                yes,
-                                [
-                                    LocalAlignment(
-                                        Locus(0, 1),
-                                        Locus(94, 95),
-                                        0,
-                                    ),
-                                    LocalAlignment(
-                                        Locus(4, 5),
-                                        Locus(97, 98),
-                                        0,
-                                    ),
-                                ],
-                                0,
-                                Order.read2ref,
-                            ),
-                        ],
-                        Yes.isValid,
-                        ReadAlignmentType.gap,
-                        No.isExtension,
-                        No.isFrontExtension,
-                        No.isBackExtension,
-                        Yes.isGap,
-                    ),
-                ];
-                // dfmt on
+                this._alignments[i] = cast(AlignmentChain) alignment;
+            }
+        }
+        else
+        {
+            // dfmt off
+            logJsonDiagnostic(
+                "info", format!"creating invalid read alignment with %d local alignments"(alignments.length),
+                "alignments", alignments.toJson,
+            );
+            // dfmt on
 
-                alias getFailureMessage = (testCase, testFunction, expectedValue) => format!"expected %s(%s) to be %s"(
-                        testFunction, testCase, expectedValue);
+            this._length = 0;
+        }
+    }
 
-                foreach (testCase, testData; testCases)
+    invariant
+    {
+        // If one of the alignments is in reverse-complement and the other not
+        // then the same part of the read aligns twice which is an illegal
+        // spanning alignment.
+        assert(_length != 2 || _alignments[0].complement == _alignments[1].complement);
+    }
+
+    @property size_t length() pure const nothrow
+    {
+        return _length;
+    }
+
+    @property size_t opDollar() pure const nothrow
+    {
+        return _length;
+    }
+
+    inout(AlignmentChain[]) opIndex() inout pure nothrow
+    {
+        return _alignments[0 .. _length];
+    }
+
+    inout(AlignmentChain) opIndex(T)(T idx) inout pure nothrow
+    {
+        return this[][idx];
+    }
+
+    unittest
+    {
+        auto ac1 = AlignmentChain(1);
+        auto ac2 = AlignmentChain(2);
+
+        auto ra1 = ReadAlignment(ac1);
+
+        assert(ra1.length == 1);
+        assert(ra1[] == [ac1]);
+        assert(ra1[0] == ac1);
+        assert(ra1[$ - 1] == ac1);
+
+        auto ra2 = ReadAlignment(ac1, ac2);
+
+        assert(ra2.length == 2);
+        assert(ra2[] == [ac1, ac2]);
+        assert(ra2[0] == ac1);
+        assert(ra2[1] == ac2);
+        assert(ra2[$ - 1] == ac2);
+    }
+
+    /**
+        If readAlignment is a gap return true iff the first alignment begins
+        before the second alignment on the reference (`contigA`); otherwise
+        returns true.
+    */
+    @property bool isInOrder() const pure nothrow
+    {
+        return !isGap || isBefore!"contigB"(_alignments[0], _alignments[1]);
+    }
+
+    void forceInOrder() pure nothrow
+    {
+        if (!isInOrder && isGap)
+        {
+            swap(_alignments[0], _alignments[1]);
+        }
+    }
+
+    /**
+        Returns true iff the read alignment is valid, ie. it is either an
+        extension or gap.
+    */
+    @property bool isValid() const pure nothrow
+    {
+        return isExtension ^ isGap;
+    }
+
+    /**
+        Get the type of the read alignment.
+
+        See_Also: `isFrontExtension`, `isBackExtension`, `isGap`
+    */
+    @property ReadAlignmentType type() const pure nothrow
+    {
+        assert(isValid, "invalid read alignment");
+
+        if (isGap)
+        {
+            return ReadAlignmentType.gap;
+        }
+        else if (isFrontExtension)
+        {
+            return ReadAlignmentType.front;
+        }
+        else
+        {
+            return ReadAlignmentType.back;
+        }
+    }
+
+    /**
+        Returns true iff the read alignment is an extension, ie. it is a front or
+        back extension.
+
+        See_Also: `isFrontExtension`, `isBackExtension`
+    */
+    @property bool isExtension() const pure nothrow
+    {
+        if (_length != 1)
+        {
+            return false;
+        }
+
+        return _isExtension(_alignments[0]);
+    }
+
+    private static bool _isExtension(in AlignmentChain alignment) pure nothrow
+    {
+        return _isFrontExtension(alignment) ^ _isBackExtension(alignment);
+    }
+
+    /**
+        Returns true iff the read alignment is an front extension, ie. it is an
+        extension and reaches over the front of the reference contig.
+
+        ---
+        Case 1 (complement alignment):
+
+                          0  rx
+            ref           |--+->-+->-->-->--|
+                             | | |
+            read  |--<--<--<-+-<-+--|
+                  0          ax
+
+        Case 2 (non-complement alignment):
+
+                          0  rx
+            ref           |--+->-+->-->-->--|
+                             | | |
+            read  |-->-->-->-+->-+--|
+                  0          ax
+        ---
+    */
+    @property bool isFrontExtension() const pure nothrow
+    {
+        if (_length != 1)
+        {
+            return false;
+        }
+
+        return _isFrontExtension(_alignments[0]);
+    }
+
+    private static bool _isFrontExtension(in AlignmentChain alignment) pure nothrow
+    {
+        auto readExtensionLength = alignment.first.contigB.begin;
+        auto referenceExtensionLength = alignment.first.contigA.begin;
+
+        return readExtensionLength > referenceExtensionLength;
+    }
+
+    /**
+        Returns true iff the read alignment is an back extension, ie. it is an
+        extension and reaches over the back of the reference contig.
+
+        ---
+        Case 1 (complement alignment):
+
+                  0             ry lr
+            ref   |-->-->-->-+->-+--|
+                             | | |
+            read          |--+-<-+-<--<--<--|
+                          0     ay         la
+
+        Case 2 (non-complement alignment):
+
+                  0             ry lr
+            ref   |-->-->-->-+->-+--|
+                             | | |
+            read          |--+->-+->-->-->--|
+                          0     ay         la
+        ---
+    */
+    @property bool isBackExtension() const pure nothrow
+    {
+        if (_length != 1)
+        {
+            return false;
+        }
+
+        return _isBackExtension(_alignments[0]);
+    }
+
+    private static bool _isBackExtension(in AlignmentChain alignment) pure nothrow
+    {
+        auto readExtensionLength = alignment.contigB.length - alignment.last.contigB.end;
+        auto referenceExtensionLength = alignment.contigA.length - alignment.last.contigA.end;
+
+        return readExtensionLength > referenceExtensionLength;
+    }
+
+    /**
+        Returns true iff the read alignment spans a gap, ie. two alignments on
+        different reference contigs with different individual extension type are
+        involved.
+
+        ---
+        Case 1 (complement alignment):
+
+                  0             ry lr   0             ry lr
+            ref   |--<--<--<-+-<-+--|   |--+-<-+-<-+-<-+--|
+                             | | |         | | |
+            read          |--+->-+->-->-->-+->-+--|
+                          0     ay         la
+
+        Case 1 (complement alignment):
+
+                  0             ry lr1  0 rx             lr2
+            ref   |-->-->-->-+->-+--|   |--+->-+->-+->-+--|
+                             | | |         | | |
+            read          |--+->-+->-->-->-+->-+--|
+                          0     ay         bx     la
+        ---
+    */
+    @property bool isGap() const pure nothrow
+    {
+        // dfmt off
+        return _length == 2 &&
+            _alignments[0].contigA.id != _alignments[1].contigA.id &&
+            _alignments[0].contigB.id == _alignments[1].contigB.id &&
+            _isExtension(_alignments[0]) && _isExtension(_alignments[1]) &&
+            (_isBackExtension(_alignments[0]) == _isFrontExtension(_alignments[1]));
+        // dfmt on
+    }
+
+    unittest
+    {
+        with (AlignmentChain) with (LocalAlignment) with (Complement)
                 {
-                    auto readAlignment = testData[0];
+                    // dfmt off
+                    auto testCases = [
+                        "innerAlignmentComplement": tuple(
+                            ReadAlignment(
+                                AlignmentChain(
+                                    1,
+                                    Contig(1, 100),
+                                    Contig(1, 10),
+                                    no,
+                                    [
+                                        LocalAlignment(
+                                            Locus(10, 11),
+                                            Locus(0, 1),
+                                            0,
+                                        ),
+                                        LocalAlignment(
+                                            Locus(19, 20),
+                                            Locus(9, 10),
+                                            0,
+                                        ),
+                                    ],
+                                ),
+                            ),
+                            No.isValid,
+                            ReadAlignmentType.front,
+                            No.isExtension,
+                            No.isFrontExtension,
+                            No.isBackExtension,
+                            No.isGap,
+                        ),
+                        "innerAlignmentComplement": tuple(
+                            ReadAlignment(
+                                AlignmentChain(
+                                    2,
+                                    Contig(1, 100),
+                                    Contig(1, 10),
+                                    yes,
+                                    [
+                                        LocalAlignment(
+                                            Locus(10, 11),
+                                            Locus(0, 1),
+                                            0,
+                                        ),
+                                        LocalAlignment(
+                                            Locus(19, 20),
+                                            Locus(9, 10),
+                                            0,
+                                        ),
+                                    ],
+                                ),
+                            ),
+                            No.isValid,
+                            ReadAlignmentType.front,
+                            No.isExtension,
+                            No.isFrontExtension,
+                            No.isBackExtension,
+                            No.isGap,
+                        ),
+                        "frontExtension": tuple(
+                            ReadAlignment(
+                                AlignmentChain(
+                                    3,
+                                    Contig(1, 100),
+                                    Contig(1, 10),
+                                    no,
+                                    [
+                                        LocalAlignment(
+                                            Locus(2, 3),
+                                            Locus(5, 6),
+                                            0,
+                                        ),
+                                        LocalAlignment(
+                                            Locus(5, 6),
+                                            Locus(9, 10),
+                                            0,
+                                        ),
+                                    ],
+                                ),
+                            ),
+                            Yes.isValid,
+                            ReadAlignmentType.front,
+                            Yes.isExtension,
+                            Yes.isFrontExtension,
+                            No.isBackExtension,
+                            No.isGap,
+                        ),
+                        "frontExtensionComplement": tuple(
+                            ReadAlignment(
+                                AlignmentChain(
+                                    4,
+                                    Contig(1, 100),
+                                    Contig(1, 10),
+                                    yes,
+                                    [
+                                        LocalAlignment(
+                                            Locus(2, 3),
+                                            Locus(5, 6),
+                                            0,
+                                        ),
+                                        LocalAlignment(
+                                            Locus(5, 6),
+                                            Locus(9, 10),
+                                            0,
+                                        ),
+                                    ],
+                                ),
+                            ),
+                            Yes.isValid,
+                            ReadAlignmentType.front,
+                            Yes.isExtension,
+                            Yes.isFrontExtension,
+                            No.isBackExtension,
+                            No.isGap,
+                        ),
+                        "backExtension": tuple(
+                            ReadAlignment(
+                                AlignmentChain(
+                                    5,
+                                    Contig(1, 100),
+                                    Contig(1, 10),
+                                    no,
+                                    [
+                                        LocalAlignment(
+                                            Locus(94, 95),
+                                            Locus(0, 1),
+                                            0,
+                                        ),
+                                        LocalAlignment(
+                                            Locus(97, 98),
+                                            Locus(4, 5),
+                                            0,
+                                        ),
+                                    ],
+                                ),
+                            ),
+                            Yes.isValid,
+                            ReadAlignmentType.back,
+                            Yes.isExtension,
+                            No.isFrontExtension,
+                            Yes.isBackExtension,
+                            No.isGap,
+                        ),
+                        "backExtensionComplement": tuple(
+                            ReadAlignment(
+                                AlignmentChain(
+                                    6,
+                                    Contig(1, 100),
+                                    Contig(1, 10),
+                                    yes,
+                                    [
+                                        LocalAlignment(
+                                            Locus(94, 95),
+                                            Locus(0, 1),
+                                            0,
+                                        ),
+                                        LocalAlignment(
+                                            Locus(97, 98),
+                                            Locus(4, 5),
+                                            0,
+                                        ),
+                                    ],
+                                ),
+                            ),
+                            Yes.isValid,
+                            ReadAlignmentType.back,
+                            Yes.isExtension,
+                            No.isFrontExtension,
+                            Yes.isBackExtension,
+                            No.isGap,
+                        ),
+                        "gap": tuple(
+                            ReadAlignment(
+                                AlignmentChain(
+                                    7,
+                                    Contig(1, 100),
+                                    Contig(1, 10),
+                                    no,
+                                    [
+                                        LocalAlignment(
+                                            Locus(94, 95),
+                                            Locus(0, 1),
+                                            0,
+                                        ),
+                                        LocalAlignment(
+                                            Locus(97, 98),
+                                            Locus(4, 5),
+                                            0,
+                                        ),
+                                    ],
+                                ),
+                                AlignmentChain(
+                                    8,
+                                    Contig(2, 100),
+                                    Contig(1, 10),
+                                    no,
+                                    [
+                                        LocalAlignment(
+                                            Locus(2, 3),
+                                            Locus(5, 6),
+                                            0,
+                                        ),
+                                        LocalAlignment(
+                                            Locus(5, 6),
+                                            Locus(9, 10),
+                                            0,
+                                        ),
+                                    ],
+                                ),
+                            ),
+                            Yes.isValid,
+                            ReadAlignmentType.gap,
+                            No.isExtension,
+                            No.isFrontExtension,
+                            No.isBackExtension,
+                            Yes.isGap,
+                        ),
+                        "gapComplement": tuple(
+                            ReadAlignment(
+                                AlignmentChain(
+                                    9,
+                                    Contig(1, 100),
+                                    Contig(1, 10),
+                                    yes,
+                                    [
+                                        LocalAlignment(
+                                            Locus(2, 3),
+                                            Locus(5, 6),
+                                            0,
+                                        ),
+                                        LocalAlignment(
+                                            Locus(5, 6),
+                                            Locus(9, 10),
+                                            0,
+                                        ),
+                                    ],
+                                ),
+                                AlignmentChain(
+                                    10,
+                                    Contig(2, 100),
+                                    Contig(1, 10),
+                                    yes,
+                                    [
+                                        LocalAlignment(
+                                            Locus(94, 95),
+                                            Locus(0, 1),
+                                            0,
+                                        ),
+                                        LocalAlignment(
+                                            Locus(97, 98),
+                                            Locus(4, 5),
+                                            0,
+                                        ),
+                                    ],
+                                ),
+                            ),
+                            Yes.isValid,
+                            ReadAlignmentType.gap,
+                            No.isExtension,
+                            No.isFrontExtension,
+                            No.isBackExtension,
+                            Yes.isGap,
+                        ),
+                    ];
+                    // dfmt on
 
-                    assert(testData[1] == isValid(readAlignment),
-                            getFailureMessage(testCase, "isValid", testData[1]));
-                    if (isValid(readAlignment))
-                        assert(testData[2] == getType(readAlignment),
-                                getFailureMessage(testCase, "getType", testData[2]));
-                    else
-                        assertThrown!AssertError(getType(readAlignment),
-                                format!"expected getType(%s) to throw"(testCase));
-                    assert(testData[3] == isExtension(readAlignment),
-                            getFailureMessage(testCase, "isExtension", testData[3]));
-                    assert(testData[4] == isFrontExtension(readAlignment),
-                            getFailureMessage(testCase, "isFrontExtension", testData[4]));
-                    assert(testData[5] == isBackExtension(readAlignment),
-                            getFailureMessage(testCase, "isBackExtension", testData[5]));
-                    assert(testData[6] == isGap(readAlignment),
-                            getFailureMessage(testCase, "isGap", testData[6]));
+                    alias getFailureMessage = (testCase, testFunction, expectedValue) => format!"expected %s.%s to be %s"(
+                            testCase, testFunction, expectedValue);
+
+                    foreach (testCase, testData; testCases)
+                    {
+                        auto readAlignment = testData[0];
+
+                        assert(testData[1] == readAlignment.isValid,
+                                getFailureMessage(testCase, "isValid", testData[1]));
+                        if (readAlignment.isValid)
+                            assert(testData[2] == readAlignment.type,
+                                    getFailureMessage(testCase, "type", testData[2]));
+                        else
+                            assertThrown!AssertError(readAlignment.type,
+                                    format!"expected type(%s) to throw"(testCase));
+                        assert(testData[3] == readAlignment.isExtension,
+                                getFailureMessage(testCase, "isExtension", testData[3]));
+                        assert(testData[4] == readAlignment.isFrontExtension,
+                                getFailureMessage(testCase, "isFrontExtension", testData[4]));
+                        assert(testData[5] == readAlignment.isBackExtension,
+                                getFailureMessage(testCase, "isBackExtension", testData[5]));
+                        assert(testData[6] == readAlignment.isGap,
+                                getFailureMessage(testCase, "isGap", testData[6]));
+                    }
                 }
-            }
-}
-
-/**
-    Returns the (approximate) size of the insertion produced by this
-    read alignment.
-
-    See_Also: `getGapSize`, `getExtensionSize`
-*/
-long getInsertionSize(in ReadAlignment readAlignment) pure
-{
-    final switch (readAlignment.getType)
-    {
-    case ReadAlignmentType.front:
-    case ReadAlignmentType.back:
-        return readAlignment.getExtensionSize();
-    case ReadAlignmentType.gap:
-        return readAlignment.getGapSize();
     }
-}
 
-unittest
-{
-    with (AlignmentChain) with (LocalAlignment) with (Complement)
-            {
-                // dfmt off
-                auto extensionAlignment = [
-                    AlignmentChain(0, Contig(1, 50), Contig(1, 50), no, [
-                        LocalAlignment(Locus(0, 15), Locus(10, 20), 0),
-                        LocalAlignment(Locus(20, 40), Locus(30, 50), 1),
-                    ], 0, Order.read2ref)
-                ];
-                auto gapAlignment = [
-                    AlignmentChain(0, Contig(1, 80), Contig(1, 50), no, [
-                        LocalAlignment(Locus(10, 15), Locus(30, 35), 0),
-                        LocalAlignment(Locus(20, 30), Locus(40, 50), 1),
-                    ], 0, Order.read2ref),
-                    AlignmentChain(1, Contig(1, 80), Contig(2, 50), no, [
-                        LocalAlignment(Locus(50, 55), Locus(0, 10), 2),
-                        LocalAlignment(Locus(60, 70), Locus(15, 20), 3),
-                    ], 0, Order.read2ref),
-                ];
-                // dfmt on
+    /**
+        Returns the (approximate) size of the insertion produced by this
+        read alignment.
 
-                assert(extensionAlignment.getInsertionSize == extensionAlignment.getExtensionSize);
-                assert(gapAlignment.getInsertionSize == gapAlignment.getGapSize);
-            }
-}
+        See_Also: `getGapSize`, `getExtensionSize`
+    */
+    long getInsertionSize() const pure
+    {
+        final switch (type)
+        {
+        case ReadAlignmentType.front:
+        case ReadAlignmentType.back:
+            return getExtensionSize();
+        case ReadAlignmentType.gap:
+            return getGapSize();
+        }
+    }
 
-/**
-    Returns the (approximate) size of the extension constituted by alignmentsRange.
-    ---
-    extensionSize ~= readsSequenceLength - referenceExcess
-
-    CASE 1 (back extension, no complement):
-
-                   0       rx  ry  lr
-        reference  |-------+---+---|
-                            \ \ \
-                             \ \ \
-                   alignment  \ \ \
-                               \ \ \
-        read            |-->-->-+->-+->-->--|
-                        0       ax  ay      la
-
-        readsSequenceLength ~= la - ay
-        referenceExcess ~= lr - ry
-
-    CASE 2 (front extension, no complement):
-
-                            0    rx  ry lr
-        reference           |---+---+-------|
-                               / / /
-                              / / /
-                  alignment  / / /
-                            / / /
-        read       |-->-->-+->-+->-->--|
-                   0       ax  ay      la
-
-        readsSequenceLength ~= ax - 0 = ax
-        referenceExcess ~= rx - 0 = rx
-
-    CASE 3 (back extension, complement):
-
-                   0       rx  ry  lr
-        reference  |-------+---+---|
-                            \ \ \
-                             \ \ \
-                   alignment  \ \ \
-                               \ \ \
-        read            |--<--<-+-<-+-<--<--|
-                        0       ax  ay      la
-
-        readsSequenceLength ~= la - ay
-        referenceExcess ~= lr - ry
-
-    CASE 4 (front extension, complement):
-
-                            0    rx  ry lr
-        reference           |---+---+-------|
-                               / / /
-                              / / /
-                  alignment  / / /
-                            / / /
-        read       |--<--<-+-<-+-<--<--|
-                   0       ax  ay      la
-
-        readsSequenceLength ~= ax - 0 = ax
-        referenceExcess ~= rx - 0 = rx
-    ---
-*/
-private long getExtensionSize(in ReadAlignment readAlignment) pure
-{
-    assert(readAlignment.isExtension);
-
-    auto alignment = readAlignment[0];
-    // CASE 1/3 (back extension)
-    long readsSequenceLengthRightExtension = alignment.contigA.length - alignment.last.contigA.end;
-    long referenceExcessRightExtension = alignment.contigB.length - alignment.last.contigB.end;
-    // CASE 2/4 (front extension)
-    long readsSequenceLengthLeftExtension = alignment.first.contigA.begin;
-    long referenceExcessLeftExtension = alignment.first.contigB.begin;
-
-    // dfmt off
-    return max(
-        // Case 1/3 (back extension)
-        readsSequenceLengthRightExtension - referenceExcessRightExtension,
-        // Case 2/4 (front extension)
-        readsSequenceLengthLeftExtension - referenceExcessLeftExtension,
-    );
-    // dfmt on
-}
-
-unittest
-{
-    with (AlignmentChain) with (LocalAlignment) with (Complement)
-            {
-                // dfmt off
-                auto testCases = [
-                    // CASE 1 (right extension, no complement)
-                    // ------------------------------------
-                    //            0      10  50  50
-                    // reference  |-------+---+---|
-                    //                     \ \ \
-                    // read         |-->-->-+->-+->-->--|
-                    //              0       0  40      50
-                    tuple(
-                        [AlignmentChain(0, Contig(1, 50), Contig(1, 50), no, [
+    unittest
+    {
+        with (AlignmentChain) with (LocalAlignment) with (Complement)
+                {
+                    // dfmt off
+                    auto extensionAlignment = ReadAlignment(
+                        AlignmentChain(0, Contig(1, 50), Contig(1, 50), no, [
                             LocalAlignment(Locus(0, 15), Locus(10, 20), 0),
                             LocalAlignment(Locus(20, 40), Locus(30, 50), 1),
-                        ], 0, Order.read2ref)],
-                        10
-                    ),
-                    //            0      10  45  50
-                    // reference  |-------+---+---|
-                    //                     \ \ \
-                    // read         |-->-->-+->-+->-->--|
-                    //              0       0  40      50
-                    tuple(
-                        [AlignmentChain(1, Contig(1, 50), Contig(1, 50), no, [
-                            LocalAlignment(Locus(0, 15), Locus(10, 20), 2),
-                            LocalAlignment(Locus(20, 40), Locus(30, 45), 3),
-                        ], 0, Order.read2ref)],
-                        5
-                    ),
-                    // CASE 2 (left extension, no complement):
-                    // ------------------------------------
-                    //                  0   0  40      50
-                    // reference        |---+---+-------|
-                    //                     / / /
-                    // read       |-->-->-+->-+->-->--|
-                    //            0      10  50      50
-                    tuple(
-                        [AlignmentChain(2, Contig(1, 50), Contig(1, 50), no, [
-                            LocalAlignment(Locus(10, 15), Locus(0, 20), 4),
-                            LocalAlignment(Locus(20, 50), Locus(30, 40), 5),
-                        ], 0, Order.read2ref)],
-                        10
-                    ),
-                    //                  0   5  40      50
-                    // reference        |---+---+-------|
-                    //                     / / /
-                    // read       |-->-->-+->-+->-->--|
-                    //            0      10  50      50
-                    tuple(
-                        [AlignmentChain(3, Contig(1, 50), Contig(1, 50), no, [
-                            LocalAlignment(Locus(10, 15), Locus(5, 20), 6),
-                            LocalAlignment(Locus(20, 50), Locus(30, 40), 7),
-                        ], 0, Order.read2ref)],
-                        5
-                    ),
-                    // CASE 3 (right extension, complement):
-                    // ------------------------------------
-                    //            0      10  50  50
-                    // reference  |-------+---+---|
-                    //                     \ \ \
-                    // read         |--<--<-+-<-+-<--<--|
-                    //              0       0   40      50
-                    tuple(
-                        [AlignmentChain(4, Contig(1, 50), Contig(1, 50), yes, [
-                            LocalAlignment(Locus(0, 15), Locus(10, 20), 8),
-                            LocalAlignment(Locus(20, 40), Locus(30, 50), 9),
-                        ], 0, Order.read2ref)],
-                        10
-                    ),
-                    //            0      10  45  50
-                    // reference  |-------+---+---|
-                    //                     \ \ \
-                    // read         |--<--<-+-<-+-<--<--|
-                    //              0       0   50      50
-                    tuple(
-                        [AlignmentChain(5, Contig(1, 50), Contig(1, 50), yes, [
-                            LocalAlignment(Locus(0, 15), Locus(10, 20), 10),
-                            LocalAlignment(Locus(20, 40), Locus(30, 45), 11),
-                        ], 0, Order.read2ref)],
-                        5
-                    ),
-                    // CASE 4 (left extension, complement):
-                    // ------------------------------------
-                    //                  0   0  40      50
-                    // reference        |---+---+-------|
-                    //                     / / /
-                    // read       |--<--<-+-<-+-<--<--|
-                    //            0       10  50      50
-                    tuple(
-                        [AlignmentChain(6, Contig(1, 50), Contig(1, 50), yes, [
-                            LocalAlignment(Locus(10, 15), Locus(0, 20), 12),
-                            LocalAlignment(Locus(20, 50), Locus(30, 40), 13),
-                        ], 0, Order.read2ref)],
-                        10
-                    ),
-                    //                  0   5  40      50
-                    // reference        |---+---+-------|
-                    //                     / / /
-                    // read       |--<--<-+-<-+-<--<--|
-                    //            0       10  50      50
-                    tuple(
-                        [AlignmentChain(7, Contig(1, 50), Contig(1, 50), yes, [
-                            LocalAlignment(Locus(10, 15), Locus(5, 20), 14),
-                            LocalAlignment(Locus(20, 50), Locus(30, 40), 15),
-                        ], 0, Order.read2ref)],
-                        5
-                    ),
-                ];
-                // dfmt on
+                        ])
+                    );
+                    auto gapAlignment = ReadAlignment(
+                        AlignmentChain(0, Contig(1, 50), Contig(1, 80), no, [
+                            LocalAlignment(Locus(30, 35), Locus(10, 15), 0),
+                            LocalAlignment(Locus(40, 50), Locus(20, 30), 1),
+                        ]),
+                        AlignmentChain(1, Contig(2, 50), Contig(1, 80), no, [
+                            LocalAlignment(Locus(0, 10), Locus(50, 55), 2),
+                            LocalAlignment(Locus(15, 20), Locus(60, 70), 3),
+                        ]),
+                    );
+                    // dfmt on
 
-                foreach (testCaseIdx, testCase; testCases.enumerate)
-                {
-                    auto gotValue = getExtensionSize(testCase[0]);
-                    auto expValue = testCase[1];
-                    auto errorMessage = format!"expected extension size %d but got %d for test case %d"(
-                            expValue, gotValue, testCaseIdx);
-
-                    assert(gotValue == expValue, errorMessage);
+                    assert(extensionAlignment.getInsertionSize == extensionAlignment.getExtensionSize);
+                    assert(gapAlignment.getInsertionSize == gapAlignment.getGapSize);
                 }
-            }
-}
+    }
 
-/**
-    Returns the (approximate) size of the gap spanned by this read alignment.
-    ---
-    gapSize = readsSequenceLength - referenceExcess
+    /**
+        Returns the (approximate) size of the extension constituted by alignmentsRange.
+        ---
+        extensionSize ~= readsSequenceLength - referenceExcess
 
-    readsSequenceLength ~= a2x - a1y
+        CASE 1 (back extension, no complement):
 
-    referenceExcess ~= referenceExcess1 + referenceExcess2
+                       0       rx  ry  lr
+            reference  |-------+---+---|
+                                \ \ \
+                                 \ \ \
+                       alignment  \ \ \
+                                   \ \ \
+            read            |-->-->-+->-+->-->--|
+                            0       ax  ay      la
 
-    referenceExcess1 ~= la - cay
-    referenceExcess2 ~= cbx - 0 = cbx
+            readsSequenceLength ~= la - ay
+            referenceExcess ~= lr - ry
 
-    CASE 1 (no complement):
+        CASE 2 (front extension, no complement):
 
-                        contig a                  contig b
+                                0    rx  ry lr
+            reference           |---+---+-------|
+                                   / / /
+                                  / / /
+                      alignment  / / /
+                                / / /
+            read       |-->-->-+->-+->-->--|
+                       0       ax  ay      la
 
-                  0         cax cay la      0   cbx cby       lb
-        reference |---------+---+---|       |---+---+---------|
-                             \ \ \             / / /
-                              \ \ \           / / /
-                  alignment 1  \ \ \         / / /  alignment 2
-                                \ \ \       / / /
-        read            |-->-->--+->-+-->--+->-+-->-->--|
-                        0        a1x a1y   a2x a2y      lr
+            readsSequenceLength ~= ax - 0 = ax
+            referenceExcess ~= rx - 0 = rx
 
-    CASE 2 (complement):
+        CASE 3 (back extension, complement):
 
-                        contig b                  contig a
+                       0       rx  ry  lr
+            reference  |-------+---+---|
+                                \ \ \
+                                 \ \ \
+                       alignment  \ \ \
+                                   \ \ \
+            read            |--<--<-+-<-+-<--<--|
+                            0       ax  ay      la
 
-                  0         cax cay la      0   cbx cby       lb
-        reference |---------+---+---|       |---+---+---------|
-                             \ \ \             / / /
-                              \ \ \           / / /
-                  alignment 2  \ \ \         / / /  alignment 1
-                                \ \ \       / / /
-        read            |--<--<--+-<-+--<--+-<-+--<--<--|
-                        0        a1x a1y   a2x a2y      lr
-    ---
-*/
-private long getGapSize(in ReadAlignment readAlignment) pure
-{
-    assert(readAlignment.isGap);
-    // dfmt off
-    auto alignments = isBefore!"contigA"(readAlignment[0], readAlignment[1])
-        ? tuple(readAlignment[0], readAlignment[1])
-        : tuple(readAlignment[1], readAlignment[0]);
-    // dfmt on
-    auto firstAlignment = alignments[0];
-    auto secondAlignment = alignments[1];
+            readsSequenceLength ~= la - ay
+            referenceExcess ~= lr - ry
 
-    assert(secondAlignment.first.contigA.begin > firstAlignment.last.contigA.end,
-            format!"intersecting local alignments in (%s, %s)"(firstAlignment, secondAlignment));
+        CASE 4 (front extension, complement):
 
-    long readsSequenceLength = secondAlignment.first.contigA.begin - firstAlignment
-        .last.contigA.end;
-    // dfmt off
-    long referenceExcess1 = firstAlignment.contigB.length - firstAlignment.last.contigB.end;
-    long referenceExcess2 = secondAlignment.first.contigB.begin;
-    // dfmt on
-    long referenceExcess = referenceExcess1 + referenceExcess2;
+                                0    rx  ry lr
+            reference           |---+---+-------|
+                                   / / /
+                                  / / /
+                      alignment  / / /
+                                / / /
+            read       |--<--<-+-<-+-<--<--|
+                       0       ax  ay      la
 
-    return readsSequenceLength - referenceExcess;
-}
+            readsSequenceLength ~= ax - 0 = ax
+            referenceExcess ~= rx - 0 = rx
+        ---
+    */
+    private long getExtensionSize() const pure nothrow
+    {
+        assert(isExtension);
 
-unittest
-{
-    with (AlignmentChain) with (LocalAlignment) with (Complement)
-            {
-                // dfmt off
-                auto testCases = [
-                    // CASE 1 (no complement)
-                    // ------------------------------------
-                    //           0     30  50  50     0   0  20     50
-                    // reference |------+---+---|     |---+---+------|
-                    //                   \ \ \           / / /
-                    //       alignment 1  \ \ \         / / /  alignment 2
-                    //                     \ \ \       / / /
-                    // read        |-->-->--+->-+-->--+->-+-->-->--|
-                    //             0       10   30   50  70       80
-                    tuple(
-                        [
-                            AlignmentChain(0, Contig(1, 80), Contig(1, 50), no, [
-                                LocalAlignment(Locus(10, 15), Locus(30, 35), 0),
-                                LocalAlignment(Locus(20, 30), Locus(40, 50), 1),
-                            ], 0, Order.read2ref),
-                            AlignmentChain(1, Contig(1, 80), Contig(2, 50), no, [
-                                LocalAlignment(Locus(50, 55), Locus(0, 10), 2),
-                                LocalAlignment(Locus(60, 70), Locus(15, 20), 3),
-                            ], 0, Order.read2ref),
-                        ],
-                        20
-                    ),
-                    //           0     30  45  50     0   5  20     50
-                    // reference |------+---+---|     |---+---+------|
-                    //                   \ \ \           / / /
-                    //       alignment 1  \ \ \         / / /  alignment 2
-                    //                     \ \ \       / / /
-                    // read        |-->-->--+->-+-->--+->-+-->-->--|
-                    //             0       10   30   50  70       80
-                    tuple(
-                        [
-                            AlignmentChain(2, Contig(1, 80), Contig(1, 50), no, [
-                                LocalAlignment(Locus(10, 15), Locus(30, 35), 4),
-                                LocalAlignment(Locus(20, 30), Locus(40, 45), 5),
-                            ], 0, Order.read2ref),
-                            AlignmentChain(3, Contig(1, 80), Contig(2, 50), no, [
-                                LocalAlignment(Locus(50, 55), Locus(5, 10), 6),
-                                LocalAlignment(Locus(60, 70), Locus(15, 20), 7),
-                            ], 0, Order.read2ref),
-                        ],
-                        10
-                    ),
-                    //           0     30  45  50     0   5  20     50
-                    // reference |------+---+---|     |---+---+------|
-                    //                   \ \ \           / / /
-                    //       alignment 2  \ \ \         / / /  alignment 1
-                    //                     \ \ \       / / /
-                    // read        |-->-->--+->-+-->--+->-+-->-->--|
-                    //             0       10   30   50  70       80
-                    tuple(
-                        [
-                            AlignmentChain(4, Contig(1, 80), Contig(2, 50), no, [
-                                LocalAlignment(Locus(50, 55), Locus(5, 10), 6),
-                                LocalAlignment(Locus(60, 70), Locus(15, 20), 7),
-                            ], 0, Order.read2ref),
-                            AlignmentChain(5, Contig(1, 80), Contig(1, 50), no, [
-                                LocalAlignment(Locus(10, 15), Locus(30, 35), 4),
-                                LocalAlignment(Locus(20, 30), Locus(40, 45), 5),
-                            ], 0, Order.read2ref),
-                        ],
-                        10
-                    ),
-                    // CASE 2 (complement)
-                    // ------------------------------------
-                    //           0     30  50  50     0   0  20     50
-                    // reference |------+---+---|     |---+---+------|
-                    //                   \ \ \           / / /
-                    //       alignment 1  \ \ \         / / /  alignment 2
-                    //                     \ \ \       / / /
-                    // read        |--<--<--+-<-+--<--+-<-+--<--<--|
-                    //             0       10   30   50  70       80
-                    tuple(
-                        [
-                            AlignmentChain(6, Contig(1, 80), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(10, 15), Locus(30, 35), 8),
-                                LocalAlignment(Locus(20, 30), Locus(40, 50), 9),
-                            ], 0, Order.read2ref),
-                            AlignmentChain(7, Contig(1, 80), Contig(2, 50), yes, [
-                                LocalAlignment(Locus(50, 55), Locus(0, 10), 10),
-                                LocalAlignment(Locus(60, 70), Locus(15, 20), 11),
-                            ], 0, Order.read2ref),
-                        ],
-                        20
-                    ),
-                    //           0     30  45  50     0   5  20     50
-                    // reference |------+---+---|     |---+---+------|
-                    //                   \ \ \           / / /
-                    //       alignment 1  \ \ \         / / /  alignment 2
-                    //                     \ \ \       / / /
-                    // read        |--<--<--+-<-+--<--+-<-+--<--<--|
-                    //             0       10   30   50  70       80
-                    tuple(
-                        [
-                            AlignmentChain(8, Contig(1, 80), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(10, 15), Locus(30, 35), 12),
-                                LocalAlignment(Locus(20, 30), Locus(40, 45), 13),
-                            ], 0, Order.read2ref),
-                            AlignmentChain(9, Contig(1, 80), Contig(2, 50), yes, [
-                                LocalAlignment(Locus(50, 55), Locus(5, 10), 14),
-                                LocalAlignment(Locus(60, 70), Locus(15, 20), 15),
-                            ], 0, Order.read2ref),
-                        ],
-                        10
-                    ),
-                    //           0     30  45  50     0   5  20     50
-                    // reference |------+---+---|     |---+---+------|
-                    //                   \ \ \           / / /
-                    //       alignment 2  \ \ \         / / /  alignment 1
-                    //                     \ \ \       / / /
-                    // read        |--<--<--+-<-+--<--+-<-+--<--<--|
-                    //             0       10   30   50  70       80
-                    tuple(
-                        [
-                            AlignmentChain(10, Contig(1, 80), Contig(2, 50), yes, [
-                                LocalAlignment(Locus(50, 55), Locus(5, 10), 14),
-                                LocalAlignment(Locus(60, 70), Locus(15, 20), 15),
-                            ], 0, Order.read2ref),
-                            AlignmentChain(11, Contig(1, 80), Contig(1, 50), yes, [
-                                LocalAlignment(Locus(10, 15), Locus(30, 35), 12),
-                                LocalAlignment(Locus(20, 30), Locus(40, 45), 13),
-                            ], 0, Order.read2ref),
-                        ],
-                        10
-                    ),
-                ];
-                // dfmt on
+        auto alignment = _alignments[0];
+        // CASE 1/3 (back extension)
+        long readsSequenceLengthRightExtension = alignment.contigA.length - alignment.last.contigA.end;
+        long referenceExcessRightExtension = alignment.contigB.length - alignment.last.contigB.end;
+        // CASE 2/4 (front extension)
+        long readsSequenceLengthLeftExtension = alignment.first.contigA.begin;
+        long referenceExcessLeftExtension = alignment.first.contigB.begin;
 
-                foreach (testCaseIdx, testCase; testCases.enumerate)
+        // dfmt off
+        return max(
+            // Case 1/3 (back extension)
+            readsSequenceLengthRightExtension - referenceExcessRightExtension,
+            // Case 2/4 (front extension)
+            readsSequenceLengthLeftExtension - referenceExcessLeftExtension,
+        );
+        // dfmt on
+    }
+
+    unittest
+    {
+        with (AlignmentChain) with (LocalAlignment) with (Complement)
                 {
-                    auto gotValue = getGapSize(testCase[0]);
-                    auto expValue = testCase[1];
-                    auto errorMessage = format!"expected spanning gap size %d but got %d for test case %d"(
-                            expValue, gotValue, testCaseIdx);
+                    // dfmt off
+                    auto testCases = [
+                        // CASE 1 (right extension, no complement)
+                        // ------------------------------------
+                        //            0      10  50  50
+                        // reference  |-------+---+---|
+                        //                     \ \ \
+                        // read         |-->-->-+->-+->-->--|
+                        //              0       0  40      50
+                        tuple(
+                            ReadAlignment(AlignmentChain(0, Contig(1, 50), Contig(1, 50), no, [
+                                LocalAlignment(Locus(0, 15), Locus(10, 20), 0),
+                                LocalAlignment(Locus(20, 40), Locus(30, 50), 1),
+                            ])),
+                            10
+                        ),
+                        //            0      10  45  50
+                        // reference  |-------+---+---|
+                        //                     \ \ \
+                        // read         |-->-->-+->-+->-->--|
+                        //              0       0  40      50
+                        tuple(
+                            ReadAlignment(AlignmentChain(1, Contig(1, 50), Contig(1, 50), no, [
+                                LocalAlignment(Locus(0, 15), Locus(10, 20), 2),
+                                LocalAlignment(Locus(20, 40), Locus(30, 45), 3),
+                            ])),
+                            5
+                        ),
+                        // CASE 2 (left extension, no complement):
+                        // ------------------------------------
+                        //                  0   0  40      50
+                        // reference        |---+---+-------|
+                        //                     / / /
+                        // read       |-->-->-+->-+->-->--|
+                        //            0      10  50      50
+                        tuple(
+                            ReadAlignment(AlignmentChain(2, Contig(1, 50), Contig(1, 50), no, [
+                                LocalAlignment(Locus(10, 15), Locus(0, 20), 4),
+                                LocalAlignment(Locus(20, 50), Locus(30, 40), 5),
+                            ])),
+                            10
+                        ),
+                        //                  0   5  40      50
+                        // reference        |---+---+-------|
+                        //                     / / /
+                        // read       |-->-->-+->-+->-->--|
+                        //            0      10  50      50
+                        tuple(
+                            ReadAlignment(AlignmentChain(3, Contig(1, 50), Contig(1, 50), no, [
+                                LocalAlignment(Locus(10, 15), Locus(5, 20), 6),
+                                LocalAlignment(Locus(20, 50), Locus(30, 40), 7),
+                            ])),
+                            5
+                        ),
+                        // CASE 3 (right extension, complement):
+                        // ------------------------------------
+                        //            0      10  50  50
+                        // reference  |-------+---+---|
+                        //                     \ \ \
+                        // read         |--<--<-+-<-+-<--<--|
+                        //              0       0   40      50
+                        tuple(
+                            ReadAlignment(AlignmentChain(4, Contig(1, 50), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(0, 15), Locus(10, 20), 8),
+                                LocalAlignment(Locus(20, 40), Locus(30, 50), 9),
+                            ])),
+                            10
+                        ),
+                        //            0      10  45  50
+                        // reference  |-------+---+---|
+                        //                     \ \ \
+                        // read         |--<--<-+-<-+-<--<--|
+                        //              0       0   50      50
+                        tuple(
+                            ReadAlignment(AlignmentChain(5, Contig(1, 50), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(0, 15), Locus(10, 20), 10),
+                                LocalAlignment(Locus(20, 40), Locus(30, 45), 11),
+                            ])),
+                            5
+                        ),
+                        // CASE 4 (left extension, complement):
+                        // ------------------------------------
+                        //                  0   0  40      50
+                        // reference        |---+---+-------|
+                        //                     / / /
+                        // read       |--<--<-+-<-+-<--<--|
+                        //            0       10  50      50
+                        tuple(
+                            ReadAlignment(AlignmentChain(6, Contig(1, 50), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(10, 15), Locus(0, 20), 12),
+                                LocalAlignment(Locus(20, 50), Locus(30, 40), 13),
+                            ])),
+                            10
+                        ),
+                        //                  0   5  40      50
+                        // reference        |---+---+-------|
+                        //                     / / /
+                        // read       |--<--<-+-<-+-<--<--|
+                        //            0       10  50      50
+                        tuple(
+                            ReadAlignment(AlignmentChain(7, Contig(1, 50), Contig(1, 50), yes, [
+                                LocalAlignment(Locus(10, 15), Locus(5, 20), 14),
+                                LocalAlignment(Locus(20, 50), Locus(30, 40), 15),
+                            ])),
+                            5
+                        ),
+                    ];
+                    // dfmt on
 
-                    assert(gotValue == expValue, errorMessage);
+                    foreach (testCaseIdx, testCase; testCases.enumerate)
+                    {
+                        auto gotValue = testCase[0].getExtensionSize();
+                        auto expValue = testCase[1];
+                        auto errorMessage = format!"expected extension size %d but got %d for test case %d"(
+                                expValue, gotValue, testCaseIdx);
+
+                        assert(gotValue == expValue, errorMessage);
+                    }
                 }
-            }
-}
+    }
 
-size_t meanScore(in ReadAlignment readAlignment) pure
-{
-    return readAlignment.map!"a.score".mean;
+    /**
+        Returns the (approximate) size of the gap spanned by this read alignment.
+        ---
+        gapSize = readsSequenceLength - referenceExcess
+
+        readsSequenceLength ~= a2x - a1y
+
+        referenceExcess ~= referenceExcess1 + referenceExcess2
+
+        referenceExcess1 ~= la - cay
+        referenceExcess2 ~= cbx - 0 = cbx
+
+        CASE 1 (no complement):
+
+                            contig a                  contig b
+
+                      0         cax cay la      0   cbx cby       lb
+            reference |---------+---+---|       |---+---+---------|
+                                 \ \ \             / / /
+                                  \ \ \           / / /
+                      alignment 1  \ \ \         / / /  alignment 2
+                                    \ \ \       / / /
+            read            |-->-->--+->-+-->--+->-+-->-->--|
+                            0        a1x a1y   a2x a2y      lr
+
+        CASE 2 (complement):
+
+                            contig b                  contig a
+
+                      0         cax cay la      0   cbx cby       lb
+            reference |---------+---+---|       |---+---+---------|
+                                 \ \ \             / / /
+                                  \ \ \           / / /
+                      alignment 2  \ \ \         / / /  alignment 1
+                                    \ \ \       / / /
+            read            |--<--<--+-<-+--<--+-<-+--<--<--|
+                            0        a1x a1y   a2x a2y      lr
+        ---
+    */
+    private long getGapSize() const pure
+    {
+        assert(isGap);
+        // dfmt off
+        const(AlignmentChain[2]) orderedAlignments = isInOrder
+            ? [_alignments[0], _alignments[1]]
+            : [_alignments[1], _alignments[0]];
+        // dfmt on
+        auto firstAlignment = orderedAlignments[0];
+        auto secondAlignment = orderedAlignments[1];
+
+        assert(firstAlignment.last.contigB.end < secondAlignment.first.contigB.begin,
+                format!"intersecting local alignments in [%s, %s]"(firstAlignment, secondAlignment));
+
+        long readsSequenceLength = secondAlignment.first.contigB.begin - firstAlignment
+            .last.contigB.end;
+        // dfmt off
+        long referenceExcess1 = firstAlignment.contigA.length - firstAlignment.last.contigA.end;
+        long referenceExcess2 = secondAlignment.first.contigA.begin;
+        // dfmt on
+        long referenceExcess = referenceExcess1 + referenceExcess2;
+
+        return readsSequenceLength - referenceExcess;
+    }
+
+    unittest
+    {
+        with (AlignmentChain) with (LocalAlignment) with (Complement)
+                {
+                    // dfmt off
+                    auto testCases = [
+                        // CASE 1 (no complement)
+                        // ------------------------------------
+                        //           0     30  50  50     0   0  20     50
+                        // reference |------+---+---|     |---+---+------|
+                        //                   \ \ \           / / /
+                        //       alignment 1  \ \ \         / / /  alignment 2
+                        //                     \ \ \       / / /
+                        // read        |-->-->--+->-+-->--+->-+-->-->--|
+                        //             0       10   30   50  70       80
+                        tuple(
+                            ReadAlignment(
+                                AlignmentChain(0, Contig(1, 50), Contig(1, 80), no, [
+                                    LocalAlignment(Locus(30, 35), Locus(10, 15), 0),
+                                    LocalAlignment(Locus(40, 50), Locus(20, 30), 1),
+                                ]),
+                                AlignmentChain(1, Contig(2, 50), Contig(1, 80), no, [
+                                    LocalAlignment(Locus(0, 10), Locus(50, 55), 2),
+                                    LocalAlignment(Locus(15, 20), Locus(60, 70), 3),
+                                ]),
+                            ),
+                            20
+                        ),
+                        //           0     30  45  50     0   5  20     50
+                        // reference |------+---+---|     |---+---+------|
+                        //                   \ \ \           / / /
+                        //       alignment 1  \ \ \         / / /  alignment 2
+                        //                     \ \ \       / / /
+                        // read        |-->-->--+->-+-->--+->-+-->-->--|
+                        //             0       10   30   50  70       80
+                        tuple(
+                            ReadAlignment(
+                                AlignmentChain(2, Contig(1, 50), Contig(1, 80), no, [
+                                    LocalAlignment(Locus(30, 35), Locus(10, 15), 4),
+                                    LocalAlignment(Locus(40, 45), Locus(20, 30), 5),
+                                ]),
+                                AlignmentChain(3, Contig(2, 50), Contig(1, 80), no, [
+                                    LocalAlignment(Locus(5, 10), Locus(50, 55), 6),
+                                    LocalAlignment(Locus(15, 20), Locus(60, 70), 7),
+                                ]),
+                            ),
+                            10
+                        ),
+                        //           0     30  45  50     0   5  20     50
+                        // reference |------+---+---|     |---+---+------|
+                        //                   \ \ \           / / /
+                        //       alignment 2  \ \ \         / / /  alignment 1
+                        //                     \ \ \       / / /
+                        // read        |-->-->--+->-+-->--+->-+-->-->--|
+                        //             0       10   30   50  70       80
+                        tuple(
+                            ReadAlignment(
+                                AlignmentChain(4, Contig(2, 50), Contig(1, 80), no, [
+                                    LocalAlignment(Locus(5, 10), Locus(50, 55), 6),
+                                    LocalAlignment(Locus(15, 20), Locus(60, 70), 7),
+                                ]),
+                                AlignmentChain(5, Contig(1, 50), Contig(1, 80), no, [
+                                    LocalAlignment(Locus(30, 35), Locus(10, 15), 4),
+                                    LocalAlignment(Locus(40, 45), Locus(20, 30), 5),
+                                ]),
+                            ),
+                            10
+                        ),
+                        // CASE 2 (complement)
+                        // ------------------------------------
+                        //           0     30  50  50     0   0  20     50
+                        // reference |------+---+---|     |---+---+------|
+                        //                   \ \ \           / / /
+                        //       alignment 1  \ \ \         / / /  alignment 2
+                        //                     \ \ \       / / /
+                        // read        |--<--<--+-<-+--<--+-<-+--<--<--|
+                        //             0       10   30   50  70       80
+                        tuple(
+                            ReadAlignment(
+                                AlignmentChain(6, Contig(1, 50), Contig(1, 80), yes, [
+                                    LocalAlignment(Locus(30, 35), Locus(10, 15), 8),
+                                    LocalAlignment(Locus(40, 50), Locus(20, 30), 9),
+                                ]),
+                                AlignmentChain(7, Contig(2, 50), Contig(1, 80), yes, [
+                                    LocalAlignment(Locus(0, 10), Locus(50, 55), 10),
+                                    LocalAlignment(Locus(15, 20), Locus(60, 70), 11),
+                                ]),
+                            ),
+                            20
+                        ),
+                        //           0     30  45  50     0   5  20     50
+                        // reference |------+---+---|     |---+---+------|
+                        //                   \ \ \           / / /
+                        //       alignment 1  \ \ \         / / /  alignment 2
+                        //                     \ \ \       / / /
+                        // read        |--<--<--+-<-+--<--+-<-+--<--<--|
+                        //             0       10   30   50  70       80
+                        tuple(
+                            ReadAlignment(
+                                AlignmentChain(8, Contig(1, 50), Contig(1, 80), yes, [
+                                    LocalAlignment(Locus(30, 35), Locus(10, 15), 12),
+                                    LocalAlignment(Locus(40, 45), Locus(20, 30), 13),
+                                ]),
+                                AlignmentChain(9, Contig(2, 50), Contig(1, 80), yes, [
+                                    LocalAlignment(Locus(5, 10), Locus(50, 55), 14),
+                                    LocalAlignment(Locus(15, 20), Locus(60, 70), 15),
+                                ]),
+                            ),
+                            10
+                        ),
+                        //           0     30  45  50     0   5  20     50
+                        // reference |------+---+---|     |---+---+------|
+                        //                   \ \ \           / / /
+                        //       alignment 2  \ \ \         / / /  alignment 1
+                        //                     \ \ \       / / /
+                        // read        |--<--<--+-<-+--<--+-<-+--<--<--|
+                        //             0       10   30   50  70       80
+                        tuple(
+                            ReadAlignment(
+                                AlignmentChain(10, Contig(2, 50), Contig(1, 80), yes, [
+                                    LocalAlignment(Locus(5, 10), Locus(50, 55), 14),
+                                    LocalAlignment(Locus(15, 20), Locus(60, 70), 15),
+                                ]),
+                                AlignmentChain(11, Contig(1, 50), Contig(1, 80), yes, [
+                                    LocalAlignment(Locus(30, 35), Locus(10, 15), 12),
+                                    LocalAlignment(Locus(40, 45), Locus(20, 30), 13),
+                                ]),
+                            ),
+                            10
+                        ),
+                    ];
+                    // dfmt on
+
+                    foreach (testCaseIdx, testCase; testCases.enumerate)
+                    {
+                        auto gotValue = testCase[0].getGapSize();
+                        auto expValue = testCase[1];
+                        auto errorMessage = format!"expected spanning gap size %d but got %d for test case %d"(
+                                expValue, gotValue, testCaseIdx);
+
+                        assert(gotValue == expValue, errorMessage);
+                    }
+                }
+    }
+
+    double meanScore() const pure
+    {
+        return this[].map!"a.score".mean;
+    }
 }
 
 /**
@@ -1748,12 +1716,12 @@ size_t meanScore(in ReadAlignment readAlignment) pure
 */
 alias PileUp = ReadAlignment[];
 
-PileUp[] buildPileUps(AlignmentContainer!(AlignmentChain[]) candidates) pure
+PileUp[] buildPileUps(AlignmentChain[] candidates)
 {
-    static bool orderByReferenceIds(T)(T a, T b) pure
+    static bool orderByReferenceIds(ReadAlignment a, ReadAlignment b) pure
     {
-        return a[0].contigB.id < b[0].contigB.id && (!(a.length > 1
-                && a[0].contigB.id == b[0].contigB.id) || a[1].contigB.id < b[1].contigB.id);
+        return a[0].contigA.id < b[0].contigA.id && (!(a.length > 1
+                && a[0].contigA.id == b[0].contigA.id) || a[1].contigA.id < b[1].contigA.id);
     }
 
     static size_t numContigsInvolved(T)(T readsByNumFlanksByGap)
@@ -1765,36 +1733,31 @@ PileUp[] buildPileUps(AlignmentContainer!(AlignmentChain[]) candidates) pure
         return reads.length;
     }
 
-    static bool isSameRead(T)(T a, T b)
+    static bool isSameRead(AlignmentChain a, AlignmentChain b)
     {
-        return a.contigA.id == b.contigA.id;
+        return a.contigB.id == b.contigB.id;
     }
 
-    static ReadAlignment sortGapAlignment(ReadAlignment readAlignment) pure nothrow
+    static auto forceInOrder(ReadAlignment readAlignment)
     {
-        if (readAlignment.isGap)
-        {
-            auto isBefore = readAlignment[0].isBefore!"contigA"(readAlignment[1]);
-            auto isComplement = readAlignment[0].complement;
-
-            if (isComplement == isBefore)
-                swap(readAlignment[0], readAlignment[1]);
-        }
+        readAlignment.forceInOrder;
 
         return readAlignment;
     }
 
+    candidates.sort!("a.contigB.id < b.contigB.id", SwapStrategy.stable);
+
     // dfmt off
     auto sortedReadAlignments = candidates
-        .b2a
         .chunkBy!isSameRead
         .map!array
-        .filter!isValid // TODO: this might discard "good" reads which span
-                        //       a whole contig extending it on both ends.
-        .map!sortGapAlignment
+        .map!ReadAlignment
+        .filter!"a.isValid" // TODO: this might discard "good" reads which span
+                            //       a whole contig extending it on both ends.
+        .map!forceInOrder
         .array;
     // dfmt on
-    sortedReadAlignments.sort!byGapSort;
+    sortedReadAlignments.sort!(byGapSort, SwapStrategy.stable);
     PileUp[] pileUpsByGap = [];
     PileUp lastPileUp;
     ReadAlignment lastReadAlignment;
@@ -1830,7 +1793,7 @@ PileUp[] buildPileUps(AlignmentContainer!(AlignmentChain[]) candidates) pure
 
 bool belongToSamePile(in ReadAlignment a, in ReadAlignment b) pure nothrow
 {
-    assert(isInReferenceOrder(a) && isInReferenceOrder(b),
+    assert(a.isInOrder && b.isInOrder,
             "gap alignment chains must be in reference order");
 
     // dfmt off
@@ -1838,29 +1801,38 @@ bool belongToSamePile(in ReadAlignment a, in ReadAlignment b) pure nothrow
         "aIsBackExtension", a.isBackExtension,
         "aIsFrontExtension", a.isFrontExtension,
         "aIsGap", a.isGap,
-        "aMapAContigBIDMapJsonArray", a.map!"a.contigB.id".map!toJson.array,
+        "aReferenceIds", a[].map!"a.contigA.id".array.toJson,
         "bIsBackExtension", b.isBackExtension,
         "bIsFrontExtension", b.isFrontExtension,
         "bIsGap", b.isGap,
-        "bMapAContigBIDMapJsonArray", b.map!"a.contigB.id".map!toJson.array,
+        "bReferenceIds", b[].map!"a.contigA.id".array.toJson,
     );
     // dfmt on
 
     // dfmt off
     return any(only(
-        a.isBackExtension && b.isBackExtension && a[0].contigB.id == b[0].contigB.id,
-        a.isBackExtension && b.isGap && a[0].contigB.id == b[0].contigB.id,
-        a.isGap && b.isGap && a[0].contigB.id == b[0].contigB.id && a[1].contigB.id == b[1].contigB.id,
-        a.isGap && b.isFrontExtension && a[1].contigB.id == b[0].contigB.id,
-        a.isFrontExtension && b.isFrontExtension && a[0].contigB.id == b[0].contigB.id,
+        a.isBackExtension && b.isBackExtension && a[0].contigA.id == b[0].contigA.id,
+        a.isBackExtension && b.isGap && a[0].contigA.id == b[0].contigA.id,
+        a.isGap && b.isFrontExtension && a[1].contigA.id == b[0].contigA.id,
+        a.isGap && b.isGap && a[0].contigA.id == b[0].contigA.id && a[1].contigA.id == b[1].contigA.id,
+        a.isFrontExtension && b.isFrontExtension && a[0].contigA.id == b[0].contigA.id,
     ));
     // dfmt on
 }
 
 bool byGapSort(in ReadAlignment a, in ReadAlignment b) pure nothrow
 {
-    assert(isInReferenceOrder(a) && isInReferenceOrder(b),
+    assert(a.isInOrder && b.isInOrder,
             "gap alignment chains must be in reference order");
+
+    // dfmt off
+    debug logJsonDebug(
+        "a", a[].toJson,
+        "a.type", a.type.to!string,
+        "b", b[].toJson,
+        "b.type", b.type.to!string,
+    );
+    // dfmt on
 
     if (a.isExtension && b.isExtension)
     {
@@ -1890,13 +1862,13 @@ bool byGapSort(in ReadAlignment a, in ReadAlignment b) pure nothrow
 
 private bool byGapSortForExtensions(in ReadAlignment a, in ReadAlignment b) pure nothrow
 {
-    if (a[0].contigB.id != b[0].contigB.id)
+    if (a[0].contigA.id != b[0].contigA.id)
     {
-        return a[0].contigB.id < b[0].contigB.id;
+        return a[0].contigA.id < b[0].contigA.id;
     }
-    else if (a.getType != b.getType)
+    else if (a.type != b.type)
     {
-        return a.getType < b.getType;
+        return a.type < b.type;
     }
     else
     {
@@ -1907,13 +1879,13 @@ private bool byGapSortForExtensions(in ReadAlignment a, in ReadAlignment b) pure
 
 private bool byGapSortForGaps(in ReadAlignment a, in ReadAlignment b) pure nothrow
 {
-    if (a[0].contigB.id != b[0].contigB.id)
+    if (a[0].contigA.id != b[0].contigA.id)
     {
-        return a[0].contigB.id < b[0].contigB.id;
+        return a[0].contigA.id < b[0].contigA.id;
     }
-    else if (a[1].contigB.id != b[1].contigB.id)
+    else if (a[1].contigA.id != b[1].contigA.id)
     {
-        return a[1].contigB.id < b[1].contigB.id;
+        return a[1].contigA.id < b[1].contigA.id;
     }
     else
     {
@@ -1928,16 +1900,16 @@ private bool byGapSortForExtensionAndGap(in ReadAlignment ext,
     alias cmp = (extValue, gapValue) => inOrder ? extValue < gapValue : gapValue < extValue;
     auto gapPart = ext.isFrontExtension ? gap[0] : gap[1];
 
-    if (ext[0].contigB.id != gap[0].contigB.id && ext[0].contigB.id != gap[1].contigB.id)
+    if (ext[0].contigA.id != gap[0].contigA.id && ext[0].contigA.id != gap[1].contigA.id)
     {
-        return cmp(ext[0].contigB.id, min(gap[0].contigB.id, gap[1].contigB.id));
+        return cmp(ext[0].contigA.id, min(gap[0].contigA.id, gap[1].contigA.id));
     }
-    else if (ext[0].contigB.id != gap[0].contigB.id && ext[0].contigB.id == gap[1].contigB.id)
+    else if (ext[0].contigA.id != gap[0].contigA.id && ext[0].contigA.id == gap[1].contigA.id)
     {
         // extension contig is end contig of gap => same pile if front extension else in reverse order
         return !inOrder;
     }
-    else if (ext[0].contigB.id == gap[0].contigB.id && ext[0].contigB.id != gap[1].contigB.id)
+    else if (ext[0].contigA.id == gap[0].contigA.id && ext[0].contigA.id != gap[1].contigA.id)
     {
         // extension contig is begin contig of gap => same pile if back extension else in order
         return inOrder;
@@ -2015,40 +1987,27 @@ unittest
                 beginIdx = clamp(beginIdx, 0, contigLength);
                 endIdx = clamp(endIdx, 0, contigLength);
 
-                if (complement)
-                {
-                    beginIdx = contigLength - beginIdx;
-                    endIdx = contigLength - endIdx;
-                    swap(beginIdx, endIdx);
-
-                    firstReadBeginIdx = readLength - firstReadBeginIdx;
-                    firstReadEndIdx = readLength - firstReadEndIdx;
-                    swap(firstReadBeginIdx, firstReadEndIdx);
-                }
-
                 if (beginContigId == endContigId)
                 {
                     // dfmt off
-                    return [AlignmentChain(
+                    return ReadAlignment(AlignmentChain(
                         alignmentChainId - 2,
-                        Contig(readId, readLength),
                         Contig(beginContigId, contigLength),
+                        Contig(readId, readLength),
                         complement,
                         [
                             LocalAlignment(
-                                Locus(firstReadBeginIdx, firstReadBeginIdx + 1),
                                 Locus(beginIdx, beginIdx + 1),
+                                Locus(firstReadBeginIdx, firstReadBeginIdx + 1),
                                 numDiffs,
                             ),
                             LocalAlignment(
-                                Locus(firstReadEndIdx - 1, firstReadEndIdx),
                                 Locus(endIdx - 1, endIdx),
+                                Locus(firstReadEndIdx - 1, firstReadEndIdx),
                                 numDiffs,
                             ),
                         ],
-                        0,
-                        Order.read2ref,
-                    )];
+                    ));
                     // dfmt on
                 }
                 else
@@ -2056,56 +2015,45 @@ unittest
                     auto secondReadBeginIdx = readLength - endIdx;
                     auto secondReadEndIdx = readLength;
 
-                    if (complement)
-                    {
-                        secondReadBeginIdx = readLength - secondReadBeginIdx;
-                        secondReadEndIdx = readLength - secondReadEndIdx;
-                        swap(secondReadBeginIdx, secondReadEndIdx);
-                    }
-
                     // dfmt off
-                    return [
+                    return ReadAlignment(
                         AlignmentChain(
                             alignmentChainId - 2,
-                            Contig(readId, readLength),
                             Contig(beginContigId, contigLength),
+                            Contig(readId, readLength),
                             complement,
                             [
                                 LocalAlignment(
-                                    Locus(firstReadBeginIdx, firstReadBeginIdx + 1),
                                     Locus(beginIdx, beginIdx + 1),
+                                    Locus(firstReadBeginIdx, firstReadBeginIdx + 1),
                                     numDiffs,
                                 ),
                                 LocalAlignment(
-                                    Locus(firstReadEndIdx - 1, firstReadEndIdx),
                                     Locus(contigLength - 1, contigLength),
+                                    Locus(firstReadEndIdx - 1, firstReadEndIdx),
                                     numDiffs,
                                 ),
                             ],
-                            0,
-                            Order.read2ref,
                         ),
                         AlignmentChain(
                             alignmentChainId - 1,
-                            Contig(readId, readLength),
                             Contig(endContigId, contigLength),
+                            Contig(readId, readLength),
                             complement,
                             [
                                 LocalAlignment(
-                                    Locus(secondReadBeginIdx, secondReadBeginIdx + 1),
                                     Locus(0, 1),
+                                    Locus(secondReadBeginIdx, secondReadBeginIdx + 1),
                                     numDiffs,
                                 ),
                                 LocalAlignment(
-                                    Locus(secondReadEndIdx - 1, secondReadEndIdx),
                                     Locus(endIdx - 1, endIdx),
+                                    Locus(secondReadEndIdx - 1, secondReadEndIdx),
                                     numDiffs,
                                 ),
                             ],
-                            0,
-                            Order.read2ref,
                         ),
-                    ];
+                    );
                     // dfmt on
                 }
             }
@@ -2160,8 +2108,8 @@ unittest
                     {
                         foreach (readAlignment2; group2)
                         {
-                            size_t read1Id = readAlignment1[0].contigA.id;
-                            size_t read2Id = readAlignment2[0].contigA.id;
+                            size_t read1Id = readAlignment1[0].contigB.id;
+                            size_t read2Id = readAlignment2[0].contigB.id;
 
                             assert((i != j) || !byGapSort(readAlignment1, readAlignment2),
                                     format!"read %d should not be before %d (same pile)"(read1Id,
@@ -2232,246 +2180,6 @@ bool isGap(in PileUp pileUp) pure nothrow
     return pileUp.any!(readAlignment => readAlignment.isGap);
 }
 
-/// Returns a pile up with the complementary order alignment chains.
-PileUp getComplementaryOrder(in PileUp pileUp, AlignmentChain[] complementaryAlignmentChains) pure
-{
-    assert(complementaryAlignmentChains.isSorted);
-    auto sortedComplementaryAlignmentChains = assumeSorted(complementaryAlignmentChains);
-    auto complementaryPileUp = appender!PileUp;
-    complementaryPileUp.reserve(pileUp.length);
-    Appender!ReadAlignment complementaryReadAlignment;
-
-    foreach (readAlignment; pileUp)
-    {
-        assert(readAlignment.isValid);
-        assert(readAlignment[0 .. 1].isValid);
-        assert(readAlignment[$ - 1 .. $].isValid);
-        complementaryReadAlignment = appender!ReadAlignment;
-        complementaryReadAlignment.reserve(readAlignment.length);
-
-        foreach (alignmentChain; readAlignment)
-        {
-            auto needle = alignmentChain.getComplementaryOrder();
-            auto complementaryCandidates = sortedComplementaryAlignmentChains.equalRange(needle);
-            if (complementaryCandidates.empty)
-            {
-                throw new Exception("missing complementary alignment chain");
-            }
-
-            auto complementaryAlignmentChain = complementaryCandidates.front;
-
-            assert(alignmentChain.contigA == complementaryAlignmentChain.contigB);
-            assert(alignmentChain.contigB == complementaryAlignmentChain.contigA);
-            assert(complementaryAlignmentChain.getComplementaryOrder.opCmp(alignmentChain) == 0);
-
-            complementaryReadAlignment ~= complementaryAlignmentChain;
-        }
-
-        complementaryPileUp ~= complementaryReadAlignment.data;
-    }
-
-    return complementaryPileUp.data;
-}
-
-unittest
-{
-    alias Complement = AlignmentChain.Complement;
-    alias Order = AlignmentChain.Order;
-    AlignmentChain getDummyAC(size_t contigA, size_t contigB,
-            AlignmentChain.Complement complement, size_t contigABegin,
-            size_t contigAEnd, size_t contigBBegin, size_t contigBEnd, AlignmentChain.Order order)
-    {
-        immutable contigLength = 100;
-        // dfmt off
-        AlignmentChain dummy = {
-            contigA: AlignmentChain.Contig(contigA, contigLength),
-            contigB: AlignmentChain.Contig(contigB, contigLength),
-            complement: complement,
-            localAlignments: [AlignmentChain.LocalAlignment(
-                AlignmentChain.LocalAlignment.Locus(contigABegin, contigAEnd),
-                AlignmentChain.LocalAlignment.Locus(contigBBegin, contigBEnd),
-            )],
-            0,
-            order,
-        };
-        // dfmt on
-
-        return dummy;
-    }
-
-    // dfmt off
-    auto inPileUp = [
-        [  // read 1 spans gap from 1 to 2
-            getDummyAC(1, 1, Complement.no,   0,  10,  90, 100, Order.read2ref),
-            getDummyAC(1, 2, Complement.no,  90, 100,   0,  10, Order.read2ref),
-        ],
-        [  // read 2 extends begin contig 3
-            getDummyAC(2, 3, Complement.no,  90, 100,   0,  10, Order.read2ref),
-        ],
-        [  // read 3 extends end contig 3
-            getDummyAC(3, 3, Complement.no,   0,  10,  90, 100, Order.read2ref),
-        ],
-        [  // read 4 spans gap from 4 to 5 (complement)
-            getDummyAC(4, 4, Complement.yes,   0,  10,  90, 100, Order.read2ref),
-            getDummyAC(4, 5, Complement.yes,  90, 100,   0,  10, Order.read2ref),
-        ],
-        [  // read 5 extends begin contig 6 (complement)
-            getDummyAC(5, 6, Complement.yes,  90, 100,   0,  10, Order.read2ref),
-        ],
-        [  // read 6 extends end contig 6 (complement)
-            getDummyAC(6, 6, Complement.yes,   0,  10,  90, 100, Order.read2ref),
-        ],
-    ];
-    auto complementaryAlignmentChains = [
-        getDummyAC(1, 1, Complement.no,  90, 100,   0,  10, Order.ref2read),
-        getDummyAC(2, 1, Complement.no,   0,  10,  90, 100, Order.ref2read),
-        getDummyAC(3, 2, Complement.no,   0,  10,  90, 100, Order.ref2read),
-        getDummyAC(3, 3, Complement.no,  90, 100,   0,  10, Order.ref2read),
-        getDummyAC(4, 4, Complement.yes,   0,  10,  90, 100, Order.ref2read),
-        getDummyAC(5, 4, Complement.yes,  90, 100,   0,  10, Order.ref2read),
-        getDummyAC(6, 5, Complement.yes,  90, 100,   0,  10, Order.ref2read),
-        getDummyAC(6, 6, Complement.yes,   0,  10,  90, 100, Order.ref2read),
-    ];
-    // dfmt on
-
-    auto complementaryPileUp = inPileUp.getComplementaryOrder(complementaryAlignmentChains);
-
-    // dfmt off
-    assert(complementaryPileUp == [
-        [  // read 1 spans gap from 1 to 2
-            getDummyAC(1, 1, Complement.no,  90, 100,   0,  10, Order.ref2read),
-            getDummyAC(2, 1, Complement.no,   0,  10,  90, 100, Order.ref2read),
-        ],
-        [  // read 2 extends begin contig 3
-            getDummyAC(3, 2, Complement.no,   0,  10,  90, 100, Order.ref2read),
-        ],
-        [  // read 3 extends end contig 3
-            getDummyAC(3, 3, Complement.no,  90, 100,   0,  10, Order.ref2read),
-        ],
-        [  // read 4 spans gap from 4 to 5 (complement)
-            getDummyAC(4, 4, Complement.yes,   0,  10,  90, 100, Order.ref2read),
-            getDummyAC(5, 4, Complement.yes,  90, 100,   0,  10, Order.ref2read),
-        ],
-        [  // read 5 extends begin contig 6 (complement)
-            getDummyAC(6, 5, Complement.yes,  90, 100,   0,  10, Order.ref2read),
-        ],
-        [  // read 6 extends end contig 6 (complement)
-            getDummyAC(6, 6, Complement.yes,   0,  10,  90, 100, Order.ref2read),
-        ],
-    ]);
-    // dfmt on
-}
-
-AlignmentChain getComplementaryOrder(in AlignmentChain alignmentChain) pure
-{
-    // dfmt off
-    AlignmentChain complementary = {
-        id: alignmentChain.id,
-        contigA: alignmentChain.contigB,
-        contigB: alignmentChain.contigA,
-        complement: alignmentChain.complement,
-        order: alignmentChain.order.reverse,
-    };
-    // dfmt on
-
-    if (complementary.complement)
-    {
-        // dfmt off
-        complementary.localAlignments = alignmentChain
-            .localAlignments
-            .retro
-            .map!(la => AlignmentChain.LocalAlignment(
-                AlignmentChain.LocalAlignment.Locus(
-                    alignmentChain.contigB.length - la.contigB.end,
-                    alignmentChain.contigB.length - la.contigB.begin,
-                ),
-                AlignmentChain.LocalAlignment.Locus(
-                    alignmentChain.contigA.length - la.contigA.end,
-                    alignmentChain.contigA.length - la.contigA.begin,
-                ),
-                la.numDiffs,
-            ))
-            .array;
-        // dfmt on
-    }
-    else
-    {
-        // dfmt off
-        complementary.localAlignments = alignmentChain
-            .localAlignments
-            .map!(la => AlignmentChain.LocalAlignment(
-                la.contigB,
-                la.contigA,
-                la.numDiffs,
-            ))
-            .array;
-        // dfmt on
-    }
-
-    return complementary;
-}
-
-unittest
-{
-    alias Complement = AlignmentChain.Complement;
-    alias Order = AlignmentChain.Order;
-    alias LocalAlignment = AlignmentChain.LocalAlignment;
-
-    // dfmt off
-    AlignmentChain normalOrderAC = {
-        contigA: AlignmentChain.Contig(1, 1000),
-        contigB: AlignmentChain.Contig(2, 500),
-        complement: Complement.yes,
-        localAlignments: [
-            LocalAlignment(
-                LocalAlignment.Locus(0, 10),
-                LocalAlignment.Locus(0, 10),
-                1
-            ),
-            LocalAlignment(
-                LocalAlignment.Locus(20, 50),
-                LocalAlignment.Locus(30, 60),
-                2
-            ),
-            LocalAlignment(
-                LocalAlignment.Locus(600, 1000),
-                LocalAlignment.Locus(100, 500),
-                3
-            ),
-        ],
-        0,
-        Order.ref2read,
-    };
-    AlignmentChain complementaryOrderAC = {
-        contigA: AlignmentChain.Contig(2, 500),
-        contigB: AlignmentChain.Contig(1, 1000),
-        complement: Complement.yes,
-        localAlignments: [
-            LocalAlignment(
-                LocalAlignment.Locus(0, 400),
-                LocalAlignment.Locus(0, 400),
-                3
-            ),
-            LocalAlignment(
-                LocalAlignment.Locus(440, 470),
-                LocalAlignment.Locus(950, 980),
-                2
-            ),
-            LocalAlignment(
-                LocalAlignment.Locus(490, 500),
-                LocalAlignment.Locus(990, 1000),
-                1
-            ),
-        ],
-        0,
-        Order.read2ref,
-    };
-    // dfmt on
-
-    debug writeln(getComplementaryOrder(normalOrderAC));
-    assert(getComplementaryOrder(normalOrderAC) == complementaryOrderAC);
-}
-
 /// Returns a list of pointers to all involved alignment chains.
 AlignmentChain*[] getAlignmentChainRefs(PileUp pileUp) pure nothrow
 {
@@ -2492,7 +2200,7 @@ AlignmentChain*[] getAlignmentChainRefs(PileUp pileUp) pure nothrow
 ///
 unittest
 {
-    auto pileUp = [[AlignmentChain(), AlignmentChain()], [AlignmentChain()]];
+    auto pileUp = [ReadAlignment(AlignmentChain(), AlignmentChain()), ReadAlignment(AlignmentChain())];
     auto allAlignmentChains = pileUp.getAlignmentChainRefs();
 
     assert(allAlignmentChains.length == 3);

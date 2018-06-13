@@ -9,7 +9,7 @@
 module djunctor.dazzler;
 
 import djunctor.commandline : hasOption, isOptionsList;
-import djunctor.alignments : AlignmentChain, AlignmentContainer;
+import djunctor.alignments : AlignmentChain;
 import djunctor.util.fasta : parseFastaRecord;
 import djunctor.util.log;
 import djunctor.util.range : arrayChunks;
@@ -105,11 +105,10 @@ AlignmentChain[] getLocalAlignments(Options)(in string dbA, in Options options)
         if (hasOption!(Options, "dalignerOptions", isOptionsList) && hasOption!(Options,
             "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
-    return getLocalAlignments(dbA, null, options).a2b;
+    return getLocalAlignments(dbA, null, options);
 }
 
-AlignmentContainer!(AlignmentChain[]) getLocalAlignments(Options)(in string dbA,
-        in string dbB, in Options options)
+AlignmentChain[] getLocalAlignments(Options)(in string dbA, in string dbB, in Options options)
         if (hasOption!(Options, "dalignerOptions", isOptionsList) && hasOption!(Options,
             "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
@@ -118,7 +117,7 @@ AlignmentContainer!(AlignmentChain[]) getLocalAlignments(Options)(in string dbA,
     return processGeneratedLasFiles(dbA, dbB, options);
 }
 
-AlignmentContainer!(AlignmentChain[]) getMappings(Options)(in string dbA,
+AlignmentChain[] getMappings(Options)(in string dbA,
         in string dbB, in Options options)
         if (hasOption!(Options, "damapperOptions", isOptionsList) && hasOption!(Options,
             "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
@@ -128,35 +127,25 @@ AlignmentContainer!(AlignmentChain[]) getMappings(Options)(in string dbA,
     return processGeneratedLasFiles(dbA, dbB, options);
 }
 
-private auto processGeneratedLasFiles(Options)(in string dbA, in string dbB, in Options options)
+private AlignmentChain[] processGeneratedLasFiles(Options)(in string dbA, in string dbB, in Options options)
         if (hasOption!(Options, "ladumpOptions", isOptionsList)
             && hasOption!(Options, "workdir", isSomeString))
 {
-    auto lasFileLists = getLasFiles(dbA, dbB, options.workdir);
-    AlignmentContainer!(AlignmentChain[]) results;
+    auto lasFileList = getLasFiles(dbA, dbB, options.workdir);
+    auto dbFiles = tuple(dbA, dbB);
 
-    // TODO prevent double execution if dbB == null
-    static foreach (order; typeof(lasFileLists).orders)
-    {
-        {
-            auto lasFileList = __traits(getMember, lasFileLists, order);
-            auto dbFiles = typeof(lasFileLists).getOrdered!order(dbA, dbB);
+    // dfmt off
+    auto alignmentChains =
+        lasFileList
+            .map!(lasFile => ladump(lasFile, dbFiles.expand,
+                    options.ladumpOptions, options.workdir))
+            .map!(lasDump => readAlignmentList(lasDump))
+            .joiner
+            .array;
+    // dfmt on
+    alignmentChains.sort!("a < b", SwapStrategy.stable);
 
-            // dfmt off
-            auto alignmentChains =
-                lasFileList
-                    .map!(lasFile => ladump(lasFile, dbFiles.expand,
-                            options.ladumpOptions, options.workdir))
-                    .map!(lasDump => readAlignmentList(lasDump))
-                    .joiner
-                    .array;
-            alignmentChains.sort!("a < b", SwapStrategy.stable);
-            __traits(getMember, results, order) = alignmentChains;
-            // dfmt on
-        }
-    }
-
-    return results;
+    return alignmentChains;
 }
 
 private enum ChainPartType
@@ -431,7 +420,7 @@ void attachTracePoints(Options)(AlignmentChain*[] alignmentChains, in string dbA
         if (hasOption!(Options, "workdir", isSomeString)
             && hasOption!(Options, "ladumpTraceOptions", isOptionsList))
 {
-    auto lasFileList = getLasFiles(dbA, dbB, options.workdir).a2b;
+    auto lasFileList = getLasFiles(dbA, dbB, options.workdir);
     // NOTE: dump only for matching A reads; better would be for matching
     //       B reads but that is not possible with `LAdump`.
     auto aReadIds = alignmentChains.map!"a.contigA.id".uniq.array;
@@ -1204,7 +1193,6 @@ string[] getConsensus(Options)(in string dbFile, in Options options)
 
     // dfmt off
     auto consensusDbs = getLasFiles(dbFile, options.workdir)
-        .a2b
         .filter!(lasFile => !lasEmpty(lasFile, dbFile, null, options.workdir))
         .map!(lasFile => daccord(dbFile, lasFile, options.daccordOptions, options.workdir))
         .array;
@@ -1254,12 +1242,12 @@ unittest
             format!"expected %s but got %s"(expectedSequence, consensusSequence));
 }
 
-AlignmentContainer!(string[]) getLasFiles(in string dbA, in string baseDirectory)
+string[] getLasFiles(in string dbA, in string baseDirectory)
 {
     return getLasFiles(dbA, null, baseDirectory);
 }
 
-AlignmentContainer!(string[]) getLasFiles(in string dbA, in string dbB, in string baseDirectory)
+string[] getLasFiles(in string dbA, in string dbB, in string baseDirectory)
 {
     import std.algorithm : max;
 
@@ -1292,23 +1280,20 @@ AlignmentContainer!(string[]) getLasFiles(in string dbA, in string dbB, in strin
     immutable fileTemplate = "%s/%s.%s.las";
     auto aOptions = InferredParams(dbA);
     auto bOptions = dbB == null ? aOptions : InferredParams(dbB);
-    size_t numLasFilesPerList = aOptions.numBlocks * max(1, bOptions.numBlocks);
-    AlignmentContainer!(string[]) fileLists;
+    size_t numLasFiles = aOptions.numBlocks * max(1, bOptions.numBlocks);
+    string[] fileList;
 
-    fileLists.a2b.length = numLasFilesPerList;
-    fileLists.b2a.length = numLasFilesPerList;
+    fileList.length = numLasFiles;
     foreach (size_t i; 0 .. aOptions.numBlocks)
     {
         foreach (size_t j; 0 .. bOptions.numBlocks)
         {
-            fileLists.a2b[i * bOptions.numBlocks + j] = format!fileTemplate(baseDirectory,
+            fileList[i * bOptions.numBlocks + j] = format!fileTemplate(baseDirectory,
                     aOptions.fileNamePart(i), bOptions.fileNamePart(j));
-            fileLists.b2a[i * bOptions.numBlocks + j] = format!fileTemplate(baseDirectory,
-                    bOptions.fileNamePart(j), aOptions.fileNamePart(i));
         }
     }
 
-    return fileLists;
+    return fileList;
 }
 
 size_t getNumContigs(Options)(in string damFile, in Options options)

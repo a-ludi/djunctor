@@ -304,23 +304,6 @@ private
 
     void addDefaultOptions(ref Options options) nothrow
     {
-        import std.format : format;
-
-        if (!options.dalignerOptions || options.dalignerOptions.length == 0)
-        {
-            // dfmt off
-            options.dalignerOptions = [
-            ];
-            // dfmt on
-        }
-
-        if (!options.damapperOptions || options.damapperOptions.length == 0)
-        {
-            // dfmt off
-            options.damapperOptions = options.dalignerOptions ~ [
-            ];
-            // dfmt on
-        }
     }
 
     void verifyOptions(ref Options options)
