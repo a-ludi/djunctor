@@ -632,8 +632,6 @@ bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
 {
     assert(__traits(getMember, ac1, contig) == __traits(getMember, ac2, contig),
             "alignment chains do not belong to the same contig");
-    static if (contig == "contigB")
-        assert(ac1.complement == ac2.complement, "alignment chains must both align complemented or not");
 
     return __traits(getMember, ac1.first, contig).begin < __traits(getMember, ac2.first, contig).begin;
 }
