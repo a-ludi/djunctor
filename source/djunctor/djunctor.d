@@ -987,8 +987,6 @@ class DJunctor
             "coordTransformPython", coordTransform.toString(),
         );
         // dfmt on
-        // Clear `catHits` for next iteration.
-        catHits.length = 0;
         logJsonDiagnostic("state", "exit", "function", "djunctor.insertHits");
 
         return this;
