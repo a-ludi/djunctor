@@ -178,22 +178,22 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
 
     static struct Edge
     {
-        Node start;
-        Node end;
+        protected Node _start;
+        protected Node _end;
 
         static if (isWeighted)
             Weight weight;
 
         this(Node start, Node end)
         {
-            this.start = start;
-            this.end = end;
+            this._start = start;
+            this._end = end;
 
             static if (!isDirected)
             {
                 if (end < start)
                 {
-                    swap(this.start, this.end);
+                    swap(this._start, this._end);
                 }
             }
         }
@@ -205,6 +205,72 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
             {
                 this(start, end);
                 this.weight = weight;
+            }
+        }
+
+        @property Node start() const pure nothrow
+        {
+            return _start;
+        }
+
+        @property void start(Node start) pure nothrow
+        {
+            this._start = start;
+
+            static if (!isDirected)
+            {
+                if (end < start)
+                {
+                    swap(this._start, this._end);
+                }
+            }
+        }
+
+        @property Node end() const pure nothrow
+        {
+            return _end;
+        }
+
+        @property void end(Node end) pure nothrow
+        {
+            this._end = end;
+
+            static if (!isDirected)
+            {
+                if (end < start)
+                {
+                    swap(this._start, this._end);
+                }
+            }
+        }
+
+        Node from(Node from) const
+        {
+            static if (isDirected)
+            {
+                if (start == from)
+                {
+                    return end;
+                }
+                else
+                {
+                    throw new MissingNodeException();
+                }
+            }
+            else
+            {
+                if (start == from)
+                {
+                    return end;
+                }
+                else if (end == from)
+                {
+                    return start;
+                }
+                else
+                {
+                    throw new MissingNodeException();
+                }
             }
         }
 
@@ -288,6 +354,17 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
         sortedNodes.sort();
 
         this.nodes = sortedNodes;
+    }
+
+    this(in Node[] nodes, in Edge[] edges)
+    {
+        this(nodes);
+
+        _edges.reserve(edges.length);
+        foreach (edge; edges)
+        {
+            this ~= edge;
+        }
     }
 
     /// Add an edge to this graph and handle existing edges with `handleConflict`.
