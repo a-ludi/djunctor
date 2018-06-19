@@ -9,12 +9,12 @@
 module djunctor.util.math;
 
 import djunctor.util.algorithm : cmpLexicographically;
-import std.algorithm : filter, sort, sum, swap, uniq;
+import std.algorithm : all, filter, max, sort, sum, swap, uniq;
 import std.array : Appender, array;
 import std.conv : to;
 import std.exception : assertThrown;
 import std.functional : binaryFun;
-import std.range : assumeSorted, ElementType, isForwardRange, walkLength;
+import std.range : assumeSorted, ElementType, enumerate, isForwardRange, retro, walkLength;
 import std.traits : isIntegral, isNumeric;
 import std.typecons : Flag, No, Yes;
 
@@ -905,5 +905,200 @@ unittest
     foreach (contig; contigs)
     {
         assert(contigGraph.degree(contig) <= 2);
+    }
+}
+
+class EmptySetException : Exception
+{
+    this(string msg)
+    {
+        super(msg);
+    }
+}
+
+struct NaturalNumberSet
+{
+    private static immutable partSize = size_t.sizeof;
+    private static immutable size_t firstBit = 1;
+    private static immutable size_t lastBit = firstBit << partSize - 1;
+    private static immutable size_t emptyPart = 0;
+    private static immutable size_t fullPart = emptyPart ^ emptyPart;
+
+    private size_t[] parts;
+    private size_t nMax;
+
+    this(this)
+    {
+        parts = parts.dup;
+    }
+
+    private this(size_t[] parts)
+    {
+        this.parts = parts;
+    }
+
+    private bool inBounds(in size_t n) const pure nothrow
+    {
+        return n < nMax;
+    }
+
+    void reserveFor(in size_t n)
+    {
+        if (parts.length == 0)
+        {
+            parts.length = max(1, ceil(n, partSize) / partSize);
+        }
+
+        while (!inBounds(n))
+        {
+            parts.length *= 2;
+            nMax = parts.length * partSize;
+        }
+    }
+
+    private size_t partIdx(in size_t n) const pure nothrow
+    {
+        return n / partSize;
+    }
+
+    private size_t idxInPart(in size_t n) const pure nothrow
+    {
+        return n % partSize;
+    }
+
+    private size_t itemMask(in size_t n) const pure nothrow
+    {
+        return firstBit << idxInPart(n);
+    }
+
+    static size_t inverse(in size_t n) pure nothrow
+    {
+        return n ^ fullPart;
+    }
+
+    void add(in size_t n)
+    {
+        reserveFor(n);
+
+        parts[partIdx(n)] |= itemMask(n);
+    }
+
+    void remove(in size_t n)
+    {
+        if (!inBounds(n))
+        {
+            return;
+        }
+
+        parts[partIdx(n)] &= inverse(itemMask(n));
+    }
+
+    bool has(in size_t n) const pure nothrow
+    {
+        if (!inBounds(n))
+        {
+            return false;
+        }
+
+        return (parts[partIdx(n)] & itemMask(n)) != emptyPart;
+    }
+
+    bool empty() const pure nothrow
+    {
+        return parts.all!(part => part == emptyPart);
+    }
+
+    size_t minElement() const
+    {
+        foreach (i, part; parts)
+        {
+            if (part != emptyPart)
+            {
+                size_t j = 0;
+
+                while (((part >> j) & firstBit) != firstBit)
+                {
+                    ++j;
+                }
+
+                return i * partSize + j;
+            }
+        }
+
+        throw new EmptySetException("empty set has no minElement");
+    }
+
+    size_t maxElement() const
+    {
+        foreach (i, part; parts.retro.enumerate)
+        {
+            if (part != emptyPart)
+            {
+                size_t j = 0;
+
+                while (((part << j) & lastBit) != lastBit)
+                {
+                    ++j;
+                }
+
+                return (parts.length - i - 1) * partSize + (partSize - j - 1);
+            }
+        }
+
+        throw new EmptySetException("empty set has no maxElement");
+    }
+
+    unittest
+    {
+        foreach (i; 0 .. 2 * NaturalNumberSet.partSize)
+        {
+            NaturalNumberSet set;
+
+            set.add(i + 5);
+            set.add(i + 7);
+
+            assert(set.minElement() == i + 5);
+            assert(set.maxElement() == i + 7);
+        }
+    }
+}
+
+unittest
+{
+    NaturalNumberSet set;
+
+    // add some numbers
+    foreach (i; 0 .. set.partSize)
+    {
+        if (i % 2 == 0)
+        {
+            set.add(i);
+        }
+    }
+
+    // force extension of set
+    foreach (i; set.partSize .. 2 * set.partSize)
+    {
+        if (i % 3 == 0)
+        {
+            set.add(i);
+        }
+    }
+
+    // validate presence
+    foreach (i; 0 .. 2 * set.partSize)
+    {
+        if (i / set.partSize == 0 && i % 2 == 0)
+        {
+            assert(set.has(i));
+        }
+        else if (i / set.partSize == 1 && i % 3 == 0)
+        {
+            assert(set.has(i));
+        }
+        else
+        {
+            assert(!set.has(i));
+        }
     }
 }
