@@ -285,6 +285,31 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected, Ed
             }
         }
 
+        /**
+            Get source of this edge beginning at node `from`. For undirected
+            graphs returns the other node of this edge.
+
+            Throws: MissingNodeException if this edge does not end in node `from`.
+        */
+        static if (isDirected)
+        {
+            Node source(Node from) const
+            {
+                if (end == from)
+                {
+                    return start;
+                }
+                else
+                {
+                    throw new MissingNodeException();
+                }
+            }
+        }
+        else
+        {
+            alias source = target;
+        }
+
         /// Two edges are equal iff their incident nodes (and weight) are the
         /// same.
         bool opEquals(in Edge other) const pure nothrow
@@ -334,6 +359,38 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected, Ed
                 "a.end",
             )(this, other);
             // dfmt on
+        }
+
+        /**
+            Returns the node that is connects this edge with other edge. In
+            case of undirected graphs this is just the common node of both
+            edges; in directed case this is the end node of this edge if it
+            matches the start node of other edge.
+
+            Throws: MissingNodeException if the connecting node is undefined.
+        */
+        Node getConnectingNode(in Edge other) const
+        {
+            static if (isDirected)
+            {
+                if (this.end == other.start)
+                {
+                    return this.end;
+                }
+            }
+            else
+            {
+                if (this.end == other.start || this.end == other.end)
+                {
+                    return this.end;
+                }
+                else if (this.start == other.start || this.start == other.end)
+                {
+                    return this.start;
+                }
+            }
+
+            throw new MissingNodeException();
         }
     }
 
