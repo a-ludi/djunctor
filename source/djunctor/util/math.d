@@ -8,8 +8,9 @@
 */
 module djunctor.util.math;
 
-import std.algorithm : filter, sort, sum, swap;
-import std.array : Appender;
+import djunctor.util.algorithm : cmpLexicographically;
+import std.algorithm : filter, sort, sum, swap, uniq;
+import std.array : Appender, array;
 import std.conv : to;
 import std.exception : assertThrown;
 import std.functional : binaryFun;
@@ -172,9 +173,10 @@ class MissingNodeException : Exception
 /// payloads. The graph is represented as a list of edges which is
 /// particularly suited for sparse graphs. While the set of nodes is fixed the
 /// set of edges is mutable.
-struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
+struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected, EdgePayload=void)
 {
-    static immutable isWeighted = is(typeof(Weight()));
+    static immutable isWeighted = !is(Weight == void);
+    static immutable hasEdgePayload = !is(EdgePayload == void);
 
     static struct Edge
     {
@@ -184,6 +186,10 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
         static if (isWeighted)
             Weight weight;
 
+        static if (hasEdgePayload)
+            EdgePayload payload;
+
+        /// Construct an edge.
         this(Node start, Node end)
         {
             this._start = start;
@@ -200,7 +206,7 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
 
         static if (isWeighted)
         {
-
+            /// ditto
             this(Node start, Node end, Weight weight)
             {
                 this(start, end);
@@ -208,43 +214,48 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
             }
         }
 
+        static if (hasEdgePayload && !is(EdgePayload : Weight))
+        {
+            /// ditto
+            this(Node start, Node end, EdgePayload payload)
+            {
+                this(start, end);
+                this.payload = payload;
+            }
+        }
+
+        static if (isWeighted && hasEdgePayload)
+        {
+            /// ditto
+            this(Node start, Node end, Weight weight, EdgePayload payload)
+            {
+                this(start, end);
+                this.weight = weight;
+                this.payload = payload;
+            }
+        }
+
+        /// Get the start of this edge. For undirected graphs this is the
+        /// smaller of both incident nodes.
         @property Node start() const pure nothrow
         {
             return _start;
         }
 
-        @property void start(Node start) pure nothrow
-        {
-            this._start = start;
-
-            static if (!isDirected)
-            {
-                if (end < start)
-                {
-                    swap(this._start, this._end);
-                }
-            }
-        }
-
+        /// Get the end of this edge. For undirected graphs this is the
+        /// larger of both incident nodes.
         @property Node end() const pure nothrow
         {
             return _end;
         }
 
-        @property void end(Node end) pure nothrow
-        {
-            this._end = end;
+        /**
+            Get target of this edge beginning at node `from`. For undirected
+            graphs returns the other node of this edge.
 
-            static if (!isDirected)
-            {
-                if (end < start)
-                {
-                    swap(this._start, this._end);
-                }
-            }
-        }
-
-        Node from(Node from) const
+            Throws: MissingNodeException if this edge does not start in node `from`.
+        */
+        Node target(Node from) const
         {
             static if (isDirected)
             {
@@ -274,6 +285,8 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
             }
         }
 
+        /// Two edges are equal iff their incident nodes (and weight) are the
+        /// same.
         bool opEquals(in Edge other) const pure nothrow
         {
             static if (isWeighted)
@@ -286,46 +299,41 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
             }
         }
 
+        /// Orders edge lexicographically by `start`, `end`(, `weight`).
         int opCmp(in Edge other) const pure nothrow
         {
-            // dfmt off
-            immutable cmpFields = isWeighted
-                ? ["start", "end", "weight"]
-                : ["start", "end"];
-            // dfmt on
-
-            static foreach(field; cmpFields)
+            static if (isWeighted)
             {
-                if (mixin("this."~field~" < other."~field))
-                {
-                    return -1;
-                }
-                else if (mixin("this."~field~" > other."~field))
-                {
-                    return 1;
-                }
+                // dfmt off
+                return cmpLexicographically!(
+                    typeof(this),
+                    "a.start",
+                    "a.end",
+                    "a.weight",
+                )(this, other);
+                // dfmt on
             }
-
-            return 0;
+            else
+            {
+                // dfmt off
+                return cmpLexicographically!(
+                    typeof(this),
+                    "a.start",
+                    "a.end",
+                )(this, other);
+                // dfmt on
+            }
         }
 
         private int compareNodes(in Edge other) const pure nothrow
         {
-            immutable cmpFields = ["start", "end"];
-
-            static foreach(field; cmpFields)
-            {
-                if (mixin("this."~field~" < other."~field))
-                {
-                    return -1;
-                }
-                else if (mixin("this."~field~" > other."~field))
-                {
-                    return 1;
-                }
-            }
-
-            return 0;
+            // dfmt off
+            return cmpLexicographically!(
+                typeof(this),
+                "a.start",
+                "a.end",
+            )(this, other);
+            // dfmt on
         }
     }
 
@@ -334,42 +342,68 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
         return a.compareNodes(b) < 0;
     }
 
+    /// Construct an edge for this graph.
     static Edge edge(T...)(T args)
     {
         return Edge(args);
     }
 
-    const(Node[]) nodes;
+    protected Node[] _nodes;
     protected Appender!(Edge[]) _edges;
 
+    /// The set (ordered list) of nodes.
+    @property const(Node[]) nodes() const nothrow pure
+    {
+        return _nodes;
+    }
+
+    private @property void nodes(Node[] nodes)
+    {
+        nodes.sort();
+
+        this._nodes = nodes.uniq.array;
+    }
+
+    /// Get the set (ordered list) of edges in this graph.
     @property const(Edge[]) edges() const nothrow pure
     {
         return _edges.data;
     }
 
-    this(in Node[] nodes)
+    /**
+        Construct a graph from a set of nodes (and edges). Modifies `nodes`
+        while sorting but releases it after construction.
+
+        Throws: MissingNodeException if an edge has a node that is not present
+                in this graph .
+        Throws: EdgeExistsException if an edge already exists when trying
+                inserting it.
+    */
+    this(Node[] nodes)
     {
-        Node[] sortedNodes = nodes.dup;
-
-        sortedNodes.sort();
-
-        this.nodes = sortedNodes;
+        this.nodes = nodes;
     }
 
-    this(in Node[] nodes, in Edge[] edges)
+    /// ditto
+    this(Node[] nodes, Edge[] edges)
     {
         this(nodes);
 
         _edges.reserve(edges.length);
         foreach (edge; edges)
         {
-            this ~= edge;
+            this.add(edge);
         }
+    }
+
+    this(this)
+    {
+        _nodes = _nodes.dup;
     }
 
     /// Add an edge to this graph and handle existing edges with `handleConflict`.
     /// The handler must have this signature `Edge handleConflict(Edge, Edge)`.
-    void add(alias handleConflict = ConflictStrategy.error)(Edge edge)
+    Edge add(alias handleConflict = ConflictStrategy.error)(Edge edge)
     {
         if (!has(edge.start) || !has(edge.end))
         {
@@ -383,13 +417,13 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
 
         if (existingEdges.empty)
         {
-            forceAdd(edge);
+            return forceAdd(edge);
         }
         else
         {
             auto newEdge = binaryFun!handleConflict(existingEdges.front, edge);
 
-            _edges.data[existingEdgeIdx] = newEdge;
+            return replaceEdge(existingEdgeIdx, newEdge);
         }
     }
 
@@ -440,32 +474,93 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
 
                 return existingEdge;
             }
+
+            ///
+            unittest
+            {
+                auto g1 = Graph!(int, int)([1, 2]);
+                alias CS = g1.ConflictStrategy;
+
+                g1 ~= g1.edge(1, 2, 1);
+
+                auto addedEdge = g1.add!(CS.sumWeights)(g1.edge(1, 2, 1));
+
+                assert(addedEdge.weight == 2);
+            }
         }
 
         /// Throw `EdgeExistsException`.
-        static Edge error(Edge existingEdge, Edge newEdge)
+        static inout(Edge) error(inout(Edge) existingEdge, inout(Edge) newEdge)
         {
             throw new EdgeExistsException();
         }
 
+        ///
+        unittest
+        {
+            auto g1 = Graph!int([1, 2]);
+            alias CS = g1.ConflictStrategy;
+
+            g1 ~= g1.edge(1, 2);
+
+            assertThrown!EdgeExistsException(g1.add!(CS.error)(g1.edge(1, 2)));
+        }
+
         /// Replace the existingEdge by newEdge.
-        static Edge replace(Edge existingEdge, Edge newEdge)
+        static inout(Edge) replace(inout(Edge) existingEdge, inout(Edge) newEdge)
         {
             return newEdge;
         }
 
+        ///
+        unittest
+        {
+            auto g1 = Graph!(int, int)([1, 2]);
+            alias CS = g1.ConflictStrategy;
+
+            g1 ~= g1.edge(1, 2, 1);
+
+            auto addedEdge = g1.add!(CS.replace)(g1.edge(1, 2, 2));
+
+            assert(addedEdge.weight == 2);
+        }
+
         /// Keep existingEdge – discard newEdge.
-        static Edge keep(Edge existingEdge, Edge newEdge)
+        static inout(Edge) keep(inout(Edge) existingEdge, inout(Edge) newEdge)
         {
             return existingEdge;
+        }
+
+        ///
+        unittest
+        {
+            auto g1 = Graph!(int, int)([1, 2]);
+            alias CS = g1.ConflictStrategy;
+
+            g1 ~= g1.edge(1, 2, 1);
+
+            auto addedEdge = g1.add!(CS.keep)(g1.edge(1, 2, 2));
+
+            assert(addedEdge.weight == 1);
         }
     }
 
     /// Forcibly add an edge to this graph.
-    protected void forceAdd(Edge edge)
+    protected Edge forceAdd(Edge edge)
     {
         _edges ~= edge;
         _edges.data.sort;
+
+        return edge;
+    }
+
+    /// Replace an edge in this graph.
+    protected Edge replaceEdge(in size_t edgeIdx, Edge newEdge)
+    {
+        _edges.data[edgeIdx] = newEdge;
+        _edges.data.sort;
+
+        return newEdge;
     }
 
     /// Check if edge/node exists in this graph. Ignores the weight if weighted.
@@ -499,7 +594,7 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
 
     /// Get the designated edge from this graph. Only the `start` and `end`
     /// node will be compared.
-    Edge get(Edge edge)
+    auto get(Edge edge)
     {
         auto sortedEdges = assumeSorted!orderByNodes(edges);
         auto existingEdges = sortedEdges.equalRange(edge);
@@ -527,12 +622,50 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
         assertThrown!MissingEdgeException(g1.get(g1.edge(1, 1)));
     }
 
+    /// Returns the ndex of node `n` in the list of nodes.
+    size_t indexOf(Node n) const
+    {
+        auto sortedNodes = assumeSorted(nodes);
+        auto tristectedNodes = sortedNodes.trisect(n);
+
+        if (tristectedNodes[1].empty)
+        {
+            throw new MissingNodeException();
+        }
+
+        return tristectedNodes[0].length;
+    }
+
+
+    ///
+    unittest
+    {
+
+        auto g1 = Graph!(int, int)([1, 2]);
+
+        assert(g1.indexOf(1) == 0);
+        assert(g1.indexOf(2) == 1);
+        assertThrown!MissingNodeException(g1.indexOf(3));
+    }
+
     static if (isDirected)
     {
         /// Returns a range of in/outgoing edges of node `n`.
+        auto inEdges(Node n) nothrow pure
+        {
+            return _edges.data[].filter!(e => e.end == n);
+        }
+
+        /// ditto
         auto inEdges(Node n) const nothrow pure
         {
             return edges[].filter!(e => e.end == n);
+        }
+
+        /// ditto
+        auto outEdges(Node n) nothrow pure
+        {
+            return _edges.data[].filter!(e => e.start == n);
         }
 
         /// ditto
@@ -609,6 +742,12 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected)
     else
     {
         /// Returns a range of all edges incident to node `n`.
+        auto incidentEdges(Node n) nothrow pure
+        {
+            return _edges.data[].filter!(e => e.start == n || e.end == n);
+        }
+
+        /// ditto
         auto incidentEdges(Node n) const nothrow pure
         {
             return edges[].filter!(e => e.start == n || e.end == n);
@@ -727,6 +866,28 @@ unittest
     assert(g4.edge(1, 2) in g4);
     assert(!(g4.edge(2, 1) in g4));
     assert(g4.has(g4.edge(2, 2)));
+
+    //   +-+  +-+
+    //   \ /  \ /
+    //   (1)--(2)
+    //
+    // payload(1, 1) = [1];
+    // payload(1, 2) = [2];
+    // payload(2, 2) = [3];
+    auto g5 = Graph!(int, void, No.isDirected, int[])([1, 2]);
+
+    g5 ~= g5.edge(1, 1, [1]);
+    g5 ~= g5.edge(1, 2, [2]);
+    g5.add(g5.edge(2, 2, [3]));
+
+    assert(g5.edge(1, 1) in g5);
+    assert(g5.get(g5.edge(1, 1)).payload == [1]);
+    assert(g5.edge(1, 2) in g5);
+    assert(g5.get(g5.edge(1, 2)).payload == [2]);
+    assert(g5.edge(2, 1) in g5);
+    assert(g5.get(g5.edge(2, 1)).payload == [2]);
+    assert(g5.has(g5.edge(2, 2)));
+    assert(g5.get(g5.edge(2, 2)).payload == [3]);
 }
 
 ///
