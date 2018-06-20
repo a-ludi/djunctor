@@ -15,7 +15,7 @@ import std.array : appender, array, join;
 import std.exception : assertThrown;
 import std.format : format;
 import std.range : assumeSorted, chunks, ElementType, InputRange,
-    inputRangeObject, isInputRange, only;
+    inputRangeObject, isInputRange, only, retro;
 import std.traits : isNumeric, Unqual;
 import std.stdio : writeln;
 
@@ -112,6 +112,24 @@ void enforceNonEmpty(R)(in R region) if (is(R : Region!Args, Args...))
 struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
 {
     static assert(isNumeric!Number, "interval limits must be numeric");
+
+    static if (__traits(compiles, Number.infinity))
+    {
+        static immutable numberSup = Number.infinity;
+    }
+    else
+    {
+        static immutable numberSup = Number.max;
+    }
+
+    /**
+        This represents a single tagged point.
+    */
+    static struct TaggedPoint
+    {
+        Tag tag = emptyTag;
+        Number value;
+    }
 
     /**
         This is a right-open interval `[begin, end)` tagged with `tag`.
@@ -880,6 +898,55 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
 
         assert(accRegion == expectedResult);
         assert((inputRegion1 | inputRegion2) == expectedResult);
+    }
+
+    /// Returns true iff point is in this region.
+    bool opBinaryRight(string op)(in TaggedPoint point) const pure nothrow if (op == "in")
+    {
+        if (this.empty)
+        {
+            return false;
+        }
+
+        auto needle = TaggedInterval(point.tag, point.value, numberSup);
+        auto sortedIntervals = intervals.assumeSorted;
+        auto candidateIntervals = sortedIntervals.lowerBound(needle).retro;
+
+        if (candidateIntervals.empty)
+        {
+            return false;
+        }
+
+        auto candidateInterval = candidateIntervals.front;
+
+        return candidateInterval.begin <= point.value && point.value < candidateInterval.end;
+    }
+
+    /// ditto
+    alias includes = opBinaryRight!"in";
+
+    ///
+    unittest
+    {
+        alias R = Region!(int, int);
+        alias TI = R.TaggedInterval;
+        alias TP = R.TaggedPoint;
+
+        R emptyRegion;
+        auto region = R([TI(0, 0, 10), TI(1, 0, 10)]);
+
+        assert(TP(0, 0) !in emptyRegion);
+        assert(TP(0, 5) !in emptyRegion);
+        assert(TP(0, 10) !in emptyRegion);
+        assert(TP(0, 20) !in emptyRegion);
+        assert(TP(0, 0) in region);
+        assert(TP(0, 5) in region);
+        assert(TP(0, 10) !in region);
+        assert(TP(0, 20) !in region);
+        assert(TP(1, 0) in region);
+        assert(TP(1, 5) in region);
+        assert(TP(1, 10) !in region);
+        assert(TP(1, 20) !in region);
     }
 }
 
