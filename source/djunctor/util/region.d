@@ -84,6 +84,28 @@ void enforceMatchingTags(Taggable)(in Taggable taggableA, in Taggable taggableB)
     }
 }
 
+/// Thrown if regions is unexpectedly empty.
+static class EmptyRegionException : Exception
+{
+    this()
+    {
+        super("empty region");
+    }
+}
+
+/*
+    Throws an exception if region is empty.
+
+    Throws: EmptyRegionException if region is empty.
+*/
+void enforceNonEmpty(R)(in R region) if (is(R : Region!Args, Args...))
+{
+    if (region.empty)
+    {
+        throw new EmptyRegionException();
+    }
+}
+
 /**
     A Region is a set of tagged intervals where differently tagged intervals are distinct.
 */
@@ -871,7 +893,7 @@ unittest
 
     See_Also: Region.empty, Region.TaggedInterval.empty
 */
-bool empty(T)(in T thing) pure nothrow 
+bool empty(T)(in T thing) pure nothrow
         if (is(T : Region!Args, Args...) || is(T : Region!Args.TaggedInterval, Args...))
 {
     return thing.empty;
@@ -926,4 +948,52 @@ unittest
     assert(empty(emptyTI));
     assert(!empty(region));
     assert(!empty(ti));
+}
+
+/**
+    Returns the minimum/supremum point of the intervals. Both values are
+    undefined for empty regions.
+
+    Throws: MismatchingTagsException if `tag`s differ.
+    Throws: EmptyRegionException if region is empty.
+*/
+auto min(R)(R region)
+    if (is(R : Region!Args, Args...))
+{
+    alias TI = R.TaggedInterval;
+
+    enforceNonEmpty(region);
+    auto convexHull = TI.convexHull(region.intervals[0], region.intervals[$ - 1]);
+
+    return convexHull.begin;
+}
+
+/// ditto
+auto sup(R)(R region)
+    if (is(R : Region!Args, Args...))
+{
+    alias TI = R.TaggedInterval;
+
+    enforceNonEmpty(region);
+    auto convexHull = TI.convexHull(region.intervals[0], region.intervals[$ - 1]);
+
+    return convexHull.end;
+}
+
+///
+unittest
+{
+    alias R = Region!(int, int);
+    alias TI = R.TaggedInterval;
+
+    R emptyRegion;
+    auto region1 = R([TI(0, 0, 10), TI(0, 20, 30)]);
+    auto region2 = R([TI(0, 0, 10), TI(1, 0, 10)]);
+
+    assert(min(region1) == 0);
+    assert(sup(region1) == 30);
+    assertThrown!EmptyRegionException(min(emptyRegion));
+    assertThrown!EmptyRegionException(sup(emptyRegion));
+    assertThrown!(MismatchingTagsException!int)(min(region2));
+    assertThrown!(MismatchingTagsException!int)(sup(region2));
 }
