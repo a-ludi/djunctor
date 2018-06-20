@@ -14,7 +14,7 @@ import std.array : Appender, array;
 import std.conv : to;
 import std.exception : assertThrown;
 import std.functional : binaryFun;
-import std.range : assumeSorted, ElementType, enumerate, isForwardRange, retro, walkLength;
+import std.range : assumeSorted, chain, ElementType, enumerate, isForwardRange, retro, walkLength;
 import std.traits : isIntegral, isNumeric;
 import std.typecons : Flag, No, Yes;
 
@@ -422,9 +422,15 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected, Ed
     }
 
     /// Get the set (ordered list) of edges in this graph.
-    @property const(Edge[]) edges() const nothrow pure
+    @property auto edges() nothrow pure
     {
-        return _edges.data;
+        return chain(_edges.data);
+    }
+
+    /// ditto
+    @property auto edges() const nothrow pure
+    {
+        return chain(_edges.data);
     }
 
     /**
