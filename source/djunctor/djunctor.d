@@ -741,7 +741,7 @@ class DJunctor
         logJsonDiagnostic("state", "enter", "function", "djunctor.findHits");
 
         // dfmt off
-        auto pileUps = buildPileUps(catCandidates)
+        auto pileUps = buildPileUps(numReferenceContigs, catCandidates)
             .filter!(pileUp => pileUp.length >= options.minReadsPerPileUp)
             .array;
         // dfmt on
@@ -1236,18 +1236,6 @@ class DJunctor
                         .map!"a.contigA.id"
                         .array)
                     .front
-                    .toJson,
-                "estimateLengthMean": pileUp
-                    .filter!lengthFilter
-                    .map!"a.getInsertionSize"
-                    .array
-                    .mean
-                    .toJson,
-                "estimateLengthMedian": pileUp
-                    .filter!lengthFilter
-                    .map!"a.getInsertionSize"
-                    .array
-                    .median
                     .toJson,
                 "numReads": Json(pileUp.length),
             ]);
