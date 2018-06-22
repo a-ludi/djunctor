@@ -9,7 +9,7 @@
 module djunctor.djunctor;
 
 import djunctor.alignments : AlignmentChain, alignmentCoverage, buildPileUps, getAlignmentChainRefs,
-    getType, haveEqualIds, isGap, isValid, PileUp, ReadAlignment, ReadAlignmentType;
+    getType, haveEqualIds, isExtension, isGap, isValid, makeJoin, PileUp, ReadAlignment, ReadAlignmentType, safeGapTypes;
 import djunctor.commandline : Options;
 import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
     getLocalAlignments, getMappings, getNumContigs, getTracePointDistance,
@@ -17,26 +17,28 @@ import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
 import djunctor.util.fasta : parseFasta, parseFastaRecord, parsePacBioHeader,
     reverseComplement;
 import djunctor.util.log;
-import djunctor.util.math : absdiff, ceil, floor, mean, median;
+import djunctor.util.math : absdiff, ceil, floor, mean, median, NaturalNumberSet;
 import djunctor.util.range : Comparator;
-import djunctor.util.region : empty, Region, union_;
+import djunctor.util.region : empty, min, Region, sup, union_;
+import djunctor.util.scaffold : concatenatePayloads, ContigNode, contigStarts, getDefaultJoin, initScaffold, isAntiParallel, isBackExtension, isDefault, isExtension, isFrontExtension, isGap, isValid, Join, linearWalk, Scaffold;
 import djunctor.util.string : indent;
 import dstats.distrib : invPoissonCDF;
 import core.exception : AssertError;
 import std.algorithm : all, any, cache, canFind, chunkBy, each, equal, filter,
-    find, fold, group, isSorted, joiner, map, max, maxElement, min,
-    multiwayUnion, setDifference, sort, sum, swap, SwapStrategy, uniq;
-import std.array : appender, Appender, array, join;
+    find, fold, group, isSorted, joiner, map, max, maxElement, maxIndex, min,
+    multiwayUnion, predSwitch, setDifference, sort, sum, swap, SwapStrategy, uniq;
+import std.array : appender, Appender, array, join, minimallyInitializedArray;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
 import std.exception : assertNotThrown, assertThrown;
 import std.format : format, formattedWrite;
 import std.math : abs, floor, sgn;
-import std.range : assumeSorted, chain, chunks, ElementType, enumerate,
+import std.range : assumeSorted, chain, chunks, drop, ElementType, enumerate,
     ForwardRange, InputRange, inputRangeObject, iota, isForwardRange,
     isInputRange, only, retro, slide, SortedRange, tail, take, walkLength, zip;
 import std.stdio : File, write, writeln;
 import std.string : outdent;
+import std.traits : Unqual;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
 import vibe.data.json : Json, toJson = serializeToJson;
 
@@ -48,379 +50,437 @@ void runWithOptions(in ref Options options)
 
 alias ReferenceMask = Region!(size_t, size_t, "contigId");
 alias ReferenceInterval = ReferenceMask.TaggedInterval;
+alias ReferencePoint = ReferenceMask.TaggedPoint;
+alias ReadMask = Region!(size_t, size_t, "readId");
+alias ReadInterval = ReadMask.TaggedInterval;
+alias ReadPoint = ReadMask.TaggedPoint;
 
 /// Returns the alignment region of alignmentChain.
-ReferenceMask getRegion(in AlignmentChain alignmentChain) pure nothrow
+ReferenceMask getRegion(in AlignmentChain alignmentChain) pure
 {
+    auto contigAId = alignmentChain.contigA.id;
     // dfmt off
-    return ReferenceMask(
-        alignmentChain.contigA.id,
-        alignmentChain.first.contigA.begin,
-        alignmentChain.last.contigA.end,
+    return ReferenceMask(alignmentChain
+        .localAlignments
+        .map!(la => ReferenceInterval(
+            contigAId,
+            la.contigA.begin,
+            la.contigA.end,
+        ))
+        .array
     );
     // dfmt on
 }
 
-// dfmt off
-alias CroppingSlice = Tuple!(
-    size_t, "begin",
-    size_t, "end",
-);
-alias CroppingRefPosition = Tuple!(
-    size_t, "frontIdx",
-    size_t, "frontContigId",
-    size_t, "backIdx",
-    size_t, "backContigId",
-);
-// dfmt on
+/**
+    Get points on the reference where the pileUp should be cropped. Returns
+    one common trace point for each involved contig.
 
-CroppingSlice intersection(in CroppingSlice aSlice, in CroppingSlice bSlice) pure nothrow
+    See_Also: `getCommonTracePoint`
+*/
+private ReferencePoint[] getCroppingRefPositions(PileUp pileUp, in ReferenceMask mask, in size_t tracePointDistance)
 {
-    return CroppingSlice(max(aSlice[0], bSlice[0]), min(aSlice[1], bSlice[1]));
-}
+    auto alignmentsByContig = pileUp.splitAlignmentsByContigA();
+    auto commonTracePoints = alignmentsByContig.map!(acs => getCommonTracePoint(acs, mask, tracePointDistance)).array;
+    auto contigAIds = alignmentsByContig.map!"a[0].contigA.id".array;
 
-CroppingRefPosition getCroppingRefPositions(const PileUp pileUp, in size_t tracePointDistance) pure nothrow
-{
-    // dfmt off
-    auto frontAlignments = pileUp
-        .filter!(readAlignment => readAlignment.isFrontExtension || readAlignment.isGap)
-        .map!"a[$ - 1]"
-        .array;
-    auto backAlignments = pileUp
-        .filter!(readAlignment => readAlignment.isBackExtension || readAlignment.isGap)
-        .map!"a[0]"
-        .array;
-    // dfmt on
-    auto commonFrontTracePoint = frontAlignments.getCommonFrontTracePoint(tracePointDistance);
-    auto commonBackTracePoint = backAlignments.getCommonBackTracePoint(tracePointDistance);
-    size_t frontContig;
-    size_t backContig;
+    auto cropPos = zip(contigAIds, commonTracePoints).map!(zipped => ReferencePoint(zipped.expand)).array;
 
-    if (frontAlignments.length > 0 && backAlignments.length > 0)
-    {
-        frontContig = frontAlignments[0].contigA.id;
-        backContig = backAlignments[0].contigA.id;
-    }
-    else if (frontAlignments.length > 0)
-    {
-        frontContig = backContig = frontAlignments[0].contigA.id;
-    }
-    else if (backAlignments.length > 0)
-    {
-        backContig = frontContig = backAlignments[0].contigA.id;
-    }
-    else
-    {
-        assert(0, "empty pile up");
-    }
-
-    // dfmt off
-    return CroppingRefPosition(
-        commonFrontTracePoint,
-        frontContig,
-        commonBackTracePoint,
-        backContig,
+    debug logJsonDebug(
+        "alignmentsByContig", alignmentsByContig.toJson,
+        "pileUp", pileUp.toJson,
+        "cropPos", cropPos.toJson,
     );
-    // dfmt on
+
+    return cropPos;
 }
 
-CroppingSlice getCroppingSlice(const AlignmentChain alignmentChain,
-        in CroppingRefPosition croppingRefPosition)
+/// Sort alignment chains of pileUp into groups with the same `contigA.id`.
+private const(AlignmentChain)[][] splitAlignmentsByContigA(PileUp pileUp)
 {
-    auto alignment = const(ReadAlignment)(alignmentChain);
-    auto alignmentType = alignment.type;
-    auto tracePointDistance = alignmentChain.tracePointDistance;
-    // dfmt off
-    auto refPos = alignmentType == ReadAlignmentType.front
-        ? croppingRefPosition.frontIdx
-        : croppingRefPosition.backIdx;
-    // dfmt on
-    auto openInterval = alignmentType == ReadAlignmentType.front;
-    size_t readCroppingPos;
-
-    foreach (localAlignment; alignmentChain.localAlignments)
+    if (pileUp.length == 0)
     {
-        auto firstTracePointRefPos = ceil(localAlignment.contigA.begin, tracePointDistance);
-        auto numTracePoints = localAlignment.tracePoints.length;
-        assert(refPos >= firstTracePointRefPos);
-        auto tracePointIdx = (refPos - firstTracePointRefPos) / tracePointDistance;
-
-        if (tracePointIdx < numTracePoints)
-        {
-            auto endIdx = tracePointIdx + (openInterval ? 0 : 1);
-            // dfmt off
-            readCroppingPos =
-                localAlignment.contigB.begin +
-                localAlignment
-                    .tracePoints[0 .. endIdx]
-                    .map!"a.numBasePairs"
-                    .sum;
-            // dfmt on
-            break;
-        }
+        return [];
     }
 
     // dfmt off
+    auto orderedAlignments = pileUp
+        .map!"a[]"
+        .joiner
+        .array
+        .sort;
+    // dfmt on
+    auto alignmentsByContig = orderedAlignments.chunkBy!"a.contigA.id == b.contigA.id";
+
+    // dfmt off
+    return alignmentsByContig
+        .filter!"!a.empty"
+        .map!(acsByContig => acsByContig
+            .map!(ac => cast(const(typeof(ac))) ac))
+        .map!array
+        .array;
+    // dfmt on
+}
+
+/// Returns a common trace points wrt. contigA that is not in mask.
+private long getCommonTracePoint(in AlignmentChain[] alignmentChains, in ReferenceMask mask, in size_t tracePointDistance)
+{
+    static long getCommonTracePoint(R)(R tracePointCandidates, ReferenceMask allowedTracePointRegion) pure
+    {
+        auto commonTracePoints = tracePointCandidates.filter!(c => c in allowedTracePointRegion);
+
+        return commonTracePoints.empty ? -1 : commonTracePoints.front.value.to!long;
+    }
+
+    auto contigA = alignmentChains[0].contigA;
+    auto alignmentType = ReadAlignment(alignmentChains[0]).type;
+    assert(alignmentType != ReadAlignmentType.gap);
+    // dfmt off
+    auto commonAlignmentRegion = alignmentChains
+        .map!getRegion
+        .fold!"a & b";
+    auto relevantContigHalf = alignmentType == ReadAlignmentType.front
+        ? ReferenceMask(contigA.id, 0, contigA.length / 2)
+        : ReferenceMask(contigA.id, contigA.length / 2, contigA.length);
+    // dfmt on
+    auto allowedTracePointRegion = (relevantContigHalf & commonAlignmentRegion) - mask;
+
+    if (allowedTracePointRegion.empty)
+    {
+        return -1;
+    }
+
+    auto tracePointMin = ceil(min(allowedTracePointRegion), tracePointDistance);
+    auto tracePointSup = ceil(sup(allowedTracePointRegion), tracePointDistance);
+    // dfmt off
+    auto tracePointCandidates = iota(tracePointMin, tracePointSup, tracePointDistance)
+        .map!(tracePointCandidate => ReferencePoint(contigA.id, tracePointCandidate));
+    // dfmt on
+
     return alignmentType == ReadAlignmentType.front
-        ? CroppingSlice(0, readCroppingPos)
-        : CroppingSlice(readCroppingPos, alignmentChain.contigB.length);
-    // dfmt on
-}
-
-/**
-    Returns a back "common" trace points wrt. contigB. The returned
-    trace point is not necessarily common to *all* alignment chains, ie. the
-    alignment intervals are incrementally intersected reject those that would
-    cause an empty intersection. The intervals are ordered descending by
-    end point and starting point. Example:
-
-    ---
-    :....:....:....:....:....:....:....:....:
-    :    :    :    :    |----+--------------|
-    :    :    :    |---------+--------------|
-    :    :    :    :    :  |-+---------|    :
-    :    :    :    :    :   |+--------|:    :
-    :    :    :    :    :|---+-------| :    :
-    :    : |-----------|:    :    :    :    :
-    |---------|    :    :    :    :    :    :
-
-     :  = trace point
-     +  = "common" trace point
-    |-| = alignment interval
-    ---
-*/
-size_t getCommonBackTracePoint(const AlignmentChain[] alignmentChains, in size_t tracePointDistance) pure nothrow
-{
-    // dfmt off
-    auto alignmentSlices = alignmentChains
-        .map!(ac => tuple(
-            ac.last.contigA.end + 0,
-            ac.first.contigA.begin + 0,
-        ))
-        .array;
-    // dfmt on
-
-    foreach (alignmentSlice; alignmentSlices)
-    {
-        assert(alignmentSlice[0] > alignmentSlice[1]);
-    }
-    // dfmt off
-    debug logJsonDebug(
-        "alignmentSlices", alignmentSlices.map!"[a[0], a[1]]".array.toJson,
-        "contigAIds", alignmentChains.map!"a.contigA.id".array.toJson,
-        "type", "back",
-    );
-    // dfmt on
-
-    return getCommonBackTracePoint(alignmentSlices, tracePointDistance);
-}
-
-private size_t getCommonBackTracePoint(Tuple!(size_t,
-        size_t)[] alignmentSlices, in size_t tracePointDistance) pure nothrow
-{
-    if (alignmentSlices.length == 0)
-        return 0;
-
-    alignmentSlices.sort!"a > b";
-    auto commonSlice = tuple(0UL, size_t.max);
-    auto lastCommonSlice = commonSlice;
-
-    foreach (alignmentSlice; alignmentSlices)
-    {
-        commonSlice[0] = ceil(max(commonSlice[0], alignmentSlice[1]), tracePointDistance);
-        commonSlice[1] = floor(min(commonSlice[1], alignmentSlice[0]), tracePointDistance);
-
-        if (commonSlice[1] < commonSlice[0])
-        {
-            break;
-        }
-
-        lastCommonSlice = commonSlice;
-    }
-
-    return lastCommonSlice[0];
-}
-
-unittest
-{
-    immutable tracePointDistance = 5UL;
-    // dfmt off
-    // 0    5   10   15   20   25
-    // :....:....:....:....:....:
-    // |---------+--------------|
-    //      |----+--------------|
-    //         |-+---------|
-    //       |---+-------|
-    //          |+--------|
-    auto alignmentSlices1 = [
-        tuple(25UL,  0UL),
-        tuple(25UL,  5UL),
-        tuple(20UL,  8UL),
-        tuple(18UL,  6UL),
-        tuple(19UL,  9UL),
-    ];
-    // dfmt on
-    auto commonBackTracePoint1 = getCommonBackTracePoint(alignmentSlices1, tracePointDistance);
-
-    assert(commonBackTracePoint1 == 10);
-
-    // dfmt off
-    // 0    5   10   15   20   25
-    // :....:....:....:....:....:
-    // |-------------|
-    //               |+----|
-    //            |---+-------|
-    //              |-+---------|
-    auto alignmentSlices2 = [
-        tuple(14UL,  0UL),
-        tuple(20UL, 14UL),
-        tuple(23UL, 11UL),
-        tuple(25UL, 13UL),
-    ];
-    // dfmt on
-    auto commonBackTracePoint2 = getCommonBackTracePoint(alignmentSlices2, tracePointDistance);
-
-    assert(commonBackTracePoint2 == 15);
-
-    Tuple!(size_t, size_t)[] alignmentSlices3;
-    auto commonBackTracePoint3 = getCommonBackTracePoint(alignmentSlices3, tracePointDistance);
-
-    assert(commonBackTracePoint3 == 0);
-}
-
-/**
-    Returns a back "common" trace points wrt. contigB. The returned
-    trace point is not necessarily common to *all* alignment chains, ie. the
-    alignment intervals are incrementally intersected reject those that would
-    cause an empty intersection. The intervals are ordered ascending by
-    starting point and end point. Example:
-
-    ---
-    :....:....:....:....:....:....:....:....:
-    |--------------+----|    :    :    :    :
-    |--------------+---------|    :    :    :
-    :    |---------+-|  :    :    :    :    :
-    :    :|--------+|   :    :    :    :    :
-    :    : |-------+---|:    :    :    :    :
-    :    :    :    :    :|-----------| :    :
-    :    :    :    :    :    :    |---------|
-
-     :  = trace point
-     +  = "common" trace point
-    |-| = alignment interval
-    ---
-*/
-size_t getCommonFrontTracePoint(const AlignmentChain[] alignmentChains, in size_t tracePointDistance) pure nothrow
-{
-    // dfmt off
-    auto alignmentSlices = alignmentChains
-        .map!(ac => tuple(
-            ac.first.contigA.begin + 0,
-            ac.last.contigA.end + 0,
-        ))
-        .array;
-    // dfmt on
-
-    foreach (alignmentSlice; alignmentSlices)
-    {
-        assert(alignmentSlice[0] < alignmentSlice[1]);
-    }
-    // dfmt off
-    debug logJsonDebug(
-        "alignmentSlices", alignmentSlices.map!"[a[0], a[1]]".array.toJson,
-        "contigAIds", alignmentChains.map!"a.contigA.id".array.toJson,
-        "type", "front",
-    );
-    // dfmt on
-
-    return getCommonFrontTracePoint(alignmentSlices, tracePointDistance);
-}
-
-private size_t getCommonFrontTracePoint(Tuple!(size_t,
-        size_t)[] alignmentSlices, in size_t tracePointDistance) pure nothrow
-{
-    if (alignmentSlices.length == 0)
-        return size_t.max;
-
-    alignmentSlices.sort!"a < b";
-    auto commonSlice = tuple(0UL, size_t.max);
-    auto lastCommonSlice = commonSlice;
-
-    foreach (alignmentSlice; alignmentSlices)
-    {
-        commonSlice[0] = max(commonSlice[0], alignmentSlice[0]);
-        commonSlice[0] = ceil(commonSlice[0], tracePointDistance);
-        commonSlice[1] = min(commonSlice[1], alignmentSlice[1]);
-        commonSlice[1] = floor(commonSlice[1], tracePointDistance);
-
-        if (commonSlice[1] < commonSlice[0])
-        {
-            break;
-        }
-
-        lastCommonSlice = commonSlice;
-    }
-
-    return lastCommonSlice[1];
+        ? getCommonTracePoint(tracePointCandidates.retro, allowedTracePointRegion)
+        : getCommonTracePoint(tracePointCandidates, allowedTracePointRegion);
 }
 
 ///
 unittest
 {
     immutable tracePointDistance = 5UL;
+
+    size_t readId = 0;
+    AlignmentChain getDummyRead(size_t begin, size_t end)
+    {
+        immutable referenceLength = 25;
+        immutable extensionLength = 5;
+        auto readLength = end - begin + extensionLength;
+
+        with (AlignmentChain) with (LocalAlignment)
+                {
+                    // dfmt off
+                    return AlignmentChain(
+                        readId,
+                        Contig(1, 25),
+                        Contig(1, readLength),
+                        Complement.no,
+                        [LocalAlignment(
+                            Locus(begin, end),
+                            begin == 0
+                                ? Locus(extensionLength, readLength)
+                                : Locus(0, readLength - extensionLength),
+                        )],
+                    );
+                    // dfmt on
+                }
+    }
+
+    //        0    5   10   15   20   25   30
+    //   ref: |------------------------|.....
+    //        :    .    .    .    .    :
+    // reads: :|----------------------------| #1
+    //        :    |------------------------| #2
+    //        :    .  |---------------------| #3
+    //        :    .|-----------------------| #4
+    //        :    .   |--------------------| #5
+    //        :    .    .    .    .    :    .
+    // mask1: :    [=======) .    .    :    .
+    // mask2: :    .    .  [=======)   :    .
+    // mask3: [========================)    .
     // dfmt off
-    // 0    5   10   15   20   25
-    // :....:....:....:....:....:
-    // |--------------+---------|
-    // |--------------+----|
-    //      |---------+-|
-    //        |-------+---|
-    //       |--------+|
-    auto alignmentSlices1 = [
-        tuple( 0UL, 25UL),
-        tuple( 0UL, 20UL),
-        tuple( 5UL, 17UL),
-        tuple( 7UL, 19UL),
-        tuple( 6UL, 16UL),
+    auto backExtensions = [
+        getDummyRead(1, 25),
+        getDummyRead(5, 25),
+        getDummyRead(8, 25),
+        getDummyRead(6, 25),
+        getDummyRead(9, 25),
     ];
     // dfmt on
-    auto commonFrontTracePoint1 = getCommonFrontTracePoint(alignmentSlices1, tracePointDistance);
 
-    assert(commonFrontTracePoint1 == 15);
-
+    //       -5    0    5   10   15   20   25
+    //   ref: .....|------------------------|
+    //        .    :    .    .    .    .    :
+    // reads: |----------------------------|: #1
+    //        |------------------------|    : #2
+    //        |---------------------|  .    : #3
+    //        |-----------------------|.    : #4
+    //        |--------------------|   .    : #5
+    //        .    :    .    .    .    .    :
+    // mask1: .    :    [=======) .    .    :
+    // mask2: .    :    .    .  [=======)   :
+    // mask3: .    [========================)
     // dfmt off
-    // 0    5   10   15   20   25
-    // :....:....:....:....:....:
-    //            |-------------|
-    //      |----+|
-    //   |-------+---|
-    // |---------+-|
-    auto alignmentSlices2 = [
-        tuple(11UL, 25UL),
-        tuple( 5UL, 11UL),
-        tuple( 2UL, 14UL),
-        tuple( 0UL, 12UL),
+    auto frontExtensions = [
+        getDummyRead(1, 25),
+        getDummyRead(5, 25),
+        getDummyRead(8, 25),
+        getDummyRead(6, 25),
+        getDummyRead(9, 25),
     ];
     // dfmt on
-    auto commonFrontTracePoint2 = getCommonFrontTracePoint(alignmentSlices2, tracePointDistance);
+    auto mask1 = ReferenceMask(1, 5, 13);
+    auto mask2 = ReferenceMask(1, 13, 21);
+    auto mask3 = ReferenceMask(1, 0, 25);
 
-    assert(commonFrontTracePoint2 == 10);
-
-    Tuple!(size_t, size_t)[] alignmentSlices3;
-    auto commonFrontTracePoint3 = getCommonFrontTracePoint(alignmentSlices3, tracePointDistance);
-
-    assert(commonFrontTracePoint3 == size_t.max);
+    assert(getCommonTracePoint(backExtensions, mask1, tracePointDistance) == 15);
+    assert(getCommonTracePoint(backExtensions, mask2, tracePointDistance) == 10);
+    assert(getCommonTracePoint(backExtensions, mask3, tracePointDistance) == -1);
+    assert(getCommonTracePoint(frontExtensions, mask1, tracePointDistance) == 15);
+    assert(getCommonTracePoint(frontExtensions, mask2, tracePointDistance) == 10);
+    assert(getCommonTracePoint(frontExtensions, mask3, tracePointDistance) == -1);
 }
 
-/// This characterizes an insertion.
-// dfmt off
-alias Hit = Tuple!(
-    CoordinateTransform.Insertion, "insertion",
-    size_t, "readId",
+ReadInterval getCroppingSlice(const AlignmentChain alignmentChain, in ReferencePoint[] croppingRefPoints)
+{
+    auto alignmentType = ReadAlignment(alignmentChain).type;
+    auto read = alignmentChain.contigB;
+    auto tracePointDistance = alignmentChain.tracePointDistance;
+    // dfmt off
+    auto croppingRefPos = croppingRefPoints
+        .filter!(p => p.contigId == alignmentChain.contigA.id)
+        .front
+        .value;
+    // dfmt on
+
+    size_t croppingTracePointIdx(in AlignmentChain.LocalAlignment localAlignment)
+    {
+        auto firstTracePointRefPos = ceil(localAlignment.contigA.begin, tracePointDistance);
+        auto openInterval = alignmentType == ReadAlignmentType.front;
+        assert(croppingRefPos >= firstTracePointRefPos);
+
+        return (croppingRefPos - firstTracePointRefPos) / tracePointDistance + (openInterval ? 0 : 1);
+    }
+
+    bool coversCroppingRefPos(in AlignmentChain.LocalAlignment localAlignment)
+    {
+        return localAlignment.contigA.begin <= croppingRefPos &&
+            croppingRefPos < localAlignment.contigA.end;
+    }
+
+    // dfmt off
+    auto coveringLocalAlignment = alignmentChain
+        .localAlignments
+        .filter!coversCroppingRefPos
+        .front;
+    auto readCroppingPos =
+        coveringLocalAlignment.contigB.begin +
+        coveringLocalAlignment
+            .tracePoints[0 .. croppingTracePointIdx(coveringLocalAlignment)]
+            .map!"a.numBasePairs"
+            .sum;
+    // dfmt on
+    size_t readBeginIdx;
+    size_t readEndIdx;
+
+    final switch (alignmentType)
+    {
+        case ReadAlignmentType.front:
+            readBeginIdx = 0;
+            readEndIdx = readCroppingPos;
+            break;
+        case ReadAlignmentType.back:
+            readBeginIdx = readCroppingPos;
+            readEndIdx = read.length;
+            break;
+        case ReadAlignmentType.gap:
+            assert(0, "unreachable");
+    }
+
+    if (alignmentChain.complement)
+    {
+        swap(readBeginIdx, readEndIdx);
+        readBeginIdx = read.length - readBeginIdx;
+        readEndIdx = read.length - readEndIdx;
+    }
+
+    return ReadInterval(read.id, readBeginIdx, readEndIdx);
+}
+
+auto cropPileUp(PileUp pileUp, in ReferenceMask mask, in Options options)
+{
+    auto cropper = PileUpCropper(pileUp, mask, options);
+    cropper.buildDb();
+
+    return cropper.result;
+}
+
+private struct PileUpCropper
+{
+    PileUp pileUp;
+    const(ReferenceMask) repeatMask;
+    const(Options) options;
+    private ReferencePoint[] croppingRefPositions;
+    private string croppedDb;
+
+    @property auto result()
+    {
+        return tuple!("db", "referencePositions")(croppedDb, croppingRefPositions);
+    }
+
+    void buildDb()
+    {
+        preparePileUp();
+        fetchCroppingRefPositions();
+        auto croppedFastEntries = getCroppedFastaEntries();
+        croppedDb = buildDamFile(croppedFastEntries, options);
+    }
+
+    private void preparePileUp()
+    {
+        fetchTracePoints(pileUp, options);
+        pileUp.sort!"a[0].contigB.id < b[0].contigB.id"();
+    }
+
+    private void fetchCroppingRefPositions()
+    {
+        auto tracePointDistance = pileUp[0][0].tracePointDistance;
+        croppingRefPositions = pileUp.getCroppingRefPositions(repeatMask, tracePointDistance);
+        logJsonDebug("croppingRefPositions", croppingRefPositions.toJson);
+    }
+
+    private auto getCroppedFastaEntries()
+    {
+        auto croppedFastaEntries = minimallyInitializedArray!(string[])(pileUp.length);
+
+        foreach (croppedDbIdx, readAlignment, rawFastaEntry; pileUpWithSequence())
+        {
+            auto readCroppingSlice = getReadCroppingSlice(readAlignment);
+            // dfmt off
+            debug logJsonDebug(
+                "croppedDbIdx", croppedDbIdx,
+                "readCroppingSlice", readCroppingSlice.toJson,
+            );
+            // dfmt on
+
+            croppedFastaEntries[croppedDbIdx] = cropFastaEntry(rawFastaEntry, readCroppingSlice);
+        }
+
+        return croppedFastaEntries;
+    }
+
+    private auto pileUpWithSequence()
+    {
+        size_t[] readIds = pileUp.map!"a[0].contigB.id + 0".array;
+
+        // dfmt off
+        return zip(
+            iota(pileUp.length),
+            pileUp,
+            getFastaEntries(options.readsDb, readIds, options).map!parseFastaRecord,
+        );
+        // dfmt on
+    }
+
+    private auto getReadCroppingSlice(ReadAlignment readAlignment)
+    {
+        // dfmt off
+        auto readCroppingSlice = readAlignment[]
+            .map!(alignmentChain => alignmentChain.getCroppingSlice(croppingRefPositions))
+            .fold!"a & b";
+        // dfmt on
+        assert(!readCroppingSlice.empty, "invalid/empty read cropping slice");
+
+        return readCroppingSlice;
+    }
+
+    private string cropFastaEntry(T)(T rawFastaEntry, in ReadInterval readCroppingSlice)
+    {
+        immutable lineSep = typeof(pileUpWithSequence().front[2]).lineSep;
+
+        auto croppedLength = readCroppingSlice.size;
+        auto newHeader = buildNewHeader(rawFastaEntry, readCroppingSlice);
+        auto expectedFastaLength = newHeader.length + croppedLength
+            + croppedLength / options.fastaLineWidth + 2;
+        auto croppedFastaEntry = appender!string;
+
+        croppedFastaEntry.reserve(expectedFastaLength);
+        croppedFastaEntry ~= newHeader;
+        croppedFastaEntry ~= lineSep;
+        // dfmt off
+        croppedFastaEntry ~= rawFastaEntry[readCroppingSlice.begin .. readCroppingSlice.end]
+            .chunks(options.fastaLineWidth)
+            .joiner(lineSep);
+        // dfmt on
+        croppedFastaEntry ~= lineSep;
+
+        return croppedFastaEntry.data;
+    }
+
+    private string buildNewHeader(T)(T rawFastaEntry, in ReadInterval readCroppingSlice)
+    {
+        auto headerBuilder = parsePacBioHeader(rawFastaEntry.header);
+        headerBuilder.qualityRegionBegin = 0;
+        headerBuilder.qualityRegionBegin = readCroppingSlice.size;
+
+        return headerBuilder.to!string;
+    }
+}
+
+ref PileUp fetchTracePoints(ref PileUp pileUp, in Options options)
+{
+    auto allAlignmentChains = pileUp.getAlignmentChainRefs();
+    allAlignmentChains.sort!("*a < *b", SwapStrategy.stable);
+    allAlignmentChains.attachTracePoints(options.refDb, options.readsDb,
+            options.damapperOptions, options);
+
+    return pileUp;
+}
+
+/// Information about the point where the two sequences should be spliced.
+alias SpliceSite = Tuple!(
+    ReferencePoint, "croppingRefPosition",
     AlignmentChain.Complement, "complement",
-    string, "dbFile",
 );
-// dfmt on
+/// Information required for inserting the new sequence.
+alias InsertionInfo = Tuple!(
+    string, "sequenceDb",
+    SpliceSite[], "spliceSites",
+);
+/// This characterizes an insertion.
+alias ResultScaffold = Scaffold!InsertionInfo;
+/// This characterizes an insertion.
+alias Insertion = ResultScaffold.Edge;
+
+Insertion concatenateSpliceSites(Insertion existingJoin, Insertion newJoin)
+{
+    if (existingJoin.payload.sequenceDb is null)
+    {
+        existingJoin.payload.sequenceDb = newJoin.payload.sequenceDb;
+    }
+    existingJoin.payload.spliceSites ~= newJoin.payload.spliceSites;
+
+    return existingJoin;
+}
+
+auto getFastaRecord(in string sequenceDb, in size_t sequenceId, in Options options)
+{
+    auto records = getFastaEntries(sequenceDb, [sequenceId + 0], options).map!parseFastaRecord;
+
+    if (records.empty)
+    {
+        throw new Exception(format!"could not fetch %d from %s"(sequenceId, sequenceDb));
+    }
+
+    return records.front;
+}
 
 class DJunctor
 {
@@ -456,6 +516,7 @@ class DJunctor
             iteration + 1);
     /// Do not insert extensions that are improbable short after consensus.
     static immutable minExtensionLength = 100;
+    // FIXME bring `minExtensionLength` into effect
 
     size_t numReferenceContigs;
     size_t numReads;
@@ -468,21 +529,14 @@ class DJunctor
     /// Set of alignments to be considered in further processing.
     AlignmentChain[] catCandidates;
     /// Set of alignments to be used for gap filling.
-    Hit[] catHits;
-    /// Access contigs distributed over several DBs by ID.
-    DBUnion referenceDb;
-    /// Transform coordinates before insertions to coordinates after them.
-    CoordinateTransform coordTransform;
-    alias T = coordTransform;
+    ResultScaffold catHits;
     size_t iteration;
 
     this(in ref Options options)
     {
         this.options = options;
         this.catUseless = [];
-        this.catHits = [];
         this.iteration = 0;
-        this.referenceDb.baseDb = options.refDb;
     }
 
     DJunctor run()
@@ -536,6 +590,7 @@ class DJunctor
         ));
         // dfmt on
         catCandidates = readsAlignment.dup;
+        catHits = initScaffold!InsertionInfo(numReferenceContigs);
         logJsonDiagnostic("state", "exit", "function", "djunctor.init");
 
         return this;
@@ -555,18 +610,15 @@ class DJunctor
                 "iteration", iteration,
                 "uselessReads", catUseless.toJson,
                 "numCandiates", catCandidates.length,
-                "numHits", catHits.length
+                "numHits", catHits.edges.walkLength - numReferenceContigs,
             );
             // dfmt on
 
-            if (catHits.length > 0)
-            {
-                insertHits();
-            }
+            writeNewAssembly();
 
             ++iteration;
         }
-        while (catHits.length > 0 && iteration < maxLoops);
+        while (catHits.edges.walkLength - numReferenceContigs > 0 && iteration < maxLoops);
         logJsonDiagnostic("state", "exit", "function", "djunctor.mainLoop");
 
         return this;
@@ -761,135 +813,84 @@ class DJunctor
         {
             assert(pileUp.isValid, "ambiguous pile up");
 
-            auto croppedDbResult = getCroppedPileUpDb(pileUp);
-            auto hit = buildConsensus(croppedDbResult);
+            auto croppingResult = cropPileUp(pileUp, repetitiveRegions, options);
+            auto referenceReadIdx = bestReadAlignmentIndex(pileUp, Yes.preferSpanning, options);
+            auto referenceRead = pileUp[referenceReadIdx];
+            auto consensusDb = buildConsensus(croppingResult.db, referenceReadIdx + 1);
 
-            // Mark best scoring read for later sequence insertion.
-            catHits ~= hit;
-            logJsonDebug("hit", hit.toJson);
+            if (pileUp.isExtension)
+            {
+                assert(croppingResult.referencePositions.length == 1);
+
+                auto consensusSequence = getFastaRecord(consensusDb, 1, options);
+                auto refPos = croppingResult.referencePositions[0].value;
+                auto refLength = referenceRead[0].contigA.length;
+                ulong extensionLength = referenceRead.isFrontExtension
+                    ? consensusSequence.length.to!ulong - refPos.to!ulong
+                    : consensusSequence.length.to!ulong - (refLength - refPos).to!ulong;
+
+                if (extensionLength < minExtensionLength)
+                {
+                    continue; // skip short extensions
+                }
+            }
+
+            auto insertion = makeJoin!Insertion(referenceRead);
+            // dfmt off
+            insertion.payload = InsertionInfo(
+                consensusDb,
+                zip(croppingResult.referencePositions, referenceRead[].map!"a.complement")
+                    .map!(spliceSite => cast(SpliceSite) spliceSite)
+                    .array,
+            );
+            // dfmt on
+            catHits.add(insertion);
+            logJsonDebug("insertion", insertion.toJson);
+
+            foreach (refPos; croppingResult.referencePositions)
+            {
+                auto contigEdge = getDefaultJoin!InsertionInfo(refPos.contigId);
+                // dfmt off
+                contigEdge.payload = InsertionInfo(
+                    options.refDb,
+                    [SpliceSite(refPos, AlignmentChain.Complement.no)],
+                );
+                // dfmt on
+                auto insertedEdge = catHits.add!concatenateSpliceSites(contigEdge);
+                // dfmt off
+                logJsonDebug(
+                    "info", "contigEdgeUpdate",
+                    "insertion", insertedEdge.toJson,
+                );
+                // dfmt on
+            }
         }
 
+        // dfmt off
+        logJsonDebug("catHits", [
+            "nodes": catHits.nodes.toJson,
+            "joins": catHits.edges.map!(join => [
+                "start": join.start.toJson,
+                "end": join.end.toJson,
+                "payload": join.payload.toJson,
+            ]).array.toJson,
+        ]);
+        // dfmt on
         logJsonDiagnostic("state", "exit", "function", "djunctor.findHits");
 
         return this;
     }
 
-    protected Hit getCroppedPileUpDb(PileUp pileUp)
+    protected size_t bestReadAlignmentIndex(in PileUp pileUp, Flag!"preferSpanning" preferSpanning, in Options options) pure
     {
         auto pileUpType = pileUp.getType;
-        fetchTracePoints(pileUp);
-        auto tracePointDistance = pileUp[0][0].tracePointDistance;
-        auto croppingRefPositions = pileUp.getCroppingRefPositions(tracePointDistance);
-        logJsonDebug("croppingRefPositions", croppingRefPositions.toJson);
-        size_t[] readIds = pileUp.map!"a[0].contigB.id + 0".array;
-        // dfmt off
-        auto rawFastaEntries = zip(
-            readIds,
-            getFastaEntries(options.readsDb, readIds, options).map!parseFastaRecord,
-        ).array.assumeSorted!"a[0] < b[0]";
-        // dfmt on
-        auto croppedFastaEntries = appender!(string[]);
-        croppedFastaEntries.reserve(rawFastaEntries.length);
-        size_t bestInsertionScore;
-        size_t bestInsertionLength;
-        size_t bestInsertionIdx;
-        AlignmentChain.Complement bestInsertionComplement;
 
-        foreach (croppedDbIdx, readAlignment; pileUp)
-        {
-            immutable dummyFastaEntry = typeof(rawFastaEntries.front[1])();
-            auto readId = readAlignment[0].contigB.id;
-            auto rawFastaEntry = rawFastaEntries.equalRange(tuple(readId,
-                    dummyFastaEntry)).front[1];
-            immutable lineSep = typeof(rawFastaEntry).lineSep;
-            auto readCroppingSlice = readAlignment[].map!(
-                    alignmentChain => alignmentChain.getCroppingSlice(croppingRefPositions))
-                .fold!((aSlice, bSlice) => intersection(aSlice, bSlice));
-            auto insertionLength = readCroppingSlice[1] - readCroppingSlice[0];
-
-            // dfmt off
-            debug logJsonDebug(
-                "readId", readId,
-                "complement", readAlignment[0].complement,
-                "rawReadCroppingSlices", readAlignment[].map!(alignmentChain => alignmentChain.getCroppingSlice(croppingRefPositions)).array.toJson,
-                "readCroppingSlice", readCroppingSlice.toJson,
-                "croppedReadLength", readCroppingSlice[1] - readCroppingSlice[0],
-            );
-            // dfmt on
-
-            if (readAlignment[0].complement)
-            {
-                auto readLength = readAlignment[0].contigB.length;
-
-                foreach (ref endpoint; readCroppingSlice)
-                    endpoint = readLength - endpoint;
-                swap(readCroppingSlice.expand);
-            }
-            assert(readCroppingSlice[0] < readCroppingSlice[1], "invalid/empty read cropping slice");
-
-            size_t insertionScore = getInsertionScore(readAlignment,
-                    pileUpType, Yes.preferSpanning);
-
-            if (insertionScore > bestInsertionScore)
-            {
-                bestInsertionScore = insertionScore;
-                bestInsertionLength = insertionLength;
-                bestInsertionIdx = croppedDbIdx;
-                bestInsertionComplement = readAlignment[0].complement;
-            }
-
-            auto croppedLength = readCroppingSlice[1] - readCroppingSlice[0];
-            auto headerBuilder = parsePacBioHeader(rawFastaEntry.header);
-            headerBuilder.qualityRegionBegin = 0;
-            headerBuilder.qualityRegionBegin = croppedLength;
-            auto newHeader = headerBuilder.to!string;
-            auto expectedFastaLength = newHeader.length + croppedLength
-                + croppedLength / options.fastaLineWidth + 2;
-            auto croppedFastaEntry = appender!string;
-            croppedFastaEntry.reserve(expectedFastaLength);
-
-            croppedFastaEntry ~= newHeader;
-            croppedFastaEntry ~= lineSep;
-            // dfmt off
-            auto croppedSequence = readAlignment[0].complement
-                ? rawFastaEntry[readCroppingSlice[0] .. readCroppingSlice[1]].array.reverseComplement
-                : rawFastaEntry[readCroppingSlice[0] .. readCroppingSlice[1]].array;
-            // dfmt on
-            croppedFastaEntry ~= croppedSequence.chunks(options.fastaLineWidth).joiner(lineSep);
-            croppedFastaEntry ~= lineSep;
-
-            croppedFastaEntries ~= croppedFastaEntry.data;
-        }
-
-        string croppedPileUpDb = buildDamFile(croppedFastaEntries.data, options);
-
-        with (CoordinateTransform) with (ReadAlignmentType)
-            {
-                // dfmt off
-                return Hit(
-                    Insertion.make(
-                        Coordinate(
-                            croppingRefPositions.backContigId,
-                            croppingRefPositions.backIdx,
-                        ),
-                        Coordinate(
-                            croppingRefPositions.frontContigId,
-                            croppingRefPositions.frontIdx,
-                        ),
-                        bestInsertionLength,
-                        pileUpType,
-                    ),
-                    bestInsertionIdx,
-                    bestInsertionComplement,
-                    croppedPileUpDb,
-                );
-                // dfmt on
-            }
+        return pileUp
+            .map!((readAlignment) => insertionScore(readAlignment, pileUpType, preferSpanning))
+            .maxIndex;
     }
 
-    protected size_t getInsertionScore(in ReadAlignment readAlignment,
-            in ReadAlignmentType pileUpType,
-            in Flag!"preferSpanning" preferSpanning = No.preferSpanning) pure
+    protected size_t insertionScore(in ReadAlignment readAlignment, in ReadAlignmentType pileUpType, in Flag!"preferSpanning" preferSpanning = No.preferSpanning) pure
     {
         immutable shortAnchorPenaltyMagnitude = AlignmentChain.maxScore / 512;
         immutable notSpanningPenaltyMagnitude = AlignmentChain.maxScore / 2;
@@ -919,21 +920,28 @@ class DJunctor
         ));
         // dfmt on
 
-        // dfmt off
-        debug logJsonDebug(
-            "expectedAlignmentCount", expectedAlignmentCount,
-            "avgAnchorSize", avgAnchorSize,
-            "avgAlignmentLength", avgAlignmentLength,
-            "avgAlignmentScore", avgAlignmentScore,
-            "shortAnchorPenalty", shortAnchorPenalty,
-            "score", score,
-        );
-        // dfmt on
+        debug
+        {
+            size_t readId = readAlignment[0].contigB.id;
+            auto contigIds = readAlignment[].map!"a.contigA.id".array;
+            // dfmt off
+            debug logJsonDebug(
+                "readId", readId,
+                "contigIds", contigIds.toJson,
+                "expectedAlignmentCount", expectedAlignmentCount,
+                "avgAnchorSize", avgAnchorSize,
+                "avgAlignmentLength", avgAlignmentLength,
+                "avgAlignmentScore", avgAlignmentScore,
+                "shortAnchorPenalty", shortAnchorPenalty,
+                "score", score,
+            );
+            // dfmt on
+        }
 
         return score;
     }
 
-    protected Hit buildConsensus(Hit croppedDbResult)
+    protected string buildConsensus(string croppedDb, size_t referenceReadId)
     {
         static struct ConsensusAlignmentOptions
         {
@@ -944,7 +952,7 @@ class DJunctor
         }
 
         // dfmt off
-        string consensusDb = getConsensus(croppedDbResult.dbFile, croppedDbResult.readId, const(ConsensusAlignmentOptions)(
+        string consensusDb = getConsensus(croppedDb, referenceReadId, const(ConsensusAlignmentOptions)(
             options.daccordOptions,
             options.dalignerOptions ~ [
                 format!"-l%d"(options.minAnchorLength),
@@ -956,264 +964,172 @@ class DJunctor
         // dfmt on
 
         debug logJsonDebug("consensusDb", consensusDb);
+        assert(getNumContigs(consensusDb, options) == 1);
 
-        croppedDbResult.dbFile = consensusDb;
-        croppedDbResult.readId = 1;
-
-        return croppedDbResult;
+        return consensusDb;
     }
 
-    protected DJunctor fetchTracePoints(PileUp pileUp)
+    protected DJunctor writeNewAssembly()
     {
-        auto allAlignmentChains = pileUp.getAlignmentChainRefs();
-        allAlignmentChains.sort!("*a < *b", SwapStrategy.stable);
-        allAlignmentChains.attachTracePoints(options.refDb, options.readsDb,
-                options.damapperOptions, options);
+        logJsonDiagnostic("state", "enter", "function", "djunctor.writeNewAssembly");
+
+        foreach(startNode; contigStarts!InsertionInfo(catHits))
+        {
+            writeNewContig(startNode);
+        }
+
+        logJsonDiagnostic("state", "exit", "function", "djunctor.writeNewAssembly");
 
         return this;
     }
 
-    protected DJunctor insertHits()
+    protected void writeNewContig(ContigNode startNode)
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.insertHits");
-        foreach (hit; catHits)
-        {
-            insertHit(hit);
-        }
-        // dfmt off
-        logJsonDiagnostic(
-            "step", "djunctor.insertHits",
-            "coordTransform", coordTransform.toJson,
-            "coordTransformPython", coordTransform.toString(),
-        );
-        // dfmt on
-        logJsonDiagnostic("state", "exit", "function", "djunctor.insertHits");
+        auto globalComplement = AlignmentChain.Complement.no;
+        auto insertionBegin = startNode;
 
-        return this;
+        writeHeader(startNode);
+        size_t currentOutputColumn = 0;
+        foreach (currentInsertion; linearWalk!InsertionInfo(catHits, startNode))
+        {
+            currentOutputColumn = writeInsertion(insertionBegin, currentInsertion, globalComplement, currentOutputColumn);
+
+            insertionBegin = currentInsertion.target(insertionBegin);
+            if (currentInsertion.isAntiParallel)
+            {
+                globalComplement = cast(AlignmentChain.Complement) !globalComplement;
+            }
+        }
+        writeln();
     }
 
-    protected DJunctor insertHit(in Hit hit)
+    protected void writeHeader(in ContigNode begin) const
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.insertHit");
+        writeln(format!"> contig %d"(begin.contigId));
+    }
 
-        // dfmt off
-        const(size_t)[] refContigIds = [
-            hit.insertion.begin.contigId,
-            hit.insertion.end.contigId,
-        ];
-        // dfmt on
-        auto complement = hit.complement;
-        size_t readId = hit.readId;
-        auto read = (() => {
-            auto fastaEntries = getFastaEntries(hit.dbFile, [readId], options);
-            auto front = fastaEntries.front;
-            auto parsedFastaRecord = front.parseFastaRecord;
+    protected size_t writeInsertion(in ContigNode begin, in Insertion insertion, in AlignmentChain.Complement globalComplement, in size_t currentOutputColumn) const
+    {
+        assert(insertion.isValid, "invalid insertion");
 
-            return parsedFastaRecord;
-        })()();
+        auto isContig = insertion.isDefault;
+        auto sequenceDb = insertion.payload.sequenceDb;
+        auto sequenceId = isContig ? begin.contigId : 1;
+        auto fastaRecord = getFastaRecord(sequenceDb, sequenceId, options);
+        SpliceSite[] spliceSites = insertion.payload.spliceSites.dup;
 
-        auto insertSequence = read[];
-        CoordinateTransform.Insertion insertionInfo = hit.insertion;
-        // Update insertion info with the actual consensus length.
-        insertionInfo.length = read.length;
-        CoordinateTransform.Insertion trInsertionInfo = insertionInfo;
-        trInsertionInfo.begin = T(insertionInfo.begin);
-        trInsertionInfo.end = T(insertionInfo.end);
-        auto refContigFastaEntries = refContigIds.map!(
-                contigId => getReferenceFastaEntry(T(contigId))).array;
-        auto endContigLength = refContigFastaEntries[$ - 1].length;
-        string newHeader = refContigFastaEntries[0].header;
+        bool localComplement = false;
+        alias Sequence = typeof(fastaRecord[].array);
+        Sequence sequence;
+        size_t contigSpliceStart;
+        size_t contigSpliceEnd;
 
-        if (insertionInfo.isExtension)
+        if (isContig)
         {
-            auto effectiveExtensionLength = getEffectiveExtensionLength(insertionInfo,
-                    endContigLength);
+            auto contigLength = fastaRecord.length;
 
-            if (effectiveExtensionLength < minExtensionLength)
+            switch (spliceSites.length)
             {
-                // dfmt off
-                logJsonDiagnostic(
-                    "info", "skipping insertion of short extension",
-                    "effectedContig", insertionInfo.end.contigId,
-                    "extensionLength", effectiveExtensionLength,
-                    "extensionType", insertionInfo.type.to!string,
-                );
-                // dfmt on
+            case 0:
+                contigSpliceStart = 0;
+                contigSpliceEnd = contigLength;
+                break;
+            case 1:
+                auto splicePosition = spliceSites[0].croppingRefPosition.value;
 
-                return this;
+                if (splicePosition < contigLength / 2)
+                {
+                    contigSpliceStart = splicePosition;
+                    contigSpliceEnd = contigLength;
+                }
+                else
+                {
+                    contigSpliceStart = 0;
+                    contigSpliceEnd = splicePosition;
+                }
+                break;
+            case 2:
+                assert(spliceSites.length == 2);
+                assert(spliceSites[0].croppingRefPosition.contigId == spliceSites[1].croppingRefPosition.contigId);
+
+                contigSpliceStart = spliceSites[0].croppingRefPosition.value;
+                contigSpliceEnd = spliceSites[1].croppingRefPosition.value;
+
+                if (contigSpliceEnd < contigSpliceStart)
+                {
+                    swap(contigSpliceStart, contigSpliceEnd);
+                }
+                break;
+            default:
+                assert(0, "too many spliceSites");
             }
+
+            sequence = fastaRecord[contigSpliceStart .. contigSpliceEnd].array;
+            assert(globalComplement != (begin < insertion.target(begin)));
+        }
+        else
+        {
+            if (insertion.isExtension)
+            {
+                assert(spliceSites.length == 1);
+            }
+            else
+            {
+                assert(insertion.isGap);
+                assert(spliceSites.length == 2);
+
+                if (begin.contigId != spliceSites[0].croppingRefPosition.contigId)
+                {
+                    swap(spliceSites[0], spliceSites[1]);
+                }
+            }
+
+            localComplement = spliceSites[0].complement;
+            sequence = fastaRecord[].array;
         }
 
-        size_t newContigLength = trInsertionInfo.totalInsertionLength(endContigLength);
-        immutable lineSep = typeof(refContigFastaEntries[0]).lineSep;
-        alias ReferenceSequence = typeof(refContigFastaEntries[0][0 .. 0]);
-        ReferenceSequence beforeInsertSequence;
-        ReferenceSequence afterInsertSequence;
-        auto fastaBuilder = appender!string;
-        auto expectedFastaLength = newHeader.length + newContigLength
-            + newContigLength / options.fastaLineWidth + 2;
-        fastaBuilder.reserve(expectedFastaLength);
+        bool effectiveComplement = globalComplement ^ localComplement;
 
-        fastaBuilder ~= newHeader;
-        fastaBuilder ~= lineSep;
-
-        with (CoordinateTransform.Insertion.Type)
-        {
-            final switch (insertionInfo.type)
-            {
-            case gap:
-                beforeInsertSequence = refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx];
-                afterInsertSequence = refContigFastaEntries[1][trInsertionInfo.end.idx .. $];
-                break;
-            case front:
-                beforeInsertSequence = refContigFastaEntries[0][0 .. 0];
-                afterInsertSequence = refContigFastaEntries[0][trInsertionInfo.end.idx .. $];
-                break;
-            case back:
-                beforeInsertSequence = refContigFastaEntries[0][0 .. trInsertionInfo.begin.idx],
-                    afterInsertSequence = refContigFastaEntries[0][0 .. 0];
-                break;
-            case relabel:
-                assert(0, "invalid insertion");
-            }
-        }
-
-        auto joinedSequence = chain(beforeInsertSequence, insertSequence, afterInsertSequence);
-        fastaBuilder ~= joinedSequence.chunks(options.fastaLineWidth).joiner(lineSep);
-        fastaBuilder ~= lineSep;
-
-        debug assert(expectedFastaLength >= fastaBuilder.data.length,
-                format!"avoid reallocation: expected %d but used %d"(expectedFastaLength,
-                    fastaBuilder.data.length));
-
-        auto overlayDb = buildDamFile([fastaBuilder.data], options);
-
-        T ~= insertionInfo;
-        referenceDb.addAlias(T(refContigIds[0]), overlayDb, 1);
-
-        immutable sequencePreviewLength = 500;
         // dfmt off
         logJsonDebug(
-            "step", "insertHits",
-            "type", insertionInfo.type.to!string,
-            "contigIds", refContigIds.array.toJson,
-            "readId", readId,
-            "complement", complement.to!bool,
-            "insertSequence", insertSequence.array.to!string,
-            "beforeInsertSequence", beforeInsertSequence.tail(sequencePreviewLength).array.to!string,
-            "afterInsertSequence", afterInsertSequence.take(sequencePreviewLength).array.to!string,
-            "insertionInfo", insertionInfo.toJson(),
-            "transformedInsertionInfo", trInsertionInfo.toJson(),
-            "overlayDb", overlayDb,
-            "expectedFastaLength", expectedFastaLength,
-            "newHeaderLength", newHeader.length,
-            "newContigLength", newContigLength,
-            "optionsFastaLineWidth", options.fastaLineWidth,
-            "fastaBuilderDataLength", fastaBuilder.data.length,
+            "info", "writing insertion",
+            "isContig", isContig,
+            "sequenceDb", sequenceDb,
+            "sequenceId", sequenceId,
+            "spliceSites", spliceSites.toJson,
+            "localComplement", localComplement,
+            "globalComplement", globalComplement,
+            "effectiveComplement", effectiveComplement,
         );
         // dfmt on
-        debug assert(expectedFastaLength >= fastaBuilder.data.length,
-                format!"avoid reallocation: expected %d but used %d"(expectedFastaLength,
-                    fastaBuilder.data.length));
 
-        logJsonDiagnostic("state", "exit", "function", "djunctor.insertHit");
+        if (effectiveComplement)
+        {
+            sequence = reverseComplement(sequence);
+        }
 
-        return this;
-    }
+        // BEGIN wrapped output
+        if (sequence.length == 0)
+        {
+            return currentOutputColumn;
+        }
 
-    protected auto getReferenceFastaEntry(in size_t contigId) const
-    {
-        auto dbRef = referenceDb[contigId];
+        writeln(sequence.take(options.fastaLineWidth - currentOutputColumn));
 
-        return getReferenceFastaEntry(dbRef);
-    }
+        foreach (sequenceChunk; sequence.drop(options.fastaLineWidth - currentOutputColumn).chunks(options.fastaLineWidth))
+        {
+            writeln(sequenceChunk);
+        }
 
-    protected auto getReferenceFastaEntry(in DBUnion.DBReference dbRef) const
-    {
-        return parseFastaRecord(getFastaEntries(dbRef.dbFile, [dbRef.contigId + 0], options).front);
-    }
-
-    // dfmt off
-    protected size_t getEffectiveExtensionLength(
-        in CoordinateTransform.Insertion insertionInfo,
-        in size_t endContigLength
-    ) const
-    // dfmt on
-    {
-        // dfmt off
-        return insertionInfo.isFrontExtension
-            ? insertionInfo.length - insertionInfo.end.idx
-            : insertionInfo.length - (endContigLength - insertionInfo.begin.idx);
-        // dfmt on
+        return (currentOutputColumn + sequence.length) % options.fastaLineWidth;
+        // END wrapped output
     }
 
     protected DJunctor finish()
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.finish");
 
-        // dfmt off
-        this
-            .mergeOverlayDb
-            .writeCoordTransform;
-        // dfmt on
-
         logJsonDiagnostic("state", "exit", "function", "djunctor.finish");
-
-        return this;
-    }
-
-    protected DJunctor mergeOverlayDb()
-    {
-        size_t numReferenceContigs = getNumContigs(referenceDb.baseDb, options);
-        // dfmt off
-        auto contigSources = iota(1, numReferenceContigs + 1)
-            .map!(contigId => T(contigId))
-            .map!(trContigId => tuple(trContigId, referenceDb[trContigId]))
-            .group!"a[0] == b[0]"
-            .map!"a[0]";
-        auto fastaEntries = contigSources
-            .save
-            .map!"a[1]"
-            .map!(dbRef => getReferenceFastaEntry(dbRef));
-        immutable lineSep = typeof(fastaEntries.front).lineSep;
-
-        fastaEntries
-            .map!(fastaEntry => fastaEntry.toFasta(options.fastaLineWidth))
-            .joiner(lineSep)
-            .write;
-        // dfmt on
-
-        // dfmt off
-        logJsonDebug(
-            "numReferenceContigs", numReferenceContigs,
-            "contigSources", contigSources.array.toJson,
-        );
-        // dfmt on
-
-        foreach (newContigId, contigSource; contigSources.enumerate(1))
-        {
-            size_t oldContigId = contigSource[0];
-
-            if (oldContigId != newContigId)
-            {
-                T ~= CoordinateTransform.Insertion.makeRelabel(oldContigId, newContigId);
-                logJsonDebug("relabel", ["oldContigId" : oldContigId,
-                        "newContigId" : newContigId].toJson);
-            }
-        }
-
-        return this;
-    }
-
-    protected DJunctor writeCoordTransform()
-    {
-        if (!(options.coordTransform is null))
-        {
-            auto coordTransformFile = File(options.coordTransform, "w");
-
-            coordTransformFile.write(
-                    coordTransform.toString(CoordinateTransform.ExportLanguage.python));
-        }
 
         return this;
     }
@@ -1782,1192 +1698,4 @@ class BadAlignmentCoverageAssessor : RepeatAssessor
         ]));
         // dfmt on
     }
-}
-
-/**
-    This realizes a transform which translates coordinates before insertions
-    to coordinates after them. The insertions can be added sequentially. The
-    transform is fully functional at any point in time and can be converted
-    to a Python 2.7 script for external usage.
-*/
-struct CoordinateTransform
-{
-    static struct Coordinate
-    {
-        size_t contigId;
-        size_t idx;
-    }
-
-    static struct Insertion
-    {
-        enum Type
-        {
-            front,
-            gap,
-            back,
-            relabel,
-        }
-
-        Coordinate begin;
-        Coordinate end;
-        private size_t _length;
-
-        @disable this(Coordinate);
-        @disable this(Coordinate, Coordinate);
-        private this(Coordinate begin, Coordinate end, size_t length) pure nothrow
-        {
-            this.begin = begin;
-            this.end = end;
-            this._length = length;
-        }
-
-        static Insertion makeRelabel(size_t oldContigId, size_t newContigId) pure nothrow
-        {
-            return Insertion(Coordinate(newContigId), Coordinate(oldContigId), 0);
-        }
-
-        static Insertion make(Coordinate begin, Coordinate end, size_t length,
-                in ReadAlignmentType insertionType) pure nothrow
-        {
-            final switch (insertionType)
-            {
-            case ReadAlignmentType.front:
-                begin.idx = 0;
-                break;
-            case ReadAlignmentType.gap:
-                break;
-            case ReadAlignmentType.back:
-                end.idx = begin.idx + length;
-                break;
-            }
-
-            return Insertion(begin, end, length);
-        }
-
-        invariant
-        {
-            assert(begin != end || (begin.idx == end.idx && _length > 0), "empty insertion");
-            if (begin.contigId == end.contigId)
-            {
-                assert(end.idx >= begin.idx,
-                        "insertion begin index should be before/equal to end index on same contig");
-                assert(_length >= end.idx - begin.idx, "inserted sequence too small");
-            }
-        }
-
-        @property length() pure const nothrow
-        {
-            return _length;
-        }
-
-        @property length(size_t newLength) pure nothrow
-        {
-            final switch (type)
-            {
-            case Type.back:
-                end.idx = begin.idx + newLength;
-                goto case;
-            case Type.front:
-            case Type.gap:
-                _length = newLength;
-                return;
-            case Type.relabel:
-                return;
-            }
-        }
-
-        @property isExtension() pure const nothrow
-        {
-            return begin.contigId == end.contigId;
-        }
-
-        @property isFrontExtension() pure const nothrow
-        {
-            return isExtension && !isBackExtension;
-        }
-
-        @property isBackExtension() pure const nothrow
-        {
-            return isExtension && (begin.idx > 0 && end.idx == begin.idx + length);
-        }
-
-        @property isGap() pure const nothrow
-        {
-            return !isExtension && !isRelabel;
-        }
-
-        @property isRelabel() pure const nothrow
-        {
-            return !isExtension && begin.idx == 0 && end.idx == 0 && length == 0;
-        }
-
-        @property type() pure const nothrow
-        {
-            if (isExtension)
-            {
-                return isFrontExtension ? Type.front : Type.back;
-            }
-            else if (isGap)
-            {
-                return Type.gap;
-            }
-            else
-            {
-                return Type.relabel;
-            }
-        }
-
-        size_t totalInsertionLength(in size_t endContigLength) pure const nothrow
-        {
-            final switch (type)
-            {
-            case Type.gap:
-            case Type.front:
-            case Type.relabel:
-                return begin.idx + length + endContigLength - end.idx;
-            case Type.back:
-                return begin.idx + length;
-            }
-        }
-    }
-
-    static enum ExportLanguage
-    {
-        python,
-    }
-
-    const(Insertion)[] insertions;
-
-    /**
-        Transform a coordinate according to insertions. If the designated
-        contig is not present in insertions then the original coordinate is
-        returned. Otherwise the new coordinate is computed as follows:
-
-        1. Find insertion where end contig matches input. Note: if begin
-           contig matches input not action is needed because neither the
-           `idx` nor the `contigId` is affected.
-        2. Travel from that point backwards to the beginning of the chain –
-           ie. until begin contig and end contig of two insertions are
-           unequal – summing all the coordinate shifts. The new reference
-           contig is the last one in the (reverse) chain.
-
-        For a single insertion and input coordinate `x` the shifted
-        coordinate `T(x)` is calculated as follows:
-
-        ---
-        Case 1:  begin contig == end contig
-            Case 1.1:  extend begin of contig
-
-                   begin/end contig
-
-                  0  ie  x
-                  |---+--+-------|
-                 /    |
-                |-----|
-                0    li
-
-                T(x) = x
-                     - ie  // (1) make relative to insertion point of end contig
-                     + li  // (2) make relative to begin of insertion
-                // choose ib = 0
-                     = x - ie + li + ib
-
-            Case 1.2:  extend end of contig
-
-                        begin/end contig
-
-                0       x ib        ie
-                |-------+--+---| - - +
-                           |         |
-                           |---------|
-                           0        li
-
-                T(x) = x
-                // choose ie = li + ib
-                     = x - ie + li + ib
-
-        Case 2:  begin contig != end contig
-
-              begin contig       end contig
-
-            0         ib     0  ie  x
-            |----------+---| |---+--+-------|
-                       |         |
-                       |---------|
-                       0        li
-
-                        insertion
-
-            T(x) = x
-                 - ie  // (1) make relative to insertion point of end contig
-                 + li  // (2) make relative to begin of insertion
-                 + ib  // (3) make relative to begin of begin contig
-        ---
-
-        Returns: transformed coordinate.
-    */
-    Coordinate transform(in size_t contigId, in size_t idx) pure const
-    {
-        return transform(Coordinate(contigId, idx));
-    }
-
-    size_t transform(in size_t contigId) pure const
-    {
-        return transform(Coordinate(contigId, 0)).contigId;
-    }
-
-    /// ditto
-    Coordinate transform(in Coordinate input) pure const
-    {
-        Coordinate result = input;
-
-        // dfmt off
-        auto insertionChain = insertions[]
-            .retro
-            .find!"a.end.contigId == b"(0 + input.contigId);
-        // dfmt on
-        size_t lastContigId = input.contigId;
-
-        foreach (insertion; insertionChain)
-        {
-            if (insertion.end.contigId != lastContigId)
-            {
-                break; // chain end reached
-            }
-
-            // Note: reverse order of calculation to prevent negative
-            // intermediate results
-            result.idx += insertion.begin.idx; // (3)
-            result.idx += insertion.length; // (2)
-            result.idx -= insertion.end.idx; // (1)
-            // Begin contig is the new reference
-            result.contigId = insertion.begin.contigId;
-            lastContigId = insertion.begin.contigId;
-        }
-
-        return result;
-    }
-
-    /// ditto
-    alias opCall = transform;
-
-    ///
-    unittest
-    {
-        CoordinateTransform coordTransform;
-        //           0        495 500 0   5  100   600
-        // reference |----------+---| |---+--+-------|
-        //                      |         |
-        // insert               |---------|
-        //                      0       100
-        // dfmt off
-        coordTransform.add(Insertion.make(
-            Coordinate(1, 495),
-            Coordinate(2, 5),
-            100,
-            ReadAlignmentType.gap,
-        ));
-        // dfmt on
-
-        auto inputCoord = Coordinate(2, 100);
-        // dfmt off
-        auto transformedCoord = Coordinate(
-            1,
-            (
-                100
-                - 5    // coord on contig 2 relative to insertion point
-                + 100  // make relative to begin of insertion
-                + 495  // make relative to begin of contig 1
-            )
-        );
-        // dfmt on
-        assert(coordTransform.transform(inputCoord) == transformedCoord);
-        assert(coordTransform(inputCoord) == transformedCoord);
-    }
-
-    unittest
-    {
-        with (ReadAlignmentType)
-        {
-            CoordinateTransform coordTransform;
-            // dfmt off
-            coordTransform.add(Insertion.make(
-                Coordinate(100, 0),
-                Coordinate(101, 0),
-                0,
-                gap,
-            ));
-            coordTransform.add(Insertion.make(
-                Coordinate(1, 495),
-                Coordinate(2, 5),
-                100,
-                gap,
-            ));
-            coordTransform.add(Insertion.make(
-                Coordinate(2, 490),
-                Coordinate(5, 10),
-                150,
-                gap,
-            ));
-            coordTransform.add(Insertion.make(
-                Coordinate(5, 480),
-                Coordinate(3, 20),
-                200,
-                gap,
-            ));
-            coordTransform.add(Insertion.make(
-                Coordinate(102, 0),
-                Coordinate(103, 0),
-                0,
-                gap,
-            ));
-            coordTransform.add(Insertion.make(
-                Coordinate(200),
-                Coordinate(200, 5),
-                10,
-                front,
-            ));
-            coordTransform.add(Insertion.make(
-                Coordinate(201, 90),
-                Coordinate(201),
-                20,
-                back,
-            ));
-            coordTransform.add(Insertion.make(
-                Coordinate(202),
-                Coordinate(202, 15),
-                30,
-                front,
-            ));
-            coordTransform.add(Insertion.make(
-                Coordinate(202),
-                Coordinate(202, 20),
-                40,
-                front,
-            ));
-            coordTransform.add(Insertion.make(
-                Coordinate(203, 65),
-                Coordinate(203),
-                50,
-                back,
-            ));
-            coordTransform.add(Insertion.make(
-                Coordinate(203, 60),
-                Coordinate(203),
-                60,
-                back,
-            ));
-            coordTransform.add(Insertion.makeRelabel(
-                1024,
-                1000,
-            ));
-            // dfmt on
-
-            {
-                // Case: contig not present in insertions
-                auto inputCoord = Coordinate(1337, 42);
-                assert(coordTransform.transform(inputCoord) == inputCoord);
-            }
-            {
-                // Case: contig is never end of an insertions
-                auto inputCoord = Coordinate(1, 64);
-                assert(coordTransform.transform(inputCoord) == inputCoord);
-            }
-            {
-                // Case: contig is end of the last insertions of a reverse chain.
-                auto inputCoord = Coordinate(2, 64);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    1,
-                    (
-                          64   // last and only insertion in chain
-                        - 5    // (1)
-                        + 100  // (2)
-                        + 495  // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-            {
-                // Case: contig is end of an inner insertions, ie. there are
-                //       insertions before and after in the chain.
-                auto inputCoord = Coordinate(5, 64);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    1,
-                    (
-                        (
-                              64   // last insertion in chain
-                            - 5    // (1)
-                            + 100  // (2)
-                            + 495  // (3)
-                        )      // first insertion in chain
-                        - 10    // (1)
-                        + 150  // (2)
-                        + 490  // (3)
-                    )
-
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-            {
-                // Case: contig is end of the first insertions of a reverse chain.
-                auto inputCoord = Coordinate(3, 64);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    1,
-                    (
-                        (
-                            (
-                                  64   // last insertion in chain
-                                - 5    // (1)
-                                + 100  // (2)
-                                + 495  // (3)
-                            )      // second insertion in chain
-                            - 10    // (1)
-                            + 150  // (2)
-                            + 490  // (3)
-                        )      // first insertion in chain
-                        - 20    // (1)
-                        + 200  // (2)
-                        + 480  // (3)
-                    )
-
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-            {
-                // Case: coordinate on rejected part of end contig, ie. `x < ie`.
-                auto inputCoord = Coordinate(2, 3);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    1,
-                    (
-                          3    // last and only insertion in chain
-                        - 5    // (1)
-                        + 100  // (2)
-                        + 495  // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-
-            {
-                // Case: simple front extension
-                auto inputCoord = Coordinate(200, 3);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    200,
-                    (
-                          3    // only extension (in chain)
-                        - 5    // (1)
-                        + 10   // (2)
-                        + 0    // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-            {
-                // Case: simple back extension
-                auto inputCoord = Coordinate(201, 3);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    201,
-                    (
-                          3    // only extension (in chain)
-                        - 110  // (1)
-                        + 20   // (2)
-                        + 90   // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-            {
-                // Case: double front extension
-                auto inputCoord = Coordinate(202, 3);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    202,
-                    (
-                        (
-                              3    // last extension (in chain)
-                            - 15   // (1)
-                            + 30   // (2)
-                            +  0   // (3)
-                        )     // first extension (in chain)
-                        - 20  // (1)
-                        + 40  // (2)
-                        +  0  // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-            {
-                // Case: double back extension
-                auto inputCoord = Coordinate(203, 3);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    203,
-                    (
-                        (
-                              3    // last extension (in chain)
-                            - 115  // (1)
-                            + 50   // (2)
-                            + 65   // (3)
-                        )      // first extension (in chain)
-                        - 120  // (1)
-                        + 60   // (2)
-                        + 60   // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-            {
-                // Case: relabel
-                auto inputCoord = Coordinate(1024, 3);
-                auto transformedCoord = Coordinate(1000, 3);
-
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-
-            // dfmt off
-            coordTransform.add(Insertion.make(
-                Coordinate(203, 115),
-                Coordinate(202, 5),
-                50,
-                gap,
-            ));
-            // dfmt on
-
-            {
-                // Case: double front extension + double back extension + gap spanned
-                auto inputCoord = Coordinate(202, 3);
-                // dfmt off
-                auto transformedCoord = Coordinate(
-                    203,
-                    (
-                        (
-                            (
-                                  3    // last front extension (in chain)
-                                - 15   // (1)
-                                + 30   // (2)
-                                +  0   // (3)
-                            )     // first front extension (in chain)
-                            - 20  // (1)
-                            + 40  // (2)
-                            +  0  // (3)
-                        )      // only gap (in chain)
-                        -   5  // (1)
-                        +  50  // (2)
-                        + 115  // (3)
-                    )
-                );
-                // dfmt on
-                assert(coordTransform.transform(inputCoord) == transformedCoord);
-            }
-        }
-    }
-
-    /**
-        Add an insertion to this transform.
-
-        Returns: this transform.
-        See_Also: `CoordinateTransform.transform`.
-    */
-    CoordinateTransform add(in Insertion newInsertion) pure
-    {
-        size_t idx = getInsertionIndex(newInsertion);
-
-        if (idx == 0)
-        {
-            insertions = [newInsertion] ~ insertions;
-        }
-        else if (idx == insertions.length)
-        {
-            insertions ~= newInsertion;
-        }
-        else
-        {
-            insertions = insertions[0 .. idx] ~ [newInsertion] ~ insertions[idx .. $];
-        }
-
-        return this;
-    }
-
-    /// ditto
-    void opOpAssign(string op)(in Insertion newInsertion) pure if (op == "~")
-    {
-        this.add(newInsertion);
-    }
-
-    unittest
-    {
-        with (ReadAlignmentType)
-        {
-            Insertion getDummyInsertion(in size_t beginContigId,
-                    in size_t endContigId, in ReadAlignmentType insertionType = gap)
-            {
-                static immutable dummyLength = 42;
-
-                return Insertion.make(Coordinate(beginContigId, dummyLength / 2),
-                        Coordinate(endContigId, dummyLength / 2), dummyLength, insertionType);
-            }
-
-            CoordinateTransform getDummyTransform()
-            {
-                CoordinateTransform coordTransform;
-
-                // dfmt off
-                coordTransform.insertions = [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ];
-                // dfmt on
-
-                return coordTransform;
-            }
-
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 1 (Gap): newInsertion fits between two existing insertions
-                // dfmt off
-                coordTransform.add(getDummyInsertion(2, 3));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(2, 3),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                coordTransform.add(getDummyInsertion(8, 6));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(2, 3),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(8, 6),
-                    getDummyInsertion(6, 5),
-                ]);
-                // dfmt on
-            }
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 2* (Gap): newInsertion extends an existing insertion chain in the front
-                // dfmt off
-                coordTransform.add(getDummyInsertion(42, 1));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(42, 1),
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                // Case 2 (Gap): newInsertion extends an existing insertion chain in the front
-                coordTransform.add(getDummyInsertion(42, 9));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(42, 1),
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(42, 9),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                // dfmt on
-            }
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 2* (Extension): newInsertion extends an existing insertion chain in the front
-                // dfmt off
-                coordTransform.add(getDummyInsertion(1, 1, front));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 1, front),
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                coordTransform.add(getDummyInsertion(1, 1, front));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 1, front),
-                    getDummyInsertion(1, 1, front),
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                // Case 2 (Extension): newInsertion extends an existing insertion chain in the front
-                coordTransform.add(getDummyInsertion(9, 9, front));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 1, front),
-                    getDummyInsertion(1, 1, front),
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 9, front),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                coordTransform.add(getDummyInsertion(9, 9, front));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 1, front),
-                    getDummyInsertion(1, 1, front),
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 9, front),
-                    getDummyInsertion(9, 9, front),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                // dfmt on
-            }
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 3 (Gap): newInsertion extends an existing insertion chain in the back
-                // dfmt off
-                coordTransform.add(getDummyInsertion(4, 42));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(4, 42),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                coordTransform.add(getDummyInsertion(5, 42));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(4, 42),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion(5, 42),
-                ]);
-                // dfmt on
-            }
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 3 (Extension): newInsertion extends an existing insertion chain in the back
-                // dfmt off
-                coordTransform.add(getDummyInsertion(4, 4, back));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(4, 4, back),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                coordTransform.add(getDummyInsertion(4, 4, back));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(4, 4, back),
-                    getDummyInsertion(4, 4, back),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                ]);
-                coordTransform.add(getDummyInsertion(5, 5, back));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(4, 4, back),
-                    getDummyInsertion(4, 4, back),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion(5, 5, back),
-                ]);
-                coordTransform.add(getDummyInsertion(5, 5, back));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(4, 4, back),
-                    getDummyInsertion(4, 4, back),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion(5, 5, back),
-                    getDummyInsertion(5, 5, back),
-                ]);
-                // dfmt on
-            }
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 4 (Gap): open new insertion chain
-                // dfmt off
-                coordTransform.add(getDummyInsertion(1337, 42));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion(1337, 42),
-                ]);
-                coordTransform.add(getDummyInsertion(1337, 42));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion(1337, 42),
-                    getDummyInsertion(1337, 42),
-                ]);
-                // dfmt on
-            }
-            {
-                auto coordTransform = getDummyTransform();
-                // Case 4 (Extension): open new insertion chain
-                // dfmt off
-                coordTransform.add(getDummyInsertion(1337, 1337, front));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion(1337, 1337, front),
-                ]);
-                coordTransform.add(getDummyInsertion(42, 42, back));
-                assert(coordTransform.insertions == [
-                    getDummyInsertion(1, 2),
-                    getDummyInsertion(3, 4),
-                    getDummyInsertion(9, 8),
-                    getDummyInsertion(6, 5),
-                    getDummyInsertion(1337, 1337, front),
-                    getDummyInsertion(42, 42, back),
-                ]);
-                // dfmt on
-            }
-            {
-                CoordinateTransform emptyCoordTransform;
-
-                // Case 4* (Gap): open new insertion chain
-                assert(emptyCoordTransform.add(getDummyInsertion(1337, 42))
-                        .insertions == [getDummyInsertion(1337, 42)]);
-            }
-            {
-                CoordinateTransform emptyCoordTransform;
-
-                // Case 4* (Extension): open new insertion chain
-                assert(emptyCoordTransform.add(getDummyInsertion(1337, 1337,
-                        front)).insertions == [getDummyInsertion(1337, 1337, front)]);
-            }
-            {
-                CoordinateTransform emptyCoordTransform;
-
-                // Operator Style
-                emptyCoordTransform ~= getDummyInsertion(1337, 42);
-                assert(emptyCoordTransform.insertions == [getDummyInsertion(1337, 42)]);
-            }
-        }
-    }
-
-    private size_t getInsertionIndex(in Insertion newInsertion) pure const
-    {
-        // dfmt off
-        if (
-            // Case 4*: open new insertion chain
-            insertions.length == 0 ||
-            // Case 2*: newInsertion extends an existing insertion chain in the front
-            newInsertion.end.contigId == insertions[0].begin.contigId
-        )
-        {
-            return 0;
-        }
-        // dfmt on
-        // Case 3*: newInsertion extends an existing insertion chain in the back
-        // Case 4**: open new insertion chain
-        else if (insertions.length == 1)
-        {
-            // Note: this case is needed in order for `slice(2)` to always yield
-            //       pairs (of size two).
-            return 1;
-        }
-
-        size_t case1Result = size_t.max;
-        size_t case2Result = size_t.max;
-        size_t case3Result = size_t.max;
-
-        foreach (i, insAB; insertions.slide(2).enumerate)
-        {
-            auto insA = insAB[0];
-            auto insB = insAB[1];
-
-            // Case 1: newInsertion fits between two existing insertions; take first result
-            if (case1Result == size_t.max && newInsertion.begin.contigId == insA.end.contigId
-                    && newInsertion.end.contigId == insB.begin.contigId)
-            {
-                case1Result = i + 1;
-            }
-
-            // Case 2: newInsertion extends an existing insertion chain in the front; take first result
-            if (case2Result == size_t.max && newInsertion.begin.contigId != insA.end.contigId
-                    && newInsertion.end.contigId == insB.begin.contigId)
-            {
-                case2Result = i + 1;
-            }
-
-            // Case 3: newInsertion extends an existing insertion chain in the back; take last result
-            if (newInsertion.begin.contigId == insA.end.contigId
-                    && newInsertion.end.contigId != insB.begin.contigId)
-            {
-                case3Result = i + 1;
-            }
-        }
-
-        if (case1Result != size_t.max)
-            return case1Result;
-        else if (case2Result != size_t.max)
-            return case2Result;
-        else if (case3Result != size_t.max)
-            return case3Result;
-
-        // Case 4: open new insertion chain
-        return insertions.length;
-    }
-
-    unittest
-    {
-        Insertion getDummyInsertion(in size_t beginContigId, in size_t endContigId)
-        {
-            return Insertion(Coordinate(beginContigId, 0), Coordinate(endContigId, 0), 0);
-        }
-
-        CoordinateTransform coordTransform;
-
-        // dfmt off
-        coordTransform.insertions = [
-            getDummyInsertion(1, 2),
-            getDummyInsertion(3, 4),
-            getDummyInsertion(9, 8),
-            getDummyInsertion(6, 5),
-        ];
-        // dfmt on
-        {
-            // Case 1: newInsertion fits between two existing insertions
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(2, 3)) == 1);
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(8, 6)) == 3);
-        }
-        {
-            // Case 2*: newInsertion extends an existing insertion chain in the front
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 1)) == 0);
-            // Case 2: newInsertion extends an existing insertion chain in the front
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 9)) == 2);
-        }
-        {
-            // Case 3: newInsertion extends an existing insertion chain in the front
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(4, 42)) == 2);
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(5, 42)) == 4);
-        }
-        {
-            // Case 4: open new insertion chain
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(1337, 42)) == 4);
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(42, 1337)) == 4);
-        }
-        {
-            CoordinateTransform emptyCoordTransform;
-
-            // Case 4*: open new insertion chain
-            assert(emptyCoordTransform.getInsertionIndex(getDummyInsertion(1337, 42)) == 0);
-            assert(emptyCoordTransform.getInsertionIndex(getDummyInsertion(42, 1337)) == 0);
-        }
-        coordTransform.insertions = [getDummyInsertion(1, 2)];
-        {
-            // Case 3*: newInsertion extends an existing insertion chain in the front
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(2, 42)) == 1);
-        }
-        {
-            // Case 4**: open new insertion chain
-            assert(coordTransform.getInsertionIndex(getDummyInsertion(1337, 42)) == 1);
-        }
-    }
-
-    string toString(in ExportLanguage lang = ExportLanguage.python) pure const
-    {
-        immutable estimatePrefaceLength = 250;
-        immutable estimateLengthPerInsertion = 100;
-        immutable estimateEpilogueLength = 2000;
-
-        auto result = appender!string;
-        result.reserve(estimatePrefaceLength + estimateLengthPerInsertion
-                * insertions.length + estimateEpilogueLength);
-
-        final switch (lang)
-        {
-        case ExportLanguage.python:
-            buildPythonString(result);
-            break;
-        }
-
-        return result.data;
-    }
-
-    private void buildPythonString(out Appender!string builder) pure const
-    {
-        immutable preface = q"EOF
-            from __future__ import print_function
-            from collections import namedtuple
-            from sys import argv, exit
-
-            Coordinate = namedtuple("Coordinate", ["contig_id", "idx"])
-            Insertion = namedtuple("Insertion", ["begin", "end", "length"])
-
-            INSERTIONS = [
-EOF".outdent;
-        immutable epilogue = q"EOF
-            ]
-
-
-            def transform(contig_id, idx, insertions=INSERTIONS):
-                result_contig_id = contig_id
-                result_idx = idx
-                last_contig_id = contig_id
-
-                for insertion in reversed(insertions):
-                    if insertion.end.contig_id != last_contig_id and \
-                            last_contig_id != contig_id:
-                        break  # chain end reached
-                    elif insertion.end.contig_id == last_contig_id or \
-                            last_contig_id != contig_id:
-                        # chain begin reached or inside chain
-
-                        result_idx += insertion.begin.idx
-                        result_idx += insertion.length
-                        result_idx -= insertion.end.idx
-                        result_contig_id = insertion.begin.contig_id
-                        last_contig_id = insertion.begin.contig_id
-
-                return Coordinate(result_contig_id, result_idx)
-
-
-            def print_help():
-                print("Usage: {} [-h] CONTIG_ID IDX".format(argv[0]))
-                print()
-                print(
-                    "Transform coordinates from input coordinates to output " +
-                    "coordinates."
-                )
-                print("Prints `NEW_CONTIG_ID NEW_IDX` to STDOUT.")
-                print()
-                print("Positional arguments:")
-                print(" CONTIG_ID  Contig ID in .dam before transformation")
-                print(" IDX        Base index (zero-based) in sequence")
-                print()
-                print("Optional arguments:")
-                print(" -h         Prints this help.")
-
-            if __name__ == "__main__":
-                if len(argv) != 3 or "-h" in argv:
-                    print_help()
-                    exit(1)
-
-                try:
-                    contig_id = int(argv[1])
-                    idx = int(argv[2])
-
-                    if contig_id < 0 or idx < 0:
-                        raise Exception()
-                except Exception:
-                    print_help()
-                    exit(2)
-
-                transformed = transform(contig_id, idx)
-                print("{} {}".format(transformed.contig_id, transformed.idx))
-EOF".outdent;
-        immutable insertionTemplate = q"EOF
-            Insertion(
-                Coordinate(%d, %d),
-                Coordinate(%d, %d),
-                %d
-            ),
-EOF".outdent.indent(4);
-
-        builder ~= preface;
-        foreach (insertion; insertions)
-        {
-            // dfmt off
-            formattedWrite!insertionTemplate(
-                builder,
-                insertion.begin.contigId,
-                insertion.begin.idx,
-                insertion.end.contigId,
-                insertion.end.idx,
-                insertion.length,
-            );
-            // dfmt on
-        }
-        builder ~= epilogue;
-    }
-}
-
-/// Access contigs distributed over various DBs by ID.
-struct DBUnion
-{
-    alias DBReference = Tuple!(string, "dbFile", size_t, "contigId");
-
-    string baseDb;
-    DBReference[size_t] overlayDbs;
-
-    /// Return the `dbFile` for `contigId`.
-    DBReference opIndex(in size_t contigId) pure const
-    {
-        return overlayDbs.get(contigId, DBReference(baseDb, contigId));
-    }
-
-    unittest
-    {
-        auto dbQuery = DBUnion("baseDb");
-        dbQuery.overlayDbs[42] = DBReference("overlayDb42", 1);
-
-        assert(dbQuery[0] == DBReference("baseDb", 0));
-        assert(dbQuery[7] == DBReference("baseDb", 7));
-        assert(dbQuery[42] == DBReference("overlayDb42", 1));
-    }
-
-    /// Set the source for `contigId`.
-    void addAlias(in size_t contigId, in string dbFile, in size_t newContigId) pure
-    {
-        addAlias(contigId, DBReference(dbFile, newContigId));
-    }
-
-    /// ditto
-    void addAlias(in size_t contigId, in DBReference dbRef) pure
-    {
-        overlayDbs[contigId] = dbRef;
-    }
-
-    unittest
-    {
-        auto dbQuery = DBUnion("baseDb");
-
-        assert(dbQuery[42] == DBReference("baseDb", 42));
-
-        dbQuery.addAlias(42, DBReference("overlayDb42", 1));
-
-        assert(dbQuery[42] == DBReference("overlayDb42", 1));
-    }
-}
-
-///
-unittest
-{
-    auto dbQuery = DBUnion("baseDb");
-
-    dbQuery.addAlias(42, "overlayDb42", 1);
-
-    assert(dbQuery[0].dbFile == "baseDb");
-    assert(dbQuery[0].contigId == 0);
-    assert(dbQuery[7].dbFile == "baseDb");
-    assert(dbQuery[7].contigId == 7);
-    assert(dbQuery[42].dbFile == "overlayDb42");
-    assert(dbQuery[42].contigId == 1);
-
-    dbQuery.addAlias(7, "overlayDb7", 1);
-
-    assert(dbQuery[7].dbFile == "overlayDb7");
-    assert(dbQuery[7].contigId == 1);
 }

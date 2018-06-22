@@ -129,6 +129,10 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
     {
         Tag tag = emptyTag;
         Number value;
+        static if (!(tagAlias is null) && tagAlias != "tag")
+        {
+            mixin("alias " ~ tagAlias ~ " = tag;");
+        }
     }
 
     /**

@@ -115,10 +115,6 @@ struct Options
     string readsFile;
     string readsDb;
 
-    @Option("coord-transform", "T")
-    @Help("write a Python 2.7 compatible script which transform input coordinates to output coordinates")
-    string coordTransform = null;
-
     @Option("reads-error")
     @Help("estimated error rate in reads")
     double readsErrorRate = .15;
@@ -187,16 +183,6 @@ struct Options
     string[] ladumpTraceOptions = [
         "-c", // output alignment coordinates
         "-t", // output number of differences for each local alignment
-    ];
-    // dfmt on
-
-    /// List of options to pass to `DBdump`
-    @Option()
-    // dfmt off
-    string[] dbdumpOptions = [
-        "-r", // read number
-        "-h", // original file name string (header) and location: well, pulse start, pulse end
-        "-s", // sequence string
     ];
     // dfmt on
 
@@ -347,19 +333,6 @@ private
         import std.exception : ErrnoException;
         import std.format : format;
         import std.stdio : File;
-
-        if (!(options.coordTransform is null))
-        {
-            try
-            {
-                auto coordTransformScript = File(options.coordTransform, "a");
-            }
-            catch (ErrnoException e)
-            {
-                throw new Exception(format!"cannot write coord transform file `%s`: %s"(
-                        options.coordTransform, e));
-            }
-        }
     }
 
     void createWorkDir(ref Options options)

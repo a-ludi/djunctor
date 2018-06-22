@@ -981,11 +981,11 @@ class EmptySetException : Exception
 
 struct NaturalNumberSet
 {
-    private static immutable partSize = size_t.sizeof;
+    private static immutable partSize = 8 * size_t.sizeof;
     private static immutable size_t firstBit = 1;
-    private static immutable size_t lastBit = firstBit << partSize - 1;
+    private static immutable size_t lastBit = firstBit << (partSize - 1);
     private static immutable size_t emptyPart = 0;
-    private static immutable size_t fullPart = emptyPart ^ emptyPart;
+    private static immutable size_t fullPart = ~emptyPart;
 
     private size_t[] parts;
     private size_t nMax;
@@ -1123,6 +1123,112 @@ struct NaturalNumberSet
             assert(set.minElement() == i + 5);
             assert(set.maxElement() == i + 7);
         }
+    }
+
+    /// Returns a range of the elements in this set. The elements are ordered
+    /// ascending.
+    @property auto elements() const pure nothrow
+    {
+        static struct ElementsRange
+        {
+            const NaturalNumberSet* set;
+            bool _empty = false;
+            size_t i = 0;
+            size_t part;
+            size_t j = 0;
+
+            this(const NaturalNumberSet* set) pure nothrow
+            {
+                this.set = set;
+                this._empty = set.empty;
+
+                if (!this.empty)
+                {
+                    this.part = set.parts[i];
+                    if (!set.has(front))
+                    {
+                        popFront();
+                    }
+                }
+            }
+
+            void popFront() pure nothrow
+            {
+                assert(!empty, "Attempting to popFront an empty elements range");
+                ++j;
+
+                while (shiftedPartEmpty)
+                {
+                    nextPart();
+
+                    if (empty)
+                    {
+                        return;
+                    }
+                }
+
+                while (((part >> j) & firstBit) != firstBit && !shiftedPartEmpty)
+                {
+                    ++j;
+                }
+
+                if (shiftedPartEmpty)
+                {
+                    popFront();
+                }
+            }
+
+            @property size_t front() const pure nothrow
+            {
+                assert(!empty, "Attempting to fetch the front of an empty elements range");
+                return i * partSize + j;
+            }
+
+            @property bool empty() const pure nothrow
+            {
+                return _empty;
+            }
+
+            private @property bool shiftedPartEmpty() const pure nothrow
+            {
+                return (part >> j) == emptyPart || j >= partSize;
+            }
+
+            private void nextPart() pure nothrow
+            {
+                // move to start of next part
+                ++i;
+                j = 0;
+
+                if (i < set.parts.length)
+                {
+                    part = set.parts[i];
+                }
+                else
+                {
+                    _empty = true;
+                }
+            }
+        }
+
+        return ElementsRange(&this);
+    }
+
+    ///
+    unittest
+    {
+        import std.algorithm : equal;
+        import std.range : iota;
+
+        NaturalNumberSet set;
+        auto someNumbers = iota(set.partSize).filter!"a % 3 == 0";
+
+        foreach (i; someNumbers)
+        {
+            set.add(i);
+        }
+
+        assert(equal(someNumbers, set.elements));
     }
 }
 

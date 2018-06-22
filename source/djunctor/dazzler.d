@@ -954,23 +954,44 @@ unittest
     assert(getTracePointDistance(["-e.8", "-I", "-s42"]) == 42);
 }
 
+enum DBdumpOptions
+{
+      readNumber = "-r",
+      originalHeader = "-h",
+      sequenceString = "-s",
+      sNROfACGTChannels = "-a",
+      intrinsicQualityVector = "-i",
+      quivaValues = "-q",
+      repeatProfileVector = "-p",
+      masks = "-m",
+      untrimmedDatabase = "-u",
+      upperCase = "-U",
+}
+
 /**
     Get the designated set of records in FASTA format. If recordNumbers is
     empty the whole DB will be converted.
 */
 auto getFastaEntries(Options, Range)(in string dbFile, Range recordNumbers, in Options options)
-        if (hasOption!(Options, "dbdumpOptions", isOptionsList)
-            && hasOption!(Options, "fastaLineWidth",
+        if (hasOption!(Options, "fastaLineWidth",
             isIntegral) && hasOption!(Options, "workdir", isSomeString)
-            && isInputRange!Range && is(ElementType!Range == size_t))
+            && isInputRange!Range && is(ElementType!Range : size_t))
 {
-    return readDbDump(dbdump(dbFile, recordNumbers, options.dbdumpOptions,
+    // dfmt off
+    string[] dbdumpOptions = [
+        DBdumpOptions.readNumber,
+        DBdumpOptions.originalHeader,
+        DBdumpOptions.sequenceString,
+    ];
+    // dfmt on
+
+    return readDbDump(dbdump(dbFile, recordNumbers, dbdumpOptions,
             options.workdir), recordNumbers, options.fastaLineWidth);
 }
 
 private auto readDbDump(S, Range)(S dbDump, Range recordNumbers, in size_t lineLength)
         if (isInputRange!S && isSomeString!(ElementType!S)
-            && isInputRange!Range && is(ElementType!Range == size_t))
+            && isInputRange!Range && is(ElementType!Range : size_t))
 {
     import std.algorithm : count, filter, sort;
     import std.array : appender;
@@ -1144,6 +1165,50 @@ unittest
     }
 }
 
+enum DaccordOptions : string
+{
+    /// number of threads (default 4)
+    numberOfThreads = "-t",
+    /// window size (default 40)
+    windowSize = "-w",
+    /// advance size (default 10)
+    advanceSize = "-a",
+    /// max depth (default 18446744073709551615)
+    maxDepth = "-d",
+    /// produce full sequences (default 0)
+    produceFullSequences = "-f",
+    /// verbosity (default 18446744073709551615)
+    verbosity = "-V",
+    /// read interval (default 0,18446744073709551615)
+    readInterval = "-I",
+    /// reads part (default 0,1)
+    readsPart = "-J",
+    /// error profile file name (default input.las.eprof)
+    errorProfileFileName = "-E",
+    /// minimum window coverage (default 3)
+    minWindowCoverage = "-m",
+    /// maximum window error (default 18446744073709551615)
+    maxWindowError = "-e",
+    /// minimum length of output (default 0)
+    minLengthOfOutput = "-l",
+    /// minimum k-mer filter frequency (default 0)
+    minKMerFilterFrequency = "--minfilterfreq",
+    /// maximum k-mer filter frequency (default 2)
+    maxKMerFilterFrequency = "--maxfilterfreq",
+    /// temporary file prefix (default daccord_ozelot_4500_1529654843)
+    temporaryFilePrefix = "-T",
+    /// maximum number of alignments considered per read (default 5000)
+    maxAlignmentsPerRead = "-D",
+    /// maximum number of alignments considered per read (default 0)
+    maxAlignmentsPerReadVard = "--vard",
+    /// compute error profile only (default disable)
+    computeErrorProfileOnly = "--eprofonly",
+    /// compute error distribution estimate (default disable)
+    computeErrorDistributionEstimate = "--deepprofileonly",
+    /// kmer size (default 8)
+    kmerSize = "-k",
+}
+
 /**
     Self-dalign dbFile and build consensus using daccord.
 
@@ -1163,9 +1228,10 @@ string getConsensus(Options)(in string dbFile, in size_t readId, in Options opti
         string workdir;
     }
 
+    auto readIdx = readId - 1;
     // dfmt off
     auto consensusDbs = getConsensus(dbFile, const(ModifiedOptions)(
-        options.daccordOptions ~ format!"-I%d,%d"(readId, readId),
+        options.daccordOptions ~ format!"%s%d,%d"(cast(string) DaccordOptions.readInterval, readIdx, readIdx),
         options.dalignerOptions,
         options.dbsplitOptions,
         options.workdir,
@@ -1190,6 +1256,7 @@ string[] getConsensus(Options)(in string dbFile, in Options options)
             isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
     dalign(dbFile, options.dalignerOptions, options.workdir);
+    computeErrorProfile(dbFile, options);
 
     // dfmt off
     auto consensusDbs = getLasFiles(dbFile, options.workdir)
@@ -1201,6 +1268,31 @@ string[] getConsensus(Options)(in string dbFile, in Options options)
         dbsplit(consensusDb, options.dbsplitOptions, options.workdir);
 
     return consensusDbs;
+}
+
+private void computeErrorProfile(Options)(in string dbFile, in Options options)
+        if (hasOption!(Options, "daccordOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
+{
+    // dfmt off
+    auto eProfOptions = options
+        .daccordOptions
+        .filter!(option => !option.startsWith(
+            cast(string) DaccordOptions.produceFullSequences,
+            //cast(string) DaccordOptions.readInterval,
+            cast(string) DaccordOptions.readsPart,
+            cast(string) DaccordOptions.errorProfileFileName,
+        ))
+        .chain(only(DaccordOptions.computeErrorProfileOnly))
+        .array;
+    auto lasFiles = getLasFiles(dbFile, options.workdir)
+        .filter!(lasFile => !lasEmpty(lasFile, dbFile, null, options.workdir));
+    // dfmt on
+
+    foreach (lasFile; lasFiles)
+    {
+        // Produce error profile
+        silentDaccord(dbFile, lasFile, eProfOptions, options.workdir);
+    }
 }
 
 unittest
@@ -1449,6 +1541,18 @@ private
         return daccordedDb;
     }
 
+    void silentDaccord(in string dbFile, in string lasFile, in string[] daccordOpts, in string workdir)
+    {
+        // dfmt off
+        executeCommand(chain(
+            only("daccord"),
+            daccordOpts,
+            only(lasFile.relativeToWorkdir(workdir)),
+            only(dbFile.relativeToWorkdir(workdir)),
+        ), workdir);
+        // dfmt on
+    }
+
     void fasta2dam(Range)(in string outFile, Range fastaRecords, in string workdir)
             if (isInputRange!(Unqual!Range) && isSomeString!(ElementType!(Unqual!Range)))
     {
@@ -1541,7 +1645,7 @@ private
 
     auto dbdump(Range)(in string dbFile, Range recordNumbers,
             in string[] dbdumpOptions, in string workdir)
-            if (isForwardRange!Range && is(ElementType!Range == size_t))
+            if (isForwardRange!Range && is(ElementType!Range : size_t))
     {
         static struct DBDump
         {

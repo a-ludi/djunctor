@@ -10,7 +10,7 @@ module djunctor.util.scaffold;
 
 import djunctor.util.log;
 import djunctor.util.math : Graph, MissingNodeException, NaturalNumberSet;
-import std.algorithm : canFind, countUntil, equal, filter, joiner, map, sort, sum, swap;
+import std.algorithm : canFind, countUntil, equal, filter, fold, joiner, map, minElement, sort, sum, swap;
 import std.array : Appender, array;
 import std.exception : assertThrown;
 import std.functional : binaryFun;
@@ -24,20 +24,20 @@ debug import std.stdio : writeln;
 ///
 unittest
 {
-    //   contig 1      contig 2
+    //             contig 1      contig 2
     //
-    //  o        o     o        o
-    //          / e1 e2 \      / e4
-    //    o -- o ------- o -- o
-    //     \        e3         \
-    //      \                   \ e5
-    //   e10 \   ____________   /
-    //        \ /   e6       \ /
-    //    o -- o         o -- o
-    //          \ e7 e8 /      \ e9
-    //  o        o     o        o
+    //            o        o     o        o
+    //                    / e1 e2 \      / e4
+    //              o -- o ------- o -- o
+    //               \        e3         \
+    //                \                   \ e5
+    //             e10 \   ____________   /
+    //                  \ /   e6       \ /
+    //    o -- o         o -- o         o -- o
+    //                         \ e7 e8 /      \ e9
+    //  o        o     o        o     o        o
     //
-    //   contig 4      contig 3
+    //   contig 5       contig 4      contig 3
     //
     alias J = Join!int;
     alias S = Scaffold!int;
@@ -64,11 +64,11 @@ unittest
     //    o -- o ------- o -- o
     //              e3
     //
-    //    o -- o         o -- o
-    //          \ e7 e8 /      \ e9
-    //  o        o     o        o
+    //    o -- o         o -- o         o -- o
+    //                         \ e7 e8 /      \ e9
+    //  o        o     o        o     o        o
     //
-    //   contig 4      contig 3
+    //   contig 5       contig 4      contig 3
 
     assert(J(CN(1, CP.end), CN(1, CP.post ))  in scaffold); // e1
     assert(J(CN(2, CP.pre), CN(2, CP.begin))  in scaffold); // e2
@@ -157,6 +157,18 @@ bool isGap(J)(in J join) pure nothrow
     // dfmt on
 }
 
+/// Returns true iff join is a gap edge and anti-parallel.
+bool isAntiParallel(J)(in J join) pure nothrow
+{
+    return join.isGap && join.start.contigPart == join.end.contigPart;
+}
+
+/// Returns true iff join is a gap edge and parallel.
+bool isParallel(J)(in J join) pure nothrow
+{
+    return join.isGap && join.start.contigPart != join.end.contigPart;
+}
+
 /// Returns true iff join is an extension edge of the scaffold graph.
 bool isExtension(J)(in J join) pure nothrow
 {
@@ -201,7 +213,8 @@ Scaffold!T buildScaffold(alias handleConflict, T)(in size_t numReferenceContigs,
     return scaffold;
 }
 
-private Scaffold!T initScaffold(T)(in size_t numReferenceContigs)
+/// Creates a scaffold with all the default edges.
+Scaffold!T initScaffold(T)(in size_t numReferenceContigs)
 {
     // dfmt off
     auto contigIds = iota(1, numReferenceContigs + 1);
@@ -337,11 +350,11 @@ unittest
     //    o -- o ------- o -- o
     //              e3
     //
-    //    o -- o         o -- o
-    //          \ e7 e8 /      \ e9
-    //  o        o     o        o
+    //    o -- o         o -- o         o -- o
+    //                         \ e7 e8 /      \ e9
+    //  o        o     o        o     o        o
     //
-    //   contig 4      contig 3
+    //   contig 5       contig 4      contig 3
     //
     auto scaffold = buildScaffold!(sumPayloads!int, int)(5, [
         J(CN(1, CP.end), CN(1, CP.post ), 1), // e1
@@ -409,11 +422,11 @@ unittest
     //    o -- o ------- o -- o
     //              e3
     //
-    //    o -- o         o -- o
-    //          \ e7 e8 /      \ e9
-    //  o        o     o        o
+    //    o -- o         o -- o         o -- o
+    //                         \ e7 e8 /      \ e9
+    //  o        o     o        o     o        o
     //
-    //   contig 4      contig 3
+    //   contig 5       contig 4      contig 3
     //
     auto joins1 = [
         J(CN(1, CP.end), CN(2, CP.begin), 1), // e3
@@ -468,7 +481,7 @@ unittest
         J(CN(1, CP.end), CN(2, CP.begin), 1), // e1
         J(CN(2, CP.end), CN(1, CP.begin ), 1), // e2
     ];
-    auto scaffold2 = buildScaffold!(sumPayloads!Payload, Payload)(5, joins2);
+    auto scaffold2 = buildScaffold!(sumPayloads!Payload, Payload)(2, joins2);
     auto walk2 = [
         getDefaultJoin!Payload(1),
         joins2[0],
@@ -521,6 +534,7 @@ struct LinearWalk(T)
 
     void popFront()
     {
+        assert(!empty, "Attempting to popFront an empty LinearWalk");
         assert(scaffold.degree(currentNode) <= 2, "fork in linear walk");
 
         // If isCyclic is set then the last edge of the cycle is being popped.
@@ -558,6 +572,7 @@ struct LinearWalk(T)
 
     @property Join!T front()
     {
+        assert(!empty, "Attempting to fetch the front of an empty LinearWalk");
         return currentJoin;
     }
 
@@ -596,4 +611,145 @@ struct LinearWalk(T)
     {
         this.visitedNodes.add(nodeIdx);
     }
+}
+
+/// Get a range of `ContigNode`s where full contig walks should start.
+auto contigStarts(T)(Scaffold!T scaffold)
+{
+    static struct ContigStarts
+    {
+        Scaffold!T scaffold;
+        bool _empty = false;
+        NaturalNumberSet unvisitedNodes;
+        ContigNode currentContigStart;
+
+        this(Scaffold!T scaffold)
+        {
+            this.scaffold = scaffold;
+            unvisitedNodes.reserveFor(scaffold.nodes.length);
+
+            foreach (nodeIdx; iota(scaffold.nodes.length))
+            {
+                unvisitedNodes.add(nodeIdx);
+            }
+
+            popFront();
+        }
+
+        void popFront()
+        {
+            ContigNode walkToEndNode(ContigNode lastNode, Join!T walkEdge)
+            {
+                auto nextNode = walkEdge.target(lastNode);
+                unvisitedNodes.remove(scaffold.indexOf(nextNode));
+
+                return nextNode;
+            }
+
+            assert(!empty, "Attempting to popFront an empty ContigStarts");
+
+            if (unvisitedNodes.empty)
+            {
+                _empty = true;
+
+                return;
+            }
+
+            auto unvisitedNodeIdx = unvisitedNodes.minElement();
+            auto unvisitedNode = scaffold.nodes[unvisitedNodeIdx];
+            auto unvisitedNodeOutDegree = scaffold.outDegree(unvisitedNode);
+            unvisitedNodes.remove(unvisitedNodeIdx);
+
+            // Ignore unconnected nodes.
+            if (unvisitedNodeOutDegree > 0)
+            {
+                // dfmt off
+                auto endNodes = scaffold
+                    .outEdges(unvisitedNode)
+                    .map!(firstEdge => linearWalk!T(scaffold, unvisitedNode, firstEdge)
+                        .fold!walkToEndNode(unvisitedNode));
+                currentContigStart = unvisitedNodeOutDegree == 1
+                    // If the start node has only one edge it is itself an end node.
+                    ? minElement(endNodes, unvisitedNode)
+                    : minElement(endNodes);
+                // dfmt on
+            }
+            else
+            {
+                popFront();
+            }
+        }
+
+        @property ContigNode front() pure nothrow
+        {
+            assert(!empty, "Attempting to fetch the front of an empty ContigStarts");
+            return currentContigStart;
+        }
+
+        @property bool empty() const pure nothrow
+        {
+            return _empty;
+        }
+    }
+
+    return ContigStarts(scaffold);
+}
+
+///
+unittest
+{
+    alias Payload = int;
+    alias J = Join!Payload;
+    alias S = Scaffold!Payload;
+    alias CN = ContigNode;
+    alias CP = ContigPart;
+    //   contig 1      contig 2
+    //
+    //  o        o     o        o
+    //                         / e4
+    //    o -- o ------- o -- o
+    //              e3
+    //
+    //    o -- o         o -- o         o -- o
+    //                         \ e7 e8 /      \ e9
+    //  o        o     o        o     o        o
+    //
+    //   contig 5       contig 4      contig 3
+    //
+    // dfmt off
+    auto scaffold1 = buildScaffold!(sumPayloads!Payload, Payload)(5, [
+        J(CN(1, CP.end), CN(2, CP.begin), 1), // e3
+        J(CN(2, CP.end), CN(2, CP.post ), 1), // e4
+        J(CN(4, CP.end), CN(4, CP.post ), 1), // e7
+        J(CN(3, CP.pre), CN(3, CP.begin), 1), // e8
+        J(CN(3, CP.end), CN(3, CP.post ), 1), // e9
+    ]);
+
+    assert(equal(contigStarts!Payload(scaffold1), [
+        CN(1, CP.begin),
+        CN(3, CP.pre),
+        CN(4, CP.begin),
+        CN(5, CP.begin),
+    ]));
+    // dfmt on
+
+    //   contig 1      contig 2
+    //
+    //  o        o     o        o
+    //
+    //              e1
+    //    o -- o ------- o -- o
+    //     \_________________/
+    //              e2
+    //
+    // dfmt off
+    auto scaffold2 = buildScaffold!(sumPayloads!Payload, Payload)(2, [
+        J(CN(1, CP.end), CN(2, CP.begin), 1), // e1
+        J(CN(2, CP.end), CN(1, CP.begin ), 1), // e2
+    ]);
+
+    assert(equal(contigStarts!Payload(scaffold2), [
+        CN(1, CP.begin),
+    ]));
+    // dfmt on
 }

@@ -13,7 +13,6 @@ TEST_DATA_ARCHIVE="integration-tests.tar.xz"
 TEST_DATA_READS="reads"
 TEST_DATA_REF="reference"
 TEST_DATA_MODREF="reference_mod"
-COORD_TRANSFORM="coord-transform.py"
 GDB_INIT_SCRIPT="gdbinit"
 DJUNCTOR_OPTS=(
     -v
@@ -70,12 +69,9 @@ function init_script()
     parse_opts
 
     WORKDIR="$(mktemp --tmpdir -d djunctor-integration-tests.XXXXXX)"
-    DJUNCTOR_OPTS[${#DJUNCTOR_OPTS[*]}]="--coord-transform"
-    DJUNCTOR_OPTS[${#DJUNCTOR_OPTS[*]}]="$WORKDIR/$COORD_TRANSFORM"
     OUTPUT_LOG="$WORKDIR/output.log"
     RESULT_FILE="$WORKDIR/result.fasta"
     RESULT_DB="$WORKDIR/result.dam"
-    COORD_TRANSFORM="$WORKDIR/$COORD_TRANSFORM"
 }
 
 function parse_opts()
@@ -368,23 +364,6 @@ function json_log()
 
 }
 
-function expect_transformed_coord()
-{
-    local IN_CONTIG="$1"
-    local IN_IDX="$2"
-    local OUT_CONTIG="$3"
-    local OUT_IDX="$4"
-
-    local OBSERVED="$(python "$COORD_TRANSFORM" "$IN_CONTIG" "$IN_IDX")"
-    local EXPECTED="$OUT_CONTIG $OUT_IDX"
-
-    if [[ "$OBSERVED" != "$EXPECTED" ]]; then
-        echo "expected: $EXPECTED observed: $OBSERVED"
-
-        return 1
-    fi
-}
-
 function expect_insert_sequence_ends()
 {
     local BEGIN_CONTIG="$1"
@@ -593,13 +572,15 @@ function test_gaps_found()
     expect_json \
         '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
         '.[0].gapInfo | map(select(.type == "gap") | .contigIds) == [
-            [1, 2],
-            [2, 3],
-            [3, 4],
-            [4, 5],
-            [5, 6],
-            [6, 7],
-            [8, 9]
+            [ 1,  2],
+            [ 2,  3],
+            [ 3,  4],
+            [ 4,  5],
+            [ 5,  6],
+            [ 6,  7],
+            [ 8,  9],
+            [ 9, 10],
+            [10, 11]
         ]' \
         '.[0].gapInfo | map(select(.type == "gap") | .contigIds)' \
         'gapInfo'
@@ -637,18 +618,6 @@ function test_gaps_filled()
         'insertionInfo'
 }
 
-
-function test_merged_result()
-{
-    expect_json \
-        '. | has("numReferenceContigs")' \
-        '.[0] |
-            .numReferenceContigs == 9 and
-            (.contigSources | length) == 2 and
-            (.contigSources | length) == (.contigSources | unique_by(.[1].dbFile) | length)' \
-        'map({ numReferenceContigs, contigSources })' \
-        'numReferenceContigs'
-}
 
 function test_pile_ups_contain_enough_valid_read()
 {
@@ -703,6 +672,11 @@ function test_pile_ups_contain_enough_valid_read()
         map(buildOutput)
     ' <<<"{\"truePileUps\":$TRUE_PILE_UPS,\"computedPileUps\":$COMPUTED_PILE_UPS}")"
 
+    if $VERBOSE; then
+        align_classified_reads_against_reference_mod 'incorrectReads' <<<"$TEST_RESULT"
+        align_classified_reads_against_reference_mod 'unusedReads' <<<"$TEST_RESULT"
+    fi
+
     if ! jq --exit-status 'map(select(.isGoodEnough | not)) | length == 0' <<<"$TEST_RESULT" &> /dev/null; then
         local NUM_PILE_UPS="$(jq -r 'length' <<<"$TEST_RESULT")"
         local NUM_GOOD_PILE_UPS="$(jq -r 'map(select(.isGoodEnough)) | length' <<<"$TEST_RESULT")"
@@ -742,78 +716,6 @@ function test_number_of_iterations()
         'map(.iteration)' \
         'iteration'
 }
-
-function test_coordinate_transform__contig_1()
-{
-    # This is the transformed coordinate after *perfect* (+ small error) gap filling
-    expect_transformed_coord \
-        1 42 \
-        1 $((42))
-}
-
-function test_coordinate_transform__contig_2()
-{
-    # This is the transformed coordinate after *perfect* (+ small error) gap filling
-    expect_transformed_coord \
-        2 42 \
-        1 $((42 + 12400 + 1))
-}
-
-function test_coordinate_transform__contig_3()
-{
-    # This is the transformed coordinate after *perfect* (+ small error) gap filling
-    expect_transformed_coord \
-        3 42 \
-        1 $((42 + 29200 + 1))
-}
-
-function test_coordinate_transform__contig_4()
-{
-    # This is the transformed coordinate after *perfect* (+ small error) gap filling
-    expect_transformed_coord \
-        4 42 \
-        1 $((42 + 159900 + 2))
-}
-
-function test_coordinate_transform__contig_5()
-{
-    # This is the transformed coordinate after *perfect* (+ small error) gap filling
-    expect_transformed_coord \
-        5 42 \
-        1 $((42 + 174900 + 8))
-}
-
-function test_coordinate_transform__contig_6()
-{
-    # This is the transformed coordinate after *perfect* (+ small error) gap filling
-    expect_transformed_coord \
-        6 42 \
-        1 $((42 + 203650 + 8))
-}
-
-function test_coordinate_transform__contig_7()
-{
-    # This is the transformed coordinate after *perfect* (+ small error) gap filling
-    expect_transformed_coord \
-        7 42 \
-        1 $((42 + 218900 + 8))
-}
-
-function test_coordinate_transform__contig_8()
-{
-    expect_transformed_coord \
-        8 42 \
-        2 $((42 + FRONT_EXTENSION_8_LENGTH))
-}
-
-function test_coordinate_transform__contig_9()
-{
-    # This is the transformed coordinate after *perfect* (+ small error) gap filling
-    expect_transformed_coord \
-        9 42 \
-        2 $((42 + 24900 + FRONT_EXTENSION_8_LENGTH))
-}
-
 
 
 #-----------------------------------------------------------------------------

@@ -1443,13 +1443,13 @@ struct ReadAlignment
     }
 }
 
-private auto safeGapTypes(in ReadAlignment x) pure nothrow
+auto safeGapTypes(T)(in T thing) pure nothrow
 {
-    assert(x.isGap, "x must be of type `gap`");
+    assert(thing.isGap, "thing must be of type `gap`");
 
     try
     {
-        return x.gapTypes;
+        return thing.gapTypes;
     }
     catch (Exception e)
     {
@@ -1457,14 +1457,14 @@ private auto safeGapTypes(in ReadAlignment x) pure nothrow
     }
 }
 
-/// Generate join from read alignment.
-J to(J : Join!(ReadAlignment[]))(ReadAlignment readAlignment)
+/// Generate basic join from read alignment.
+J makeJoin(J)(ReadAlignment readAlignment)
 {
     final switch (readAlignment.type)
     {
     case ReadAlignmentType.front:
         // dfmt off
-        return Join!(ReadAlignment[])(
+        return J(
             ContigNode(
                 readAlignment[0].contigA.id,
                 ContigPart.pre,
@@ -1473,7 +1473,6 @@ J to(J : Join!(ReadAlignment[]))(ReadAlignment readAlignment)
                 readAlignment[0].contigA.id,
                 ContigPart.begin,
             ),
-            [readAlignment],
         );
         // dfmt on
     case ReadAlignmentType.gap:
@@ -1485,7 +1484,7 @@ J to(J : Join!(ReadAlignment[]))(ReadAlignment readAlignment)
         auto gapTypes = readAlignment.gapTypes;
 
         // dfmt off
-        return Join!(ReadAlignment[])(
+        return J(
             ContigNode(
                 readAlignment[0].contigA.id,
                 contigPart(gapTypes[0]),
@@ -1494,12 +1493,11 @@ J to(J : Join!(ReadAlignment[]))(ReadAlignment readAlignment)
                 readAlignment[1].contigA.id,
                 contigPart(gapTypes[1]),
             ),
-            [readAlignment],
         );
         // dfmt on
     case ReadAlignmentType.back:
         // dfmt off
-        return Join!(ReadAlignment[])(
+        return J(
             ContigNode(
                 readAlignment[0].contigA.id,
                 ContigPart.end,
@@ -1508,10 +1506,18 @@ J to(J : Join!(ReadAlignment[]))(ReadAlignment readAlignment)
                 readAlignment[0].contigA.id,
                 ContigPart.post,
             ),
-            [readAlignment],
         );
         // dfmt on
     }
+}
+
+/// Generate join from read alignment.
+J to(J : Join!(ReadAlignment[]))(ReadAlignment readAlignment)
+{
+    auto join = makeJoin!J(readAlignment);
+    join.payload = [readAlignment];
+
+    return join;
 }
 
 ///
@@ -1902,6 +1908,43 @@ bool isExtension(in PileUp pileUp) pure nothrow
 bool isGap(in PileUp pileUp) pure nothrow
 {
     return pileUp.any!(readAlignment => readAlignment.isGap);
+}
+
+auto isParallel(in PileUp pileUp) pure nothrow
+{
+    // dfmt off
+    return pileUp.isGap && pileUp
+        .filter!(readAlignment => readAlignment.isGap)
+        .front
+        .isParallel;
+    // dfmt on
+}
+
+auto isAntiParallel(in PileUp pileUp) pure nothrow
+{
+    // dfmt off
+    return pileUp.isGap && pileUp
+        .filter!(readAlignment => readAlignment.isGap)
+        .front
+        .isAntiParallel;
+    // dfmt on
+}
+
+auto gapTypes(in PileUp pileUp) pure
+{
+    assert(pileUp.isValid, "invalid pile up");
+
+    if (!pileUp.isGap)
+    {
+        throw new Exception("must be a gap");
+    }
+
+    // dfmt off
+    return pileUp
+        .filter!(readAlignment => readAlignment.isGap)
+        .front
+        .gapTypes;
+    // dfmt on
 }
 
 /// Returns a list of pointers to all involved alignment chains.
