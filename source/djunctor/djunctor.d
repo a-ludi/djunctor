@@ -122,7 +122,8 @@ private const(AlignmentChain)[][] splitAlignmentsByContigA(PileUp pileUp)
     // dfmt on
 }
 
-/// Returns a common trace points wrt. contigA that is not in mask.
+/// Returns a common trace points wrt. contigA that is not in mask and is on
+/// the relevant half of the contig.
 private long getCommonTracePoint(in AlignmentChain[] alignmentChains, in ReferenceMask mask, in size_t tracePointDistance)
 {
     static long getCommonTracePoint(R)(R tracePointCandidates, ReferenceMask allowedTracePointRegion) pure
@@ -229,11 +230,11 @@ unittest
     // mask3: .    [========================)
     // dfmt off
     auto frontExtensions = [
-        getDummyRead(1, 25),
-        getDummyRead(5, 25),
-        getDummyRead(8, 25),
-        getDummyRead(6, 25),
-        getDummyRead(9, 25),
+        getDummyRead(0, 24),
+        getDummyRead(0, 20),
+        getDummyRead(0, 17),
+        getDummyRead(0, 19),
+        getDummyRead(0, 16),
     ];
     // dfmt on
     auto mask1 = ReferenceMask(1, 5, 13);
@@ -241,9 +242,9 @@ unittest
     auto mask3 = ReferenceMask(1, 0, 25);
 
     assert(getCommonTracePoint(backExtensions, mask1, tracePointDistance) == 15);
-    assert(getCommonTracePoint(backExtensions, mask2, tracePointDistance) == 10);
+    assert(getCommonTracePoint(backExtensions, mask2, tracePointDistance) == -1);
     assert(getCommonTracePoint(backExtensions, mask3, tracePointDistance) == -1);
-    assert(getCommonTracePoint(frontExtensions, mask1, tracePointDistance) == 15);
+    assert(getCommonTracePoint(frontExtensions, mask1, tracePointDistance) == 0);
     assert(getCommonTracePoint(frontExtensions, mask2, tracePointDistance) == 10);
     assert(getCommonTracePoint(frontExtensions, mask3, tracePointDistance) == -1);
 }
