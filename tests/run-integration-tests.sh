@@ -631,7 +631,7 @@ function test_pile_ups_contain_enough_valid_read()
 {
     local MIN_CORRECT_READS_RATIO="0.9"
     local COMPUTED_PILE_UPS="$(json_log 'pileUps' | \
-        jq -c 'select(has("pileUps")) | .pileUps | map({ type: .type, contigs: (.readAlignments | map(.[0].contigB.id) | unique | sort), reads: (.readAlignments | map(.[0].contigA.id) | unique | sort) })')"
+        jq -c 'select(has("pileUps")) | .pileUps | map({ type: .type, contigs: (.readAlignments | map(.[0].contigA.id) | unique | sort), reads: (.readAlignments | map(.[0].contigB.id) | unique | sort) })')"
     local TRUE_PILE_UPS="$(jq -c 'map({ contigs, reads: (.reads | map(.readId) | sort | unique) })' < "$WORKDIR/pile_ups.json")"
     local TEST_RESULT="$(jq '
         def correctReadsRatio: (.correctReads | length) / (.computedReads | length);
@@ -652,31 +652,36 @@ function test_pile_ups_contain_enough_valid_read()
 
         .truePileUps as $truePileUps |
         .computedPileUps as $computedPileUps |
-        $computedPileUps |
+        $truePileUps |
         map(
-            .reads as $computedReads |
-            .type as $type |
-            .contigs as $contigs |
-            $truePileUps |
-            map(
-                .reads as $trueReads |
-                select(
-                    ($type == "front" and .contigs[1] == $contigs[0]) or
-                    ($type == "gap" and .contigs == $contigs) or
-                    ($type == "back" and .contigs[0] == $contigs[0])
-                ) |
-                ($computedReads - ($computedReads - $trueReads)) as $correctReads |
+            .reads as $trueReads |
+            .contigs as $trueContigs |
+            reduce $computedPileUps[] as $computedPileUp (
                 {
-                    contigs: $contigs,
-                    type: $type,
-                    correctReads: $correctReads,
-                    computedReads: $computedReads,
-                    trueReads: $trueReads,
-                }
+                    unusedReads: .reads,
+                    computedReads: [],
+                };
+                if (
+                    ($computedPileUp.type == "front" and $trueContigs[1] == $computedPileUp.contigs[0]) or
+                    ($computedPileUp.type == "gap" and $trueContigs == $computedPileUp.contigs) or
+                    ($computedPileUp.type == "back" and $trueContigs[0] == $computedPileUp.contigs[0])
+                )
+                then
+                    {
+                        unusedReads: (.unusedReads - $computedPileUp.reads),
+                        computedReads: (.computedReads + $computedPileUp.reads),
+                    }
+                else
+                    .
+                end
             ) |
-            select(length > 0)
+            {
+                contigs: $trueContigs,
+                correctReads: (.computedReads - (.computedReads - $trueReads)),
+                computedReads: .computedReads,
+                trueReads: $trueReads,
+            }
         ) |
-        flatten |
         map(buildOutput)
     ' <<<"{\"truePileUps\":$TRUE_PILE_UPS,\"computedPileUps\":$COMPUTED_PILE_UPS}")"
 
