@@ -1659,6 +1659,7 @@ PileUp[] buildPileUps(in size_t numReferenceContigs, AlignmentChain[] candidates
         .edges
         .filter!"a.payload.length > 0"
         .map!"a.payload"
+        .filter!(pileUp => pileUp.isValid)
         .array;
     // dfmt on
 

@@ -486,146 +486,39 @@ function align_classified_reads_against_reference_mod()
 # Test Cases
 #-----------------------------------------------------------------------------
 
-function test_short_extension_skipped()
+function test_small_pile_ups_skipped()
 {
+    local MIN_READS_PER_PILE_UP="$(json_log 'minReadsPerPileUp' | \
+        jq --raw-output 'select(has("minReadsPerPileUp")) | .minReadsPerPileUp')"
+
     expect_json \
-        '. | has("extensionLength") and .step == "findHits" and .readState == "raw"' \
-        '. | map(
-            .effectedContig | inside([1]) and
-            .extensionLength < 100
-        ) | all' \
-        '. | map({effectedContig, extensionLength, extensionType})' \
-        'extensionLength'
+        '. | has("pileUps")' \
+        '.[0].pileUps | map(.readAlignments | length >= '"$MIN_READS_PER_PILE_UP"') | all' \
+        '.[0].pileUps | map(select(.readAlignments | length < '"$MIN_READS_PER_PILE_UP"'))' \
+        'pileUps'
 }
 
-FRONT_EXTENSION_8_LENGTH=2953
-
-function test_front_extension_found()
+function test_insertions_found()
 {
     expect_json \
-        '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
-        '.[0].gapInfo | map(select(.type == "front")) | map(.contigIds) == [
-            [1],
-            [8]
+        '. | has("pileUps")' \
+        '.[0].pileUps | map({ type: .type, contigIds: (.readAlignments | map(.[0].contigA.id) | unique | sort) }) == [
+            { type: "front", contigIds: [1] },
+            { type: "gap",   contigIds: [1, 2] },
+            { type: "gap",   contigIds: [2, 3] },
+            { type: "gap",   contigIds: [3, 4] },
+            { type: "gap",   contigIds: [4, 5] },
+            { type: "gap",   contigIds: [5, 6] },
+            { type: "gap",   contigIds: [6, 7] },
+            { type: "back",  contigIds: [7] },
+            { type: "front", contigIds: [8] },
+            { type: "gap",   contigIds: [8, 9] },
+            { type: "gap",   contigIds: [9, 10] },
+            { type: "gap",   contigIds: [10, 11] }
         ]' \
-        '.[0].gapInfo | map(select(.type == "front") | .contigIds)' \
-        'gapInfo'
+        '.[0].pileUps | map({ type: .type, contigIds: (.readAlignments | map(.[0].contigA.id) | unique | sort) })' \
+        'pileUps'
 }
-
-function test_front_extensions_filled()
-{
-    local INSINFO=(
-        '{beginContig: 8, endContig: 8, extensionLength: '"$FRONT_EXTENSION_8_LENGTH"'}'
-    )
-
-    expect_json \
-        '.type == "front" and .step == "insertHits" and has("insertionInfo")' \
-        '
-            map({
-                beginContig: .insertionInfo.begin.contigId,
-                endContig: .insertionInfo.end.contigId,
-                extensionLength: (.insertionInfo.length - .insertionInfo.end.idx),
-            }) |
-            zip(['"$(join ',' "${INSINFO[@]}")"']) |
-            map(
-                .[0] as $got |
-                .[1] as $exp |
-                $got == $exp
-            ) |
-            all
-        ' \
-        '{ insertionInfos: map({ beginContig: .insertionInfo.begin.contigId, endContig: .insertionInfo.end.contigId, extensionLength: (.insertionInfo.length - .insertionInfo.end.idx)}) }' \
-        'insertionInfo'
-}
-
-function test_back_extension_found()
-{
-    expect_json \
-        '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
-        '.[0].gapInfo | map(select(.type == "back")) | map(.contigIds) == [
-            [7]
-        ]' \
-        '.[0].gapInfo | map(select(.type == "back") | .contigIds)' \
-        'gapInfo'
-}
-
-function test_back_extensions_filled()
-{
-    local INSINFO=(
-        '{beginContig: 7, endContig: 7, extensionLength: 11842}'
-    )
-
-    expect_json \
-        '.type == "back" and .step == "insertHits" and has("insertionInfo")' \
-        '
-            map({
-                beginContig: .insertionInfo.begin.contigId,
-                endContig: .insertionInfo.end.contigId,
-                extensionLength: .insertionInfo.length,
-            }) |
-            zip(['"$(join ',' "${INSINFO[@]}")"']) |
-            map(
-                .[0] as $got |
-                .[1] as $exp |
-                $got == $exp
-            ) |
-            all
-        ' \
-        '{ insertionInfos: map({ beginContig: .insertionInfo.begin.contigId, endContig: .insertionInfo.end.contigId, extensionLength: .insertionInfo.length}) }' \
-        'insertionInfo'
-}
-
-function test_gaps_found()
-{
-    expect_json \
-        '. | has("gapInfo") and .step == "findHits" and .readState == "raw"' \
-        '.[0].gapInfo | map(select(.type == "gap") | .contigIds) == [
-            [ 1,  2],
-            [ 2,  3],
-            [ 3,  4],
-            [ 4,  5],
-            [ 5,  6],
-            [ 6,  7],
-            [ 8,  9],
-            [ 9, 10],
-            [10, 11]
-        ]' \
-        '.[0].gapInfo | map(select(.type == "gap") | .contigIds)' \
-        'gapInfo'
-}
-
-function test_gaps_filled()
-{
-    local INSINFO=(
-        '{beginContig: 1, endContig: 2, gapEnd:  12401}'  #   8300 + 4100 =  12400
-        '{beginContig: 2, endContig: 3, gapEnd:  16800}'  #   8350 + 8450 =  16800
-        '{beginContig: 3, endContig: 4, gapEnd: 130701}'  # 125700 + 5000 = 130700
-        '{beginContig: 4, endContig: 5, gapEnd:  15006}'  #  10000 + 5000 =  15000
-        '{beginContig: 5, endContig: 6, gapEnd:  28750}'  #  25750 + 3000 =  28750
-        '{beginContig: 6, endContig: 7, gapEnd:  15250}'  #  12750 + 2500 =  15250
-        '{beginContig: 8, endContig: 9, gapEnd:  24900}'  #  21400 + 3500 =  24900
-    )
-
-    expect_json \
-        '.type == "gap" and .step == "insertHits" and has("readId")' \
-        '
-            map({
-                beginContig: .insertionInfo.begin.contigId,
-                endContig: .insertionInfo.end.contigId,
-                gapEnd: (.insertionInfo.begin.idx + .insertionInfo.length - .insertionInfo.end.idx),
-            }) |
-            zip(['"$(join ',' "${INSINFO[@]}")"']) |
-            map(
-                .[0] as $got |
-                .[1] as $exp |
-                $got | gapFilled($exp)
-            ) |
-            all
-        ' \
-        '{ insertionInfos: map({beginContig: .insertionInfo.begin.contigId, endContig: .insertionInfo.end.contigId, gapEnd: (.insertionInfo.begin.idx + .insertionInfo.length - .insertionInfo.end.idx)}) }' \
-        'insertionInfo'
-}
-
 
 function test_pile_ups_contain_enough_valid_read()
 {
@@ -716,15 +609,6 @@ function test_result_contigs_properly_align_to_reference()
     do
         result_contig_properly_aligns_to_reference "$I" || return 1
     done
-}
-
-function test_number_of_iterations()
-{
-    expect_json \
-        '. | has("iteration")' \
-        '. | max_by(.iteration).iteration == 0' \
-        'map(.iteration)' \
-        'iteration'
 }
 
 

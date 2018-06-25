@@ -8,7 +8,7 @@
 */
 module djunctor.djunctor;
 
-import djunctor.alignments : AlignmentChain, alignmentCoverage, buildPileUps, getAlignmentChainRefs,
+import djunctor.alignments : AlignmentChain, alignmentCoverage, buildPileUpsFromReadAlignments = buildPileUps, getAlignmentChainRefs,
     getType, haveEqualIds, isExtension, isGap, isValid, makeJoin, PileUp, ReadAlignment, ReadAlignmentType, safeGapTypes;
 import djunctor.commandline : Options;
 import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
@@ -513,8 +513,6 @@ class DJunctor
         AlignmentChain.maxScore .
     */
     static immutable maxAbsoluteDiff = AlignmentChain.maxScore / 100; // 1% wrt. score
-    alias numEstimateUseless = (numCatUnsure, iteration) => (numCatUnsure - numCatUnsure / 20) / (
-            iteration + 1);
     /// Do not insert extensions that are improbable short after consensus.
     static immutable minExtensionLength = 100;
     // FIXME bring `minExtensionLength` into effect
@@ -525,19 +523,14 @@ class DJunctor
     ReferenceMask repetitiveRegions;
     AlignmentChain[] readsAlignment;
     const Options options;
-    /// Set of read ids not to be considered in further processing.
-    size_t[] catUseless;
-    /// Set of alignments to be considered in further processing.
+    /// Set of "good" alignments to be considered in further processing.
     AlignmentChain[] catCandidates;
-    /// Set of alignments to be used for gap filling.
+    /// A scaffold graph accumulating all planned insertions.
     ResultScaffold catHits;
-    size_t iteration;
 
     this(in ref Options options)
     {
         this.options = options;
-        this.catUseless = [];
-        this.iteration = 0;
     }
 
     void run()
@@ -545,8 +538,27 @@ class DJunctor
         logJsonDiagnostic("state", "enter", "function", "run");
         // dfmt off
         init();
-        mainLoop();
-        finish();
+        assessRepeatStructure();
+        filterAlignments();
+
+        PileUp[] pileUps = buildPileUps();
+        foreach (ref pileUp; pileUps)
+        {
+            processPileUp(pileUp);
+        }
+
+        // dfmt off
+        logJsonDebug("catHits", [
+            "nodes": catHits.nodes.toJson,
+            "joins": catHits.edges.map!(join => [
+                "start": join.start.toJson,
+                "end": join.end.toJson,
+                "payload": join.payload.toJson,
+            ]).array.toJson,
+        ]);
+        // dfmt on
+
+        writeNewAssembly();
         // dfmt on
         logJsonDiagnostic("state", "exit", "function", "run");
     }
@@ -590,32 +602,6 @@ class DJunctor
         catCandidates = readsAlignment.dup;
         catHits = initScaffold!InsertionInfo(numReferenceContigs);
         logJsonDiagnostic("state", "exit", "function", "djunctor.init");
-    }
-
-    protected void mainLoop()
-    {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.mainLoop");
-        do
-        {
-            assessRepeatStructure();
-            filterAlignments();
-            findHits();
-
-            // dfmt off
-            logJsonDiagnostic(
-                "iteration", iteration,
-                "uselessReads", catUseless.toJson,
-                "numCandiates", catCandidates.length,
-                "numHits", catHits.edges.walkLength - numReferenceContigs,
-            );
-            // dfmt on
-
-            writeNewAssembly();
-
-            ++iteration;
-        }
-        while (catHits.edges.walkLength - numReferenceContigs > 0 && iteration < maxLoops);
-        logJsonDiagnostic("state", "exit", "function", "djunctor.mainLoop");
     }
 
     protected void assessRepeatStructure()
@@ -778,17 +764,16 @@ class DJunctor
                 refValueLarge - refValueLarge * 2 * maxRelativeDiff / AlignmentChain.maxScore));
     }
 
-    protected void findHits()
+    protected PileUp[] buildPileUps()
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.findHits");
+        logJsonDiagnostic("state", "enter", "function", "djunctor.buildPileUps");
 
         // dfmt off
-        auto pileUps = buildPileUps(numReferenceContigs, catCandidates)
+        auto pileUps = buildPileUpsFromReadAlignments(numReferenceContigs, catCandidates)
             .filter!(pileUp => pileUp.length >= options.minReadsPerPileUp)
             .array;
         // dfmt on
 
-        logFillingInfo!("findHits", "raw")(pileUps);
         // dfmt off
         logJsonDebug("pileUps", pileUps
             .map!(pileUp => Json([
@@ -799,74 +784,25 @@ class DJunctor
             .toJson);
         // dfmt on
 
-        foreach (pileUp; pileUps)
+        logJsonDiagnostic("state", "exit", "function", "djunctor.buildPileUps");
+
+        return pileUps;
+    }
+
+    protected void processPileUp(ref PileUp pileUp)
+    {
+        auto croppingResult = cropPileUp(pileUp, repetitiveRegions, options);
+        auto referenceReadIdx = bestReadAlignmentIndex(pileUp, Yes.preferSpanning, options);
+        auto referenceRead = pileUp[referenceReadIdx];
+        auto consensusDb = buildConsensus(croppingResult.db, referenceReadIdx + 1);
+
+        if (pileUp.isExtension && shouldSkipShortExtension(croppingResult, consensusDb, referenceRead))
         {
-            assert(pileUp.isValid, "ambiguous pile up");
-
-            auto croppingResult = cropPileUp(pileUp, repetitiveRegions, options);
-            auto referenceReadIdx = bestReadAlignmentIndex(pileUp, Yes.preferSpanning, options);
-            auto referenceRead = pileUp[referenceReadIdx];
-            auto consensusDb = buildConsensus(croppingResult.db, referenceReadIdx + 1);
-
-            if (pileUp.isExtension)
-            {
-                assert(croppingResult.referencePositions.length == 1);
-
-                auto consensusSequence = getFastaRecord(consensusDb, 1, options);
-                auto refPos = croppingResult.referencePositions[0].value;
-                auto refLength = referenceRead[0].contigA.length;
-                ulong extensionLength = referenceRead.isFrontExtension
-                    ? consensusSequence.length.to!ulong - refPos.to!ulong
-                    : consensusSequence.length.to!ulong - (refLength - refPos).to!ulong;
-
-                if (extensionLength < minExtensionLength)
-                {
-                    continue; // skip short extensions
-                }
-            }
-
-            auto insertion = makeJoin!Insertion(referenceRead);
-            // dfmt off
-            insertion.payload = InsertionInfo(
-                consensusDb,
-                zip(croppingResult.referencePositions, referenceRead[].map!"a.complement")
-                    .map!(spliceSite => cast(SpliceSite) spliceSite)
-                    .array,
-            );
-            // dfmt on
-            catHits.add(insertion);
-            logJsonDebug("insertion", insertion.toJson);
-
-            foreach (refPos; croppingResult.referencePositions)
-            {
-                auto contigEdge = getDefaultJoin!InsertionInfo(refPos.contigId);
-                // dfmt off
-                contigEdge.payload = InsertionInfo(
-                    options.refDb,
-                    [SpliceSite(refPos, AlignmentChain.Complement.no)],
-                );
-                // dfmt on
-                auto insertedEdge = catHits.add!concatenateSpliceSites(contigEdge);
-                // dfmt off
-                logJsonDebug(
-                    "info", "contigEdgeUpdate",
-                    "insertion", insertedEdge.toJson,
-                );
-                // dfmt on
-            }
+            return;
         }
 
-        // dfmt off
-        logJsonDebug("catHits", [
-            "nodes": catHits.nodes.toJson,
-            "joins": catHits.edges.map!(join => [
-                "start": join.start.toJson,
-                "end": join.end.toJson,
-                "payload": join.payload.toJson,
-            ]).array.toJson,
-        ]);
-        // dfmt on
-        logJsonDiagnostic("state", "exit", "function", "djunctor.findHits");
+        addInsertionToScaffold(referenceRead, consensusDb, croppingResult.referencePositions);
+        addFlankingContigSlicesToScaffold(croppingResult.referencePositions);
     }
 
     protected size_t bestReadAlignmentIndex(in PileUp pileUp, Flag!"preferSpanning" preferSpanning, in Options options) pure
@@ -876,6 +812,55 @@ class DJunctor
         return pileUp
             .map!((readAlignment) => insertionScore(readAlignment, pileUpType, preferSpanning))
             .maxIndex;
+    }
+
+    bool shouldSkipShortExtension(T)(T croppingResult, in string consensusDb, in ReadAlignment referenceRead) {
+        assert(croppingResult.referencePositions.length == 1);
+
+        auto consensusSequence = getFastaRecord(consensusDb, 1, options);
+        auto refPos = croppingResult.referencePositions[0].value;
+        auto refLength = referenceRead[0].contigA.length;
+        ulong extensionLength = referenceRead.isFrontExtension
+            ? consensusSequence.length.to!ulong - refPos.to!ulong
+            : consensusSequence.length.to!ulong - (refLength - refPos).to!ulong;
+
+        return extensionLength < minExtensionLength;
+    }
+
+    void addInsertionToScaffold(ref ReadAlignment referenceRead, in string consensusDb, ref ReferencePoint[] referencePositions)
+    {
+        auto insertion = makeJoin!Insertion(referenceRead);
+        // dfmt off
+        insertion.payload = InsertionInfo(
+            consensusDb,
+            zip(referencePositions, referenceRead[].map!"a.complement")
+                .map!(spliceSite => cast(SpliceSite) spliceSite)
+                .array,
+        );
+        // dfmt on
+        catHits.add(insertion);
+        logJsonDebug("insertion", insertion.toJson);
+    }
+
+    void addFlankingContigSlicesToScaffold(ref ReferencePoint[] referencePositions)
+    {
+        foreach (ref referencePosition; referencePositions)
+        {
+            auto contigEdge = getDefaultJoin!InsertionInfo(referencePosition.contigId);
+            // dfmt off
+            contigEdge.payload = InsertionInfo(
+                options.refDb,
+                [SpliceSite(referencePosition, AlignmentChain.Complement.no)],
+            );
+            // dfmt on
+            auto insertedEdge = catHits.add!concatenateSpliceSites(contigEdge);
+            // dfmt off
+            logJsonDebug(
+                "info", "contigEdgeUpdate",
+                "insertion", insertedEdge.toJson,
+            );
+            // dfmt on
+        }
     }
 
     protected size_t insertionScore(in ReadAlignment readAlignment, in ReadAlignmentType pileUpType, in Flag!"preferSpanning" preferSpanning = No.preferSpanning) pure
@@ -1109,47 +1094,6 @@ class DJunctor
 
         return (currentOutputColumn + sequence.length) % options.fastaLineWidth;
         // END wrapped output
-    }
-
-    protected void finish()
-    {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.finish");
-
-        logJsonDiagnostic("state", "exit", "function", "djunctor.finish");
-    }
-
-    private void logFillingInfo(string step, string readState)(in PileUp[] pileUpsByGap)
-    {
-        static auto getGapInfo(in PileUp pileUp)
-        {
-            bool isGap = pileUp.isGap;
-            auto type = isGap ? ReadAlignmentType.gap : pileUp[0].type;
-
-            alias lengthFilter = p => isGap ? p.length == 2 : p.length == 1;
-
-            // dfmt off
-            return Json([
-                "type": Json(type.to!string),
-                "contigIds": pileUp
-                    .filter!lengthFilter
-                    .map!(readAlignment => readAlignment[]
-                        .map!"a.contigA.id"
-                        .array)
-                    .front
-                    .toJson,
-                "numReads": Json(pileUp.length),
-            ]);
-            // dfmt on
-        }
-
-        // dfmt off
-        logJsonDiagnostic(
-            "step", step,
-            "readState", readState,
-            "numGaps", pileUpsByGap.length,
-            "gapInfo", pileUpsByGap.map!getGapInfo.array,
-        );
-        // dfmt on
     }
 }
 
