@@ -513,9 +513,6 @@ class DJunctor
         AlignmentChain.maxScore .
     */
     static immutable maxAbsoluteDiff = AlignmentChain.maxScore / 100; // 1% wrt. score
-    /// Do not insert extensions that are improbable short after consensus.
-    static immutable minExtensionLength = 100;
-    // FIXME bring `minExtensionLength` into effect
 
     size_t numReferenceContigs;
     size_t numReads;
@@ -824,7 +821,7 @@ class DJunctor
             ? consensusSequence.length.to!ulong - refPos.to!ulong
             : consensusSequence.length.to!ulong - (refLength - refPos).to!ulong;
 
-        return extensionLength < minExtensionLength;
+        return extensionLength < options.minExtensionLength;
     }
 
     void addInsertionToScaffold(ref ReadAlignment referenceRead, in string consensusDb, ref ReferencePoint[] referencePositions)

@@ -135,6 +135,10 @@ struct Options
     @Help("alignment anchors with at least this length will get no penalty")
     size_t minReadsPerPileUp = 5;
 
+    @Option("min-extension-length")
+    @Help("extensions must have at least <ulong> bps of consensus to be inserted")
+    size_t minExtensionLength = 100;
+
     @Option("repeat-mask")
     @Help("if given write inferred repeat mask into a Dazzler mask with this name")
     string repeatMask = null;
