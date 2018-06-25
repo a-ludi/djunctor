@@ -540,21 +540,18 @@ class DJunctor
         this.iteration = 0;
     }
 
-    DJunctor run()
+    void run()
     {
         logJsonDiagnostic("state", "enter", "function", "run");
         // dfmt off
-        this
-            .init
-            .mainLoop
-            .finish;
+        init();
+        mainLoop();
+        finish();
         // dfmt on
         logJsonDiagnostic("state", "exit", "function", "run");
-
-        return this;
     }
 
-    protected DJunctor init()
+    protected void init()
     {
         static struct SelfAlignmentOptions
         {
@@ -593,11 +590,9 @@ class DJunctor
         catCandidates = readsAlignment.dup;
         catHits = initScaffold!InsertionInfo(numReferenceContigs);
         logJsonDiagnostic("state", "exit", "function", "djunctor.init");
-
-        return this;
     }
 
-    protected DJunctor mainLoop()
+    protected void mainLoop()
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.mainLoop");
         do
@@ -621,11 +616,9 @@ class DJunctor
         }
         while (catHits.edges.walkLength - numReferenceContigs > 0 && iteration < maxLoops);
         logJsonDiagnostic("state", "exit", "function", "djunctor.mainLoop");
-
-        return this;
     }
 
-    protected DJunctor assessRepeatStructure()
+    protected void assessRepeatStructure()
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.assessRepeatStructure");
 
@@ -702,11 +695,9 @@ class DJunctor
         }
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.assessRepeatStructure");
-
-        return this;
     }
 
-    protected DJunctor filterAlignments()
+    protected void filterAlignments()
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.filterReads");
 
@@ -753,8 +744,6 @@ class DJunctor
         this.catCandidates = filterPipelineOutput;
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.filterReads");
-
-        return this;
     }
 
     protected static bool similarScore(size_t a, size_t b) pure
@@ -789,7 +778,7 @@ class DJunctor
                 refValueLarge - refValueLarge * 2 * maxRelativeDiff / AlignmentChain.maxScore));
     }
 
-    protected DJunctor findHits()
+    protected void findHits()
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.findHits");
 
@@ -878,8 +867,6 @@ class DJunctor
         ]);
         // dfmt on
         logJsonDiagnostic("state", "exit", "function", "djunctor.findHits");
-
-        return this;
     }
 
     protected size_t bestReadAlignmentIndex(in PileUp pileUp, Flag!"preferSpanning" preferSpanning, in Options options) pure
@@ -970,7 +957,7 @@ class DJunctor
         return consensusDb;
     }
 
-    protected DJunctor writeNewAssembly()
+    protected void writeNewAssembly()
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.writeNewAssembly");
 
@@ -980,8 +967,6 @@ class DJunctor
         }
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.writeNewAssembly");
-
-        return this;
     }
 
     protected void writeNewContig(ContigNode startNode)
@@ -1126,13 +1111,11 @@ class DJunctor
         // END wrapped output
     }
 
-    protected DJunctor finish()
+    protected void finish()
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.finish");
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.finish");
-
-        return this;
     }
 
     private void logFillingInfo(string step, string readState)(in PileUp[] pileUpsByGap)
