@@ -30,7 +30,7 @@ import std.algorithm : all, any, cache, canFind, chunkBy, each, equal, filter,
 import std.array : appender, Appender, array, join, minimallyInitializedArray;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
-import std.exception : assertNotThrown, assertThrown;
+import std.exception : assertNotThrown, assertThrown, ErrnoException;
 import std.format : format, formattedWrite;
 import std.math : abs, floor, sgn;
 import std.range : assumeSorted, chain, chunks, drop, ElementType, enumerate,
@@ -524,6 +524,8 @@ class DJunctor
     AlignmentChain[] catCandidates;
     /// A scaffold graph accumulating all planned insertions.
     ResultScaffold catHits;
+    /// Keep track of unused reads.
+    NaturalNumberSet unusedReads;
 
     this(in ref Options options)
     {
@@ -556,6 +558,7 @@ class DJunctor
         // dfmt on
 
         writeNewAssembly();
+        writeUnusedReadsList();
         // dfmt on
         logJsonDiagnostic("state", "exit", "function", "run");
     }
@@ -598,6 +601,12 @@ class DJunctor
         // dfmt on
         catCandidates = readsAlignment.dup;
         catHits = initScaffold!InsertionInfo(numReferenceContigs);
+
+        unusedReads.reserveFor(numReads);
+        foreach (readId; iota(1, numReads + 1))
+        {
+            unusedReads.add(readId);
+        }
         logJsonDiagnostic("state", "exit", "function", "djunctor.init");
     }
 
@@ -688,8 +697,8 @@ class DJunctor
         auto filters = tuple(
             new WeaklyAnchoredAlignmentChainsFilter(repetitiveRegions, options.minAnchorLength),
             new ImproperAlignmentChainsFilter(),
-            new AmbiguousAlignmentChainsFilter(),
-            new RedundantAlignmentChainsFilter(),
+            new AmbiguousAlignmentChainsFilter(&unusedReads),
+            new RedundantAlignmentChainsFilter(&unusedReads),
         );
         // dfmt on
         AlignmentChain[] filterInput = catCandidates[];
@@ -761,6 +770,14 @@ class DJunctor
                 refValueLarge - refValueLarge * 2 * maxRelativeDiff / AlignmentChain.maxScore));
     }
 
+    protected void addCandidatesToUnusedReads()
+    {
+        foreach (alignmentChain; catCandidates)
+        {
+            unusedReads.add(alignmentChain.contigB.id);
+        }
+    }
+
     protected PileUp[] buildPileUps()
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.buildPileUps");
@@ -800,6 +817,7 @@ class DJunctor
 
         addInsertionToScaffold(referenceRead, consensusDb, croppingResult.referencePositions);
         addFlankingContigSlicesToScaffold(croppingResult.referencePositions);
+        markReadsAsUsed(pileUp);
     }
 
     protected size_t bestReadAlignmentIndex(in PileUp pileUp, Flag!"preferSpanning" preferSpanning, in Options options) pure
@@ -811,7 +829,7 @@ class DJunctor
             .maxIndex;
     }
 
-    bool shouldSkipShortExtension(T)(T croppingResult, in string consensusDb, in ReadAlignment referenceRead) {
+    protected bool shouldSkipShortExtension(T)(T croppingResult, in string consensusDb, in ReadAlignment referenceRead) {
         assert(croppingResult.referencePositions.length == 1);
 
         auto consensusSequence = getFastaRecord(consensusDb, 1, options);
@@ -824,7 +842,7 @@ class DJunctor
         return extensionLength < options.minExtensionLength;
     }
 
-    void addInsertionToScaffold(ref ReadAlignment referenceRead, in string consensusDb, ref ReferencePoint[] referencePositions)
+    protected void addInsertionToScaffold(ref ReadAlignment referenceRead, in string consensusDb, ref ReferencePoint[] referencePositions)
     {
         auto insertion = makeJoin!Insertion(referenceRead);
         // dfmt off
@@ -839,7 +857,7 @@ class DJunctor
         logJsonDebug("insertion", insertion.toJson);
     }
 
-    void addFlankingContigSlicesToScaffold(ref ReferencePoint[] referencePositions)
+    protected void addFlankingContigSlicesToScaffold(ref ReferencePoint[] referencePositions)
     {
         foreach (ref referencePosition; referencePositions)
         {
@@ -857,6 +875,17 @@ class DJunctor
                 "insertion", insertedEdge.toJson,
             );
             // dfmt on
+        }
+    }
+
+    protected void markReadsAsUsed(ref in PileUp pileUp)
+    {
+        foreach (readAlignment; pileUp)
+        {
+            foreach (alignmentChain; readAlignment)
+            {
+                unusedReads.remove(alignmentChain.contigB.id);
+            }
         }
     }
 
@@ -1092,6 +1121,35 @@ class DJunctor
         return (currentOutputColumn + sequence.length) % options.fastaLineWidth;
         // END wrapped output
     }
+
+    protected void writeUnusedReadsList()
+    {
+        auto unusedReads = this.unusedReads.elements;
+        logJsonDebug("unusedReads", unusedReads.array.toJson);
+
+        if (options.unusedReadsList is null)
+        {
+            return;
+        }
+
+        try
+        {
+            auto unusedReadsList = File(options.unusedReadsList, "w");
+
+            unusedReadsList.write(unusedReads.array.toJson);
+        }
+        catch (ErrnoException e)
+        {
+            // dfmt off
+            logJsonError(
+                "info", "cannot write unused reads list",
+                "error", e.to!string,
+                "file", options.unusedReadsList,
+                "unusedReads", unusedReads.toJson,
+            );
+            // dfmt on
+        }
+    }
 }
 
 interface AlignmentChainFilter
@@ -1101,6 +1159,13 @@ interface AlignmentChainFilter
 
 abstract class ReadFilter : AlignmentChainFilter
 {
+    NaturalNumberSet* unusedReads;
+
+    this(NaturalNumberSet* unusedReads)
+    {
+        this.unusedReads = unusedReads;
+    }
+
     override AlignmentChain[] opCall(AlignmentChain[] alignmentChains)
     {
         // dfmt off
@@ -1112,8 +1177,17 @@ abstract class ReadFilter : AlignmentChainFilter
             .array
             .assumeSorted;
         // dfmt on
+        markReadsAsUsed(discardedReadIds);
 
         return alignmentChains.filter!(ac => !discardedReadIds.contains(ac.contigB.id)).array;
+    }
+
+    private void markReadsAsUsed(ReadIds)(ref ReadIds discardedReadIds)
+    {
+        foreach (discardedReadId; discardedReadIds)
+        {
+            unusedReads.remove(discardedReadId);
+        }
     }
 
     InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains);
@@ -1133,6 +1207,11 @@ class ImproperAlignmentChainsFilter : AlignmentChainFilter
 /// a single contig.
 class RedundantAlignmentChainsFilter : ReadFilter
 {
+    this(NaturalNumberSet* unusedReads)
+    {
+        super(unusedReads);
+    }
+
     override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
     {
         assert(alignmentChains.map!"a.isProper".all);
@@ -1145,6 +1224,11 @@ class RedundantAlignmentChainsFilter : ReadFilter
 /// locations of one contig with approximately equal quality.
 class AmbiguousAlignmentChainsFilter : ReadFilter
 {
+    this(NaturalNumberSet* unusedReads)
+    {
+        super(unusedReads);
+    }
+
     override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
     {
         alias AlignmentsChunk = typeof(alignmentChains.chunkBy!haveEqualIds.front);

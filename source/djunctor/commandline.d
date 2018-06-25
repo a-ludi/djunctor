@@ -143,6 +143,10 @@ struct Options
     @Help("if given write inferred repeat mask into a Dazzler mask with this name")
     string repeatMask = null;
 
+    @Option("unused-reads")
+    @Help("if given write unused read IDs to the designated file as JSON array")
+    string unusedReadsList = null;
+
     @Option("daligner-options")
     @Help("list of options to pass to `daligner`")
     string[] dalignerOptions = [];
@@ -337,6 +341,19 @@ private
         import std.exception : ErrnoException;
         import std.format : format;
         import std.stdio : File;
+
+        if (options.unusedReadsList !is null)
+        {
+            try
+            {
+                auto unusedReadsList = File(options.unusedReadsList, "a");
+            }
+            catch (ErrnoException e)
+            {
+                throw new Exception(format!"cannot write coord transform file `%s`: %s"(
+                        options.unusedReadsList, e));
+            }
+        }
     }
 
     void createWorkDir(ref Options options)
