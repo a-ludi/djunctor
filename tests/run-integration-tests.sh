@@ -56,6 +56,7 @@ SHOW_COVERAGE=false
 SHOW_UNCOVERED_LINES=false
 UNCOVERED_LINES_CONTEXT=2
 VERBOSE=false
+FORCE=false
 
 function init_script()
 {
@@ -76,7 +77,7 @@ function init_script()
 
 function parse_opts()
 {
-    while getopts "chDgkuv" OPTION "${ARGV[@]}"; do
+    while getopts "chDfgkuv" OPTION "${ARGV[@]}"; do
         case "$OPTION" in
             c)
                 BUILD_OPTS[${#BUILD_OPTS[*]}]='--build=cov'
@@ -84,6 +85,9 @@ function parse_opts()
                 ;;
             D)
                 RUN_DJUNCTOR=false
+                ;;
+            f)
+                FORCE=true
                 ;;
             g)
                 RUN_GDB=true
@@ -122,6 +126,7 @@ function usage()
     echo " -D        Do not run djunctor; instead just run tests against the results ($RESULTS_ARCHIVE)."
     echo " -g        Open interactive gdb session and exit afterwards. Prints the "'`run`'" command"
     echo "           to be used in gdb"
+    echo " -f        Force recreation of generated files"
     echo " -h        Prints this help."
     echo " -k        Keep temporary files; this is forwarded to djunctor."
     echo " -u[=NUM]  If -c is given report uncovered lines in coverage summary. If given print NUM"
@@ -456,6 +461,10 @@ function align_classified_reads_against_reference_mod()
     local CLASS="$1"
     local READS_PATH="$WORKDIR/$CLASS"
 
+    if [[ -f "$READS_PATH.dam" ]] && $FORCE; then
+        DBrm "$READS_PATH.dam"
+    fi
+
     if [[ ! -f "$READS_PATH.dam" ]];
     then
         local READ_IDS=($(jq '. | map(.'"$CLASS"') | flatten | unique | sort | .[]'))
@@ -471,7 +480,7 @@ function align_classified_reads_against_reference_mod()
             fasta2DAM -i "$READS_PATH.dam" && \
             "${DAMAPPER_CMD[@]}"
         popd > /dev/null
-        fi
+    fi
 }
 
 #-----------------------------------------------------------------------------
