@@ -380,6 +380,11 @@ private
         import std.file : exists;
         import std.format : format;
 
+        if (maskDestination is null)
+        {
+            return;
+        }
+
         foreach (maskFile; getMaskFiles(refFile, maskDestination))
         {
             enforce!Exception(maskFile.exists, format!"cannot open file `%s`"(maskFile));
