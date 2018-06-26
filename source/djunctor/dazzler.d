@@ -101,6 +101,23 @@ string provideDamFileInWorkdir(in string dbFile, ProvideMethod provideMethod, in
     return inWorkdir(dbFile);
 }
 
+/// Build a new .dam file by using the given subset of reads in inDbFile.
+string dbSubset(Options, R)(in string inDbFile, R readIds, in Options options)
+        if (hasOption!(Options, "workdir", isSomeString) && hasOption!(Options, "dbsplitOptions", isOptionsList))
+{
+    immutable outDbNameTemplate = "subset-XXXXXX";
+
+    auto outDbTemplate = buildPath(options.workdir, outDbNameTemplate);
+    auto outDb = mkstemp(outDbTemplate, damFileExtension);
+
+    outDb.file.close();
+    remove(outDb.name);
+    buildSubsetDb(inDbFile, outDb.name, readIds, options.workdir);
+    dbsplit(outDb.name, options.dbsplitOptions, options.workdir);
+
+    return outDb.name;
+}
+
 AlignmentChain[] getLocalAlignments(Options)(in string dbA, in Options options)
         if (hasOption!(Options, "dalignerOptions", isOptionsList) && hasOption!(Options,
             "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
@@ -1549,6 +1566,28 @@ private
             daccordOpts,
             only(lasFile.relativeToWorkdir(workdir)),
             only(dbFile.relativeToWorkdir(workdir)),
+        ), workdir);
+        // dfmt on
+    }
+
+    void buildSubsetDb(R)(in string inDbFile, in string outDbFile, R readIds, in string workdir)
+    {
+        alias esc = escapeShellCommand;
+        // dfmt off
+        auto escapedReadIds = readIds
+            .map!(to!size_t)
+            .map!(to!string)
+            .map!esc;
+        // dfmt on
+
+        // dfmt off
+        executeShell(chain(
+            only("DBshow"),
+            only(esc(inDbFile.relativeToWorkdir(workdir))),
+            escapedReadIds,
+            only("|"),
+            only("fasta2DAM", "-i"),
+            only(esc(outDbFile.relativeToWorkdir(workdir))),
         ), workdir);
         // dfmt on
     }
