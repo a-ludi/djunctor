@@ -1433,8 +1433,18 @@ size_t getNumContigs(Options)(in string damFile, in Options options)
     return numContigs;
 }
 
-void writeMask(Region, Options)(in string dbFile, in string maskName,
-        in Region[] regions, in Options options)
+auto getMaskFiles(in string dbFile, in string maskDestination)
+{
+    auto destinationDir = maskDestination.dirName;
+    auto maskName = maskDestination.baseName;
+    auto dbName = dbFile.baseName.stripExtension;
+    auto maskHeader = format!"%s/.%s.%s.anno"(destinationDir, dbName, maskName);
+    auto maskData = format!"%s/.%s.%s.data"(destinationDir, dbName, maskName);
+
+    return tuple!("header", "data")(maskHeader, maskData);
+}
+
+void writeMask(Region, Options)(in string dbFile, in string maskDestination, in Region[] regions, in Options options)
         if (hasOption!(Options, "workdir", isSomeString))
 {
     // dfmt off
@@ -1451,16 +1461,16 @@ void writeMask(Region, Options)(in string dbFile, in string maskName,
         logJsonDiagnostic(
             "notice", "skipping empty mask",
             "dbFile", dbFile,
-            "maskName", maskName,
+            "maskDestination", maskDestination,
         );
         // dfmt on
 
         return;
     }
 
-    auto dbName = dbFile.baseName.stripExtension;
-    auto maskHeader = File(format!"%s/.%s.%s.anno"(options.workdir, dbName, maskName), "wb");
-    auto maskData = File(format!"%s/.%s.%s.data"(options.workdir, dbName, maskName), "wb");
+    auto maskFileNames = getMaskFiles(dbFile, maskDestination);
+    auto maskHeader = File(maskFileNames.header, "wb");
+    auto maskData = File(maskFileNames.data, "wb");
 
     // dfmt off
     auto maskRegions = regions
