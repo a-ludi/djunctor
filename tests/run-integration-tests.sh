@@ -80,7 +80,7 @@ function parse_opts()
     while getopts "chDfgkuv" OPTION "${ARGV[@]}"; do
         case "$OPTION" in
             c)
-                BUILD_OPTS[${#BUILD_OPTS[*]}]='--build=cov'
+                BUILD_OPTS+=('--build=cov')
                 SHOW_COVERAGE=true
                 ;;
             D)
@@ -98,7 +98,7 @@ function parse_opts()
                 ;;
             k)
                 KEEP_TEMP=true
-                DJUNCTOR_OPTS[${#DJUNCTOR_OPTS[*]}]='-k'
+                DJUNCTOR_OPTS+=('-k')
                 ;;
             u)
                 SHOW_UNCOVERED_LINES=true
@@ -263,7 +263,7 @@ function do_tests()
             echo -n "."
         else
             echo -n "f"
-            FAILURES[${#FAILURES[*]}]="$test_case: $(cat "$TEST_CASE_LOG")"
+            FAILURES+=("$test_case: $(cat "$TEST_CASE_LOG")")
         fi
     done
 
