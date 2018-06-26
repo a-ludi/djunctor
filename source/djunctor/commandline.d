@@ -345,7 +345,7 @@ private
         import std.algorithm : endsWith, joiner, map;
         import std.array : array;
         import std.exception : enforce;
-        import std.file : exists;
+        import std.file : exists, readText;
         import std.format : format;
         import std.range : tee;
         import std.typecons : Yes;
@@ -357,15 +357,7 @@ private
         }
 
         enforce!Exception(readsListFile.exists, format!"cannot open file `%s`"(readsListFile));
-
-        // dfmt off
-        string inputLines = File(readsListFile, "r")
-            .byLine(Yes.keepTerminator)
-            .joiner
-            .array
-            .to!string;
-        // dfmt on
-        auto inputData = inputLines.parseJsonString(readsListFile);
+        auto inputData = readText(readsListFile).parseJsonString(readsListFile);
         // dfmt off
         return inputData[]
             .map!"a.get!long"
