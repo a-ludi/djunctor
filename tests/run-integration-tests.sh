@@ -13,13 +13,13 @@ TEST_DATA_ARCHIVE="integration-tests.tar.xz"
 TEST_DATA_READS="reads"
 TEST_DATA_REF="reference"
 TEST_DATA_MODREF="reference_mod"
+TEST_DATA_OUT_MASK="djunctor_repeat"
 GDB_INIT_SCRIPT="gdbinit"
 DJUNCTOR_OPTS=(
     -v
     -v
     -v
     --input-provide-method symlink
-    --repeat-mask djunctor_repeat
     --reads-error 0.05
     --reference-error 0.01
 )
@@ -196,10 +196,15 @@ function set_test_data_paths()
     TEST_DATA_READS="$WORKDIR/$TEST_DATA_READS"
     TEST_DATA_REF="$WORKDIR/$TEST_DATA_REF"
     TEST_DATA_MODREF="$WORKDIR/$TEST_DATA_MODREF"
+    TEST_DATA_OUT_MASK="$WORKDIR/$TEST_DATA_OUT_MASK"
 }
 
 function run_djunctor()
 {
+    DJUNCTOR_OPTS+=("--out-mask" "$TEST_DATA_OUT_MASK")
+    DJUNCTOR_OPTS+=("$TEST_DATA_MODREF.dam")
+    DJUNCTOR_OPTS+=("$TEST_DATA_READS.dam")
+
     if $RUN_GDB;
     then
         build_gdb_init_script > "$WORKDIR/$GDB_INIT_SCRIPT"
@@ -208,8 +213,6 @@ function run_djunctor()
         exit
     else
         ./djunctor "${DJUNCTOR_OPTS[@]}" \
-                        "$TEST_DATA_MODREF.dam" \
-                        "$TEST_DATA_READS.dam" \
                         2> "$OUTPUT_LOG" \
                         1> "$RESULT_FILE"
         local DJUNTOR_STATUS="$?"
@@ -227,7 +230,7 @@ function run_djunctor()
 function build_gdb_init_script()
 {
     echo 'define djunctor'
-    echo run "${DJUNCTOR_OPTS[@]}" "$TEST_DATA_MODREF.dam" "$TEST_DATA_READS.dam"
+    echo run "${DJUNCTOR_OPTS[@]}"
     echo 'end'
     echo
     echo 'echo ------------------------------------\n'

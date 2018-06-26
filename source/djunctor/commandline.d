@@ -144,9 +144,12 @@ struct Options
     @Help("extensions must have at least <ulong> bps of consensus to be inserted")
     size_t minExtensionLength = 100;
 
-    @Option("repeat-mask")
-    @Help("if given write inferred repeat mask into a Dazzler mask with this name")
-    string repeatMask = null;
+    @Option("out-mask")
+    @Help("write inferred repeat mask into a Dazzler mask. Given a path-like " ~
+            "string without extension: the `dirname` designates the directory to " ~
+            "write the mask to. The mask comprises two hidden files " ~
+            "`.[REFERENCE].[MASK].{anno,data}`.")
+    string outMask = null;
 
     @Option("unused-reads")
     @Help("if given write unused read IDs to the designated file as JSON array")
@@ -374,20 +377,15 @@ private
 
     void verifyOutputFiles(ref Options options)
     {
-        import std.exception : ErrnoException;
-        import std.format : format;
-        import std.stdio : File;
+        import djunctor.dazzler : getMaskFiles;
 
-        if (options.unusedReadsList !is null)
+        enforceCanWriteIfPresent(options.unusedReadsList);
+
+        if (options.outMask !is null)
         {
-            try
+            foreach (maskFile; getMaskFiles(options.refDb, options.outMask))
             {
-                auto unusedReadsList = File(options.unusedReadsList, "a");
-            }
-            catch (ErrnoException e)
-            {
-                throw new Exception(format!"cannot write coord transform file `%s`: %s"(
-                        options.unusedReadsList, e));
+                enforceCanWriteIfPresent(maskFile);
             }
         }
     }
@@ -428,6 +426,50 @@ private
         else
         {
             return dbSubset(options.readsFile, options.readsList[], options);
+        }
+    }
+
+    void enforceCanWriteIfPresent(string fileName)
+    {
+        if (fileName is null)
+        {
+            return;
+        }
+
+        import std.exception : ErrnoException;
+        import std.file : exists, FileException, remove;
+        import std.format : format;
+        import std.stdio : File;
+        import vibe.data.json : toJson = serializeToJson;
+
+        auto deleteAfterwards = !fileName.exists;
+
+        try
+        {
+            auto unusedReadsList = File(fileName, "a");
+        }
+        catch (ErrnoException e)
+        {
+            throw new Exception(format!"cannot open file `%s` for writing: %s"(
+                    fileName, e));
+        }
+
+        if (deleteAfterwards)
+        {
+            try
+            {
+                remove(fileName);
+            }
+            catch (FileException e)
+            {
+                // dfmt off
+                logJsonDebug(
+                    "info", "failed to delete file after testing",
+                    "error", e.toString(),
+                    "file", fileName,
+                );
+                // dfmt on
+            }
         }
     }
 }

@@ -669,9 +669,9 @@ class DJunctor
             );
             // dfmt on
 
-            if (shouldLog(LogLevel.diagnostic) && options.repeatMask != null)
+            if (shouldLog(LogLevel.diagnostic) && options.outMask != null)
             {
-                auto maskName = format!"%s-%s"(options.repeatMask, stage.name);
+                auto maskName = format!"%s-%s"(options.outMask, stage.name);
 
                 writeMask(options.refDb, maskName, repetitiveRegions.intervals, options);
             }
@@ -686,10 +686,9 @@ class DJunctor
         );
         // dfmt on
 
-        if (options.repeatMask != null)
+        if (options.outMask != null)
         {
-            writeMask(options.refDb, options.repeatMask,
-                    this.repetitiveRegions.intervals, options);
+            writeMask(options.refDb, options.outMask, this.repetitiveRegions.intervals, options);
         }
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.assessRepeatStructure");
