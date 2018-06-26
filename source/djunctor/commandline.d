@@ -89,8 +89,7 @@ Options processOptions(string[] args)
     verifyOptions(options);
     createWorkDir(options);
     options.refDb = provideDamFileInWorkdir(options.refFile, options.provideMethod, options.workdir);
-    options.readsDb = provideDamFileInWorkdir(options.readsFile,
-            options.provideMethod, options.workdir);
+    options.readsDb = getReadsDb(options);
 
     return options;
 }
@@ -114,6 +113,12 @@ struct Options
     @Help("set of PacBio reads in .dam format")
     string readsFile;
     string readsDb;
+
+    @Option("reads")
+    @Help("restrict the set of reads to this list of IDs given in a file as produced by --unused-reads")
+    string readsListFile = null;
+    @Option()
+    size_t[] readsList;
 
     @Option("reads-error")
     @Help("estimated error rate in reads")
@@ -308,32 +313,63 @@ private
 
     void verifyInputFiles(ref Options options)
     {
+        verifyDamFiles([options.refFile, options.readsFile]);
+        options.readsList = verifyReadsListFile(options.readsListFile);
+    }
+
+    void verifyDamFiles(in string[] damFiles)
+    {
+        import djunctor.dazzler : getHiddenDbFiles;
         import std.algorithm : endsWith;
+        import std.exception : enforce;
         import std.file : exists;
         import std.format : format;
-        import djunctor.dazzler : getHiddenDbFiles;
 
-        foreach (inputFile; [options.refFile, options.readsFile])
+        foreach (inputFile; damFiles)
         {
-            if (!inputFile.endsWith(".dam"))
-            {
-                throw new Exception(format!"expected .dam file, got `%s`"(inputFile));
-            }
-
-            if (!inputFile.exists)
-            {
-                throw new Exception(format!"cannot open file `%s`"(inputFile));
-            }
+            enforce!Exception(inputFile.endsWith(".dam"), format!"expected .dam file, got `%s`"(inputFile));
+            enforce!Exception(inputFile.exists, format!"cannot open file `%s`"(inputFile));
 
             foreach (hiddenDbFile; getHiddenDbFiles(inputFile))
             {
-                if (!hiddenDbFile.exists)
-                {
-                    throw new Exception(
-                            format!"cannot open hidden database file `%s`"(hiddenDbFile));
-                }
+                enforce!Exception(hiddenDbFile.exists, format!"cannot open hidden database file `%s`"(hiddenDbFile));
             }
         }
+    }
+
+    size_t[] verifyReadsListFile(ref string readsListFile)
+    {
+        import std.algorithm : endsWith, joiner, map;
+        import std.array : array;
+        import std.exception : enforce;
+        import std.file : exists;
+        import std.format : format;
+        import std.range : tee;
+        import std.typecons : Yes;
+        import vibe.data.json : parseJsonString;
+
+        if (readsListFile is null)
+        {
+            return [];
+        }
+
+        enforce!Exception(readsListFile.exists, format!"cannot open file `%s`"(readsListFile));
+
+        // dfmt off
+        string inputLines = File(readsListFile, "r")
+            .byLine(Yes.keepTerminator)
+            .joiner
+            .array
+            .to!string;
+        // dfmt on
+        auto inputData = inputLines.parseJsonString(readsListFile);
+        // dfmt off
+        return inputData[]
+            .map!"a.get!long"
+            .tee!(n => enforce!Exception(n >= 1, format!"unexpected ID %d must be >= 1"(n)))
+            .array
+            .to!(size_t[]);
+        // dfmt on
     }
 
     void verifyOutputFiles(ref Options options)
@@ -378,6 +414,20 @@ private
         catch (Exception e)
         {
             logWarn(to!string(e));
+        }
+    }
+
+    string getReadsDb(in Options options)
+    {
+        import djunctor.dazzler : dbSubset;
+
+        if (options.readsList.length == 0)
+        {
+            return provideDamFileInWorkdir(options.readsFile, options.provideMethod, options.workdir);
+        }
+        else
+        {
+            return dbSubset(options.readsFile, options.readsList[], options);
         }
     }
 }
