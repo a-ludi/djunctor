@@ -151,6 +151,10 @@ struct Options
             "`.[REFERENCE].[MASK].{anno,data}`.")
     string outMask = null;
 
+    @Option("in-mask")
+    @Help("use Dazzler mask to initialize the repeat mask (see also `--out-mask`)")
+    string inMask = null;
+
     @Option("unused-reads")
     @Help("if given write unused read IDs to the designated file as JSON array")
     string unusedReadsList = null;
@@ -318,6 +322,7 @@ private
     {
         verifyDamFiles([options.refFile, options.readsFile]);
         options.readsList = verifyReadsListFile(options.readsListFile);
+        verifyInMask(options.refFile, options.inMask);
     }
 
     void verifyDamFiles(in string[] damFiles)
@@ -367,6 +372,20 @@ private
         // dfmt on
     }
 
+    void verifyInMask(in string refFile, in string maskDestination)
+    {
+        import djunctor.dazzler : getMaskFiles;
+        import std.algorithm : endsWith;
+        import std.exception : enforce;
+        import std.file : exists;
+        import std.format : format;
+
+        foreach (maskFile; getMaskFiles(refFile, maskDestination))
+        {
+            enforce!Exception(maskFile.exists, format!"cannot open file `%s`"(maskFile));
+        }
+    }
+
     void verifyOutputFiles(ref Options options)
     {
         import djunctor.dazzler : getMaskFiles;
@@ -375,7 +394,7 @@ private
 
         if (options.outMask !is null)
         {
-            foreach (maskFile; getMaskFiles(options.refDb, options.outMask))
+            foreach (maskFile; getMaskFiles(options.refFile, options.outMask))
             {
                 enforceCanWriteIfPresent(maskFile);
             }

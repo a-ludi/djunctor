@@ -13,7 +13,7 @@ import djunctor.alignments : AlignmentChain, alignmentCoverage, buildPileUpsFrom
 import djunctor.commandline : Options;
 import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
     getLocalAlignments, getMappings, getNumContigs, getTracePointDistance,
-    attachTracePoints, writeMask;
+    attachTracePoints, readMask, writeMask;
 import djunctor.util.fasta : parseFasta, parseFastaRecord, parsePacBioHeader,
     reverseComplement;
 import djunctor.util.log;
@@ -582,6 +582,12 @@ class DJunctor
         logJsonDiagnostic("state", "enter", "function", "djunctor.init");
         numReferenceContigs = getNumContigs(options.refDb, options);
         numReads = getNumContigs(options.readsDb, options);
+
+        if (options.inMask !is null)
+        {
+            this.repetitiveRegions = ReferenceMask(readMask!ReferenceInterval(options.refDb, options.inMask, options));
+        }
+
         // dfmt off
         selfAlignment = getLocalAlignments(options.refDb, const(SelfAlignmentOptions)(
             options.dalignerOptions ~ [
