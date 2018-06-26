@@ -98,7 +98,7 @@ template chunks(size_t chunkSize)
         return tuple(tuple(args[0 .. chunkSize]), chunks(args[chunkSize .. $]).expand);
     }
 
-    auto chunks(T...)(T args) pure nothrow @safe 
+    auto chunks(T...)(T args) pure nothrow @safe
             if (0 < args.length && args.length < chunkSize)
     {
         return tuple(tuple(args[0 .. $]));
@@ -256,4 +256,38 @@ unittest
     assert(eqSquared(1, 1));
     assert(eqSquared(1, -1));
     assert(!eqSquared(1, 2));
+}
+
+/// Take exactly `n` element from range. Throws an exception if range has not
+/// enough  elements.
+///
+/// Throws: Exception if range has less than `n` elements.
+ElementType!R[n] takeExactly(size_t n, R)(R range) if (isInputRange!R)
+{
+    import std.exception : enforce;
+
+    ElementType!R[n] result;
+    size_t i = 0;
+
+    while(!range.empty && i < n)
+    {
+        result[i++] = range.front;
+        range.popFront();
+    }
+
+    enforce!Exception(i == n, "not enough elements");
+
+    return result;
+}
+
+///
+unittest
+{
+    import std.exception : assertThrown;
+    import std.range : iota;
+
+    static assert(is(typeof(iota(10).takeExactly!5) == int[5]));
+    assert(iota(10).takeExactly!5 == [0, 1, 2, 3, 4]);
+
+    assertThrown!Exception(iota(2).takeExactly!5);
 }
