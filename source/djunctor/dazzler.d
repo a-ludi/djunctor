@@ -12,12 +12,13 @@ import djunctor.commandline : hasOption, isOptionsList;
 import djunctor.alignments : AlignmentChain;
 import djunctor.util.fasta : parseFastaRecord;
 import djunctor.util.log;
-import djunctor.util.range : arrayChunks;
+import djunctor.util.range : arrayChunks, takeExactly;
 import djunctor.util.tempfile : mkstemp;
 import std.algorithm : canFind, endsWith, equal, filter, isSorted, joiner, map,
     min, sort, splitter, startsWith, SwapStrategy, uniq;
-import std.array : appender, Appender, array;
+import std.array : appender, Appender, array, uninitializedArray;
 import std.conv : to;
+import std.exception : enforce;
 import std.file : remove;
 import std.format : format, formattedRead;
 import std.meta : Instantiate;
@@ -25,7 +26,7 @@ import std.path : absolutePath, baseName, buildPath, dirName, relativePath,
     stripExtension, withExtension;
 import std.process : Config, escapeShellCommand, kill, pipeProcess,
     ProcessPipes, Redirect, wait;
-import std.range : chain, drop, only, take;
+import std.range : chain, chunks, drop, only, take, slide;
 import std.range.primitives : ElementType, empty, isForwardRange, isInputRange;
 import std.stdio : File, writeln;
 import std.string : lineSplitter, outdent;
@@ -1433,6 +1434,9 @@ size_t getNumContigs(Options)(in string damFile, in Options options)
     return numContigs;
 }
 
+/**
+    Get the hidden files comprising the designated mask.
+*/
 auto getMaskFiles(in string dbFile, in string maskDestination)
 {
     auto destinationDir = maskDestination.dirName;
@@ -1444,14 +1448,116 @@ auto getMaskFiles(in string dbFile, in string maskDestination)
     return tuple!("header", "data")(maskHeader, maskData);
 }
 
+/// Thrown on failure while reading a Dazzler mask.
+///
+/// See_Also: `readMask`
+class MaskReaderException : Exception
+{
+    pure nothrow @nogc @safe this(string msg, string file = __FILE__,
+            size_t line = __LINE__, Throwable nextInChain = null)
+    {
+        super(msg, file, line, nextInChain);
+    }
+}
+
+private
+{
+    alias MaskHeaderEntry = int;
+    alias MaskDataPointer = long;
+    alias MaskDataEntry = int;
+}
+
+/**
+    Read the `Region`s of a Dazzler mask for `dbFile`.
+
+    Throws: MaskReaderException
+    See_Also: `writeMask`, `getMaskFiles`
+*/
+Region[] readMask(Region, Options)(in string dbFile, in string maskDestination, in Options options)
+        if (hasOption!(Options, "workdir", isSomeString))
+{
+    alias _enforce = enforce!MaskReaderException;
+
+    auto maskFileNames = getMaskFiles(dbFile, maskDestination);
+    auto maskHeader = readMaskHeader(maskFileNames.header);
+    auto maskData = getBinaryFile!MaskDataEntry(maskFileNames.data);
+
+    auto maskRegions = appender!(Region[]);
+    alias RegionContigId = typeof(maskRegions.data[0].contigId);
+    alias RegionBegin = typeof(maskRegions.data[0].begin);
+    alias RegionEnd = typeof(maskRegions.data[0].end);
+    auto numReads = getNumContigs(dbFile, options).to!int;
+
+    size_t currentContig = 1;
+
+    _enforce(maskHeader.numReads == numReads, "mask does not match DB");
+    _enforce(maskHeader.size == 0, "corrupted mask: expected 0");
+    _enforce(maskHeader.dataPointers.length == numReads + 1, "corrupted mask: unexpected number of data pointers");
+
+    foreach (dataPtrRange; maskHeader.dataPointers[].slide!(No.withPartial)(2))
+    {
+        auto dataPtrs = dataPtrRange.map!(ptr => ptr / MaskDataEntry.sizeof).takeExactly!2;
+        _enforce(0 <= dataPtrs[0] && dataPtrs[0] <= dataPtrs[1] && dataPtrs[1] <= maskData.length, "corrupted mask: data pointer out of bounds");
+        _enforce(dataPtrs[0] % 2 == 0 && dataPtrs[1] % 2 == 0, "corrupted mask: non-sense data pointers");
+
+        foreach (interval; maskData[dataPtrs[0] .. dataPtrs[1]].chunks(2))
+        {
+            enforce!MaskReaderException(interval.length == 2 && 0 <= interval[0] && interval[0] <= interval[1], "corrupted mask: invalid interval");
+
+            Region newRegion;
+            newRegion.contigId = currentContig.to!RegionContigId;
+            newRegion.begin = interval[0].to!RegionBegin;
+            newRegion.end = interval[1].to!RegionEnd;
+
+            maskRegions ~= newRegion;
+        }
+
+        ++currentContig;
+    }
+
+    return maskRegions.data;
+}
+
+private auto readMaskHeader(in string fileName)
+{
+    auto headerFile = File(fileName, "rb");
+    MaskHeaderEntry[2] headerBuffer;
+    auto numPointers = (headerFile.size - headerBuffer.sizeof) / MaskDataPointer.sizeof;
+    auto pointerBuffer = uninitializedArray!(MaskDataPointer[])(numPointers);
+
+    enforce!MaskReaderException(headerFile.rawRead(headerBuffer).length == headerBuffer.length,
+        format!"error while reading mask header `%s`: file too short"(fileName));
+    enforce!MaskReaderException(headerFile.rawRead(pointerBuffer).length == numPointers,
+        format!"error while reading mask header `%s`: file too short"(fileName));
+
+    return tuple!("numReads", "size", "dataPointers")(headerBuffer[0], headerBuffer[1], pointerBuffer);
+}
+
+private T[] getBinaryFile(T)(in string fileName)
+{
+    auto file = File(fileName, "rb");
+    auto bufferLength = file.size / T.sizeof;
+    auto dataBuffer = file.rawRead(uninitializedArray!(T[])(bufferLength));
+
+    enforce!MaskReaderException(dataBuffer.length == bufferLength,
+        format!"error while reading binary file `%s`: expected %d bytes of data but read only %d"(fileName, bufferLength * T.sizeof, dataBuffer.length * T.sizeof));
+
+    return dataBuffer;
+}
+
+/**
+    Write the list of regions to a Dazzler mask for `dbFile`.
+
+    See_Also: `readMask`, `getMaskFiles`
+*/
 void writeMask(Region, Options)(in string dbFile, in string maskDestination, in Region[] regions, in Options options)
         if (hasOption!(Options, "workdir", isSomeString))
 {
     // dfmt off
     alias MaskRegion = Tuple!(
-        int, "contigId",
-        int, "begin",
-        int, "end",
+        MaskHeaderEntry, "contigId",
+        MaskDataEntry, "begin",
+        MaskDataEntry, "end",
     );
     // dfmt on
 
@@ -1475,18 +1581,18 @@ void writeMask(Region, Options)(in string dbFile, in string maskDestination, in 
     // dfmt off
     auto maskRegions = regions
         .map!(region => MaskRegion(
-            region.contigId.to!int,
-            region.begin.to!int,
-            region.end.to!int,
+            region.contigId.to!MaskHeaderEntry,
+            region.begin.to!MaskDataEntry,
+            region.end.to!MaskDataEntry,
         ))
         .array;
     // dfmt on
     maskRegions.sort();
 
-    auto numReads = getNumContigs(dbFile, options).to!int;
-    int size = 0; // this seems to be zero always (see DAMASKER/TANmask.c:422)
-    size_t currentContig = 1;
-    long dataPointer = 0;
+    auto numReads = getNumContigs(dbFile, options).to!MaskHeaderEntry;
+    MaskHeaderEntry size = 0; // this seems to be zero always (see DAMASKER/TANmask.c:422)
+    MaskHeaderEntry currentContig = 1;
+    MaskDataPointer dataPointer = 0;
 
     maskHeader.rawWrite([numReads, size]);
     maskHeader.rawWrite([dataPointer]);
