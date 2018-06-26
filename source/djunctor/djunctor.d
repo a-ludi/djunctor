@@ -600,7 +600,13 @@ class DJunctor
         ));
         // dfmt on
         catCandidates = readsAlignment.dup;
-        catHits = initScaffold!InsertionInfo(numReferenceContigs);
+
+        // dfmt off
+        catHits = initScaffold!(
+            (contigId) => InsertionInfo(options.refDb, []),
+            InsertionInfo
+        )(numReferenceContigs);
+        // dfmt on
 
         unusedReads.reserveFor(numReads);
         foreach (readId; iota(1, numReads + 1))

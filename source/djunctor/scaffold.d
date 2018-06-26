@@ -213,8 +213,11 @@ Scaffold!T buildScaffold(alias handleConflict, T)(in size_t numReferenceContigs,
     return scaffold;
 }
 
-/// Creates a scaffold with all the default edges.
-Scaffold!T initScaffold(T)(in size_t numReferenceContigs)
+/// Creates a scaffold with all the default edges. Optionally specify a
+/// function that produces the payloads.
+///
+/// See_Also: `getDefaultJoin`
+Scaffold!T initScaffold(alias getPayload, T)(in size_t numReferenceContigs)
 {
     // dfmt off
     auto contigIds = iota(1, numReferenceContigs + 1);
@@ -232,18 +235,47 @@ Scaffold!T initScaffold(T)(in size_t numReferenceContigs)
 
     foreach (contigId; contigIds)
     {
-        initialScaffold ~= getDefaultJoin!T(contigId);
+        static if (__traits(compiles, getPayload is null) && (getPayload is null))
+        {
+            initialScaffold ~= getDefaultJoin!T(contigId);
+        }
+        else
+        {
+            initialScaffold ~= getDefaultJoin!(getPayload, T)(contigId);
+        }
     }
 
     return initialScaffold;
 }
 
+/// ditto
+Scaffold!T initScaffold(T)(in size_t numReferenceContigs)
+{
+    return initScaffold!(null, T)(numReferenceContigs);
+}
+
+/**
+    Get the default join for contigId. Initialize payload with
+    `getPayload(contigId)` if given.
+*/
 Join!T getDefaultJoin(T)(size_t contigId) pure nothrow
 {
     // dfmt off
     return Join!T(
         ContigNode(contigId, ContigPart.begin),
         ContigNode(contigId, ContigPart.end),
+    );
+    // dfmt on
+}
+
+/// ditto
+Join!T getDefaultJoin(alias getPayload, T)(size_t contigId) pure nothrow
+{
+    // dfmt off
+    return Join!T(
+        ContigNode(contigId, ContigPart.begin),
+        ContigNode(contigId, ContigPart.end),
+        getPayload(contigId),
     );
     // dfmt on
 }
