@@ -92,8 +92,10 @@ struct AlignmentChain
                 size_t traceLength = la.tracePoints.map!"a.numBasePairs".sum;
                 size_t traceDiffs = la.tracePoints.map!"a.numDiffs".sum;
 
-                // TODO remove logging and "soft" assertion if fixed in LAdump
-                if (la.numDiffs != traceDiffs)// dfmt off
+                // TODO remove logging if fixed in LAdump (issue #23)
+                if (la.numDiffs != traceDiffs)
+                {
+                    // dfmt off
                     debug logJsonDebug(
                         "contigA", contigA.id,
                         "contigB", contigB.id,
@@ -101,7 +103,9 @@ struct AlignmentChain
                         "traceDiffs", traceDiffs,
                     );
                     // dfmt on
-                assert(absdiff(la.numDiffs, traceDiffs) <= 1, "missing trace points");
+                }
+                // TODO make equality assertion if fixed in LAdump (issue #23)
+                assert(la.numDiffs <= traceDiffs, "missing trace points");
                 assert(la.contigB.end - la.contigB.begin == traceLength,
                         "trace distance does not match alignment");
             }
