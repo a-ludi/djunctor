@@ -708,35 +708,51 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
         auto intersectionAcc = appender!(TaggedInterval[]);
         intersectionAcc.reserve(this._intervals.length + other._intervals.length);
 
-        foreach (lhsInterval; this._intervals)
+        size_t lhsIdx = 0;
+        size_t lhsLength = this._intervals.length;
+        TaggedInterval lhsInterval;
+        size_t rhsIdx = 0;
+        size_t rhsLength = other._intervals.length;
+        TaggedInterval rhsInterval;
+
+        while(lhsIdx < lhsLength && rhsIdx < rhsLength)
         {
-            // dfmt off
-            auto intersectingRhs = other._intervals
-                .assumeSorted!"a.isStrictlyBefore(b)"
-                .equalRange(lhsInterval);
-            // dfmt on
+            lhsInterval = this._intervals[lhsIdx];
+            rhsInterval = other._intervals[rhsIdx];
 
-            if (intersectingRhs.empty)
+            if (lhsInterval.isStrictlyBefore(rhsInterval))
             {
-                continue;
+                ++lhsIdx;
             }
-
-            TaggedInterval tmpIntersection = lhsInterval;
-
-            foreach (rhsInterval; intersectingRhs)
+            else if (rhsInterval.isStrictlyBefore(lhsInterval))
             {
-                tmpIntersection &= rhsInterval;
+                ++rhsIdx;
+            }
+            else
+            {
+                assert(lhsInterval.intersects(rhsInterval));
 
-                if (tmpIntersection.empty)
+                intersectionAcc ~= lhsInterval & rhsInterval;
+
+                if (lhsIdx + 1 < lhsLength && rhsIdx + 1 < rhsLength)
                 {
-                    // Intersection is empty; stop trying rhsIntervals.
-                    break;
+                    if (this._intervals[lhsIdx + 1].begin < other._intervals[rhsIdx + 1].begin)
+                    {
+                        ++lhsIdx;
+                    }
+                    else
+                    {
+                        ++rhsIdx;
+                    }
                 }
-            }
-
-            if (!tmpIntersection.empty)
-            {
-                intersectionAcc ~= tmpIntersection;
+                else if (lhsIdx + 1 < lhsLength)
+                {
+                    ++lhsIdx;
+                }
+                else
+                {
+                    ++rhsIdx;
+                }
             }
         }
 
@@ -756,6 +772,26 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
         assert((R(0, 10, 20) & R(0, 15, 25)) == R(0, 15, 20));
         assert((R(0, 10, 20) & R(0, 25, 30)) == R([]));
         assert((R(0, 10, 20) & R(1, 25, 30)) == R([]));
+        // dfmt off
+        // R1:       [-------)   [-------)   [-------)
+        // R2:             [-------)   [-------)   [-------)
+        // R1 & R2:        [-)   [-)   [-)   [-)   [-)
+        assert((R([
+            TI(0, 0, 30),
+            TI(0, 40, 70),
+            TI(0, 80, 110),
+        ]) & R([
+            TI(0, 20, 50),
+            TI(0, 60, 90),
+            TI(0, 100, 130),
+        ])) == R([
+            TI(0, 20, 30),
+            TI(0, 40, 50),
+            TI(0, 60, 70),
+            TI(0, 80, 90),
+            TI(0, 100, 110),
+        ]));
+        // dfmt on
     }
 
     Region opBinary(string op)(in TaggedInterval interval) const if (op == "-")
