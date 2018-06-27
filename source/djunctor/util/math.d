@@ -14,7 +14,8 @@ import std.array : Appender, array;
 import std.conv : to;
 import std.exception : assertThrown;
 import std.functional : binaryFun;
-import std.range : assumeSorted, chain, ElementType, enumerate, isForwardRange, retro, walkLength;
+import std.range : assumeSorted, chain, ElementType, enumerate, isForwardRange,
+    retro, walkLength;
 import std.traits : isIntegral, isNumeric;
 import std.typecons : Flag, No, Yes;
 
@@ -173,7 +174,7 @@ class MissingNodeException : Exception
 /// payloads. The graph is represented as a list of edges which is
 /// particularly suited for sparse graphs. While the set of nodes is fixed the
 /// set of edges is mutable.
-struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected, EdgePayload=void)
+struct Graph(Node, Weight = void, Flag!"isDirected" isDirected = No.isDirected, EdgePayload = void)
 {
     static immutable isWeighted = !is(Weight == void);
     static immutable hasEdgePayload = !is(EdgePayload == void);
@@ -316,7 +317,8 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected, Ed
         {
             static if (isWeighted)
             {
-                return this.start == other.start && this.end == other.end && this.weight == other.weight;
+                return this.start == other.start && this.end == other.end
+                    && this.weight == other.weight;
             }
             else
             {
@@ -699,7 +701,6 @@ struct Graph(Node, Weight=void, Flag!"isDirected" isDirected = No.isDirected, Ed
         return tristectedNodes[0].length;
     }
 
-
     ///
     unittest
     {
@@ -881,7 +882,6 @@ unittest
     assert(g1.edge(2, 1) in g1);
     assert(g1.has(g1.edge(2, 2)));
 
-
     //   0.5     0.5
     //   +-+     +-+
     //   \ /     \ /
@@ -898,7 +898,6 @@ unittest
     assert(g2.edge(2, 1) in g2);
     assert(g2.has(g2.edge(2, 2)));
 
-
     //   0.5     0.5
     //   +-+     +-+
     //   \ v     v /
@@ -914,7 +913,6 @@ unittest
     assert(g3.edge(1, 2) in g3);
     assert(!(g3.edge(2, 1) in g3));
     assert(g3.has(g3.edge(2, 2)));
-
 
     //   +-+   +-+
     //   \ v   v /

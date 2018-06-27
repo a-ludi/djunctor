@@ -269,7 +269,7 @@ ElementType!R[n] takeExactly(size_t n, R)(R range) if (isInputRange!R)
     ElementType!R[n] result;
     size_t i = 0;
 
-    while(!range.empty && i < n)
+    while (!range.empty && i < n)
     {
         result[i++] = range.front;
         range.popFront();

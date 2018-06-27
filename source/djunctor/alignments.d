@@ -11,10 +11,12 @@ module djunctor.alignments;
 import djunctor.util.algorithm : orderLexicographically;
 import djunctor.util.log;
 import djunctor.util.math : absdiff;
-import djunctor.util.scaffold : buildScaffold, concatenatePayloads, ContigNode, ContigPart, discardAmbiguousJoins, Join, mergeExtensionsWithGaps, removeNoneJoins, Scaffold;
+import djunctor.util.scaffold : buildScaffold, concatenatePayloads, ContigNode,
+    ContigPart, discardAmbiguousJoins, Join, mergeExtensionsWithGaps,
+    removeNoneJoins, Scaffold;
 import core.exception : AssertError;
-import std.algorithm : all, any, canFind, chunkBy, equal, filter, isSorted, joiner, map, max,
-    mean, min, sort, sum, swap, SwapStrategy;
+import std.algorithm : all, any, canFind, chunkBy, equal, filter, isSorted,
+    joiner, map, max, mean, min, sort, sum, swap, SwapStrategy;
 import std.array : appender, Appender, array;
 import std.conv : to;
 import std.exception : assertNotThrown, assertThrown;
@@ -644,7 +646,8 @@ bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
 
     static if (contig == "contigA")
     {
-        return __traits(getMember, ac1.first, contig).begin < __traits(getMember, ac2.first, contig).begin;
+        return __traits(getMember, ac1.first, contig).begin < __traits(getMember,
+                ac2.first, contig).begin;
     }
     else
     {
@@ -769,7 +772,7 @@ unittest
     ];
     // dfmt on
 
-    assert(alignmentCoverage(alignments) == 80.0/100.0);
+    assert(alignmentCoverage(alignments) == 80.0 / 100.0);
 }
 
 /// Type of the read alignment.
@@ -1529,6 +1532,7 @@ unittest
 {
     with (AlignmentChain) with (LocalAlignment) with (Complement)
             {
+                // dfmt off
                 auto frontExtension = ReadAlignment(
                     AlignmentChain(
                         3,
@@ -1607,6 +1611,7 @@ unittest
                         ],
                     ),
                 );
+                // dfmt on
 
                 auto join1 = frontExtension.to!(Join!(ReadAlignment[]));
                 auto join2 = backExtension.to!(Join!(ReadAlignment[]));
@@ -1669,7 +1674,6 @@ PileUp[] buildPileUps(in size_t numReferenceContigs, AlignmentChain[] candidates
 
     return pileUps;
 }
-
 
 unittest
 {
@@ -1972,7 +1976,9 @@ AlignmentChain*[] getAlignmentChainRefs(PileUp pileUp) pure nothrow
 ///
 unittest
 {
-    auto pileUp = [ReadAlignment(AlignmentChain(), AlignmentChain()), ReadAlignment(AlignmentChain())];
+    auto pileUp = [
+        ReadAlignment(AlignmentChain(), AlignmentChain()), ReadAlignment(AlignmentChain())
+    ];
     auto allAlignmentChains = pileUp.getAlignmentChainRefs();
 
     assert(allAlignmentChains.length == 3);

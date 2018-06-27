@@ -715,7 +715,7 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
         size_t rhsLength = other._intervals.length;
         TaggedInterval rhsInterval;
 
-        while(lhsIdx < lhsLength && rhsIdx < rhsLength)
+        while (lhsIdx < lhsLength && rhsIdx < rhsLength)
         {
             lhsInterval = this._intervals[lhsIdx];
             rhsInterval = other._intervals[rhsIdx];
@@ -941,7 +941,8 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
     }
 
     /// Returns true iff point is in this region.
-    bool opBinaryRight(string op)(in TaggedPoint point) const pure nothrow if (op == "in")
+    bool opBinaryRight(string op)(in TaggedPoint point) const pure nothrow
+            if (op == "in")
     {
         if (this.empty)
         {
@@ -1064,8 +1065,7 @@ unittest
     Throws: MismatchingTagsException if `tag`s differ.
     Throws: EmptyRegionException if region is empty.
 */
-auto min(R)(R region)
-    if (is(R : Region!Args, Args...))
+auto min(R)(R region) if (is(R : Region!Args, Args...))
 {
     alias TI = R.TaggedInterval;
 
@@ -1076,8 +1076,7 @@ auto min(R)(R region)
 }
 
 /// ditto
-auto sup(R)(R region)
-    if (is(R : Region!Args, Args...))
+auto sup(R)(R region) if (is(R : Region!Args, Args...))
 {
     alias TI = R.TaggedInterval;
 

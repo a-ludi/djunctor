@@ -10,7 +10,8 @@ module djunctor.util.scaffold;
 
 import djunctor.util.log;
 import djunctor.util.math : Graph, MissingNodeException, NaturalNumberSet;
-import std.algorithm : canFind, countUntil, equal, filter, fold, joiner, map, minElement, sort, sum, swap;
+import std.algorithm : canFind, countUntil, equal, filter, fold, joiner, map,
+    minElement, sort, sum, swap;
 import std.array : Appender, array;
 import std.exception : assertThrown;
 import std.functional : binaryFun;
@@ -19,6 +20,7 @@ import std.typecons : Flag, No, Tuple, tuple, Yes;
 import vibe.data.json : toJson = serializeToJson;
 
 debug import std.conv : to;
+
 debug import std.stdio : writeln;
 
 ///
@@ -43,6 +45,7 @@ unittest
     alias S = Scaffold!int;
     alias CN = ContigNode;
     alias CP = ContigPart;
+    // dfmt off
     auto scaffold = buildScaffold!(sumPayloads!int, int)(5, [
         J(CN(1, CP.end), CN(1, CP.post ), 1), // e1
         J(CN(1, CP.end), CN(1, CP.post ), 1), // e1
@@ -56,6 +59,7 @@ unittest
         J(CN(3, CP.end), CN(3, CP.post ), 1), // e9
         J(CN(4, CP.end), CN(1, CP.begin), 1), // e10
     ]).discardAmbiguousJoins!int;
+    // dfmt on
     //
     //   contig 1      contig 2
     //
@@ -70,18 +74,18 @@ unittest
     //
     //   contig 5       contig 4      contig 3
 
-    assert(J(CN(1, CP.end), CN(1, CP.post ))  in scaffold); // e1
-    assert(J(CN(2, CP.pre), CN(2, CP.begin))  in scaffold); // e2
-    assert(J(CN(1, CP.end), CN(2, CP.begin))  in scaffold); // e3
-    assert(J(CN(2, CP.end), CN(2, CP.post ))  in scaffold); // e4
-    assert(J(CN(2, CP.end), CN(3, CP.end  )) !in scaffold); // e5
-    assert(J(CN(4, CP.end), CN(3, CP.end  )) !in scaffold); // e6
-    assert(J(CN(4, CP.end), CN(4, CP.post ))  in scaffold); // e7
-    assert(J(CN(3, CP.pre), CN(3, CP.begin))  in scaffold); // e8
-    assert(J(CN(3, CP.end), CN(3, CP.post ))  in scaffold); // e9
+    assert(J(CN(1, CP.end), CN(1, CP.post)) in scaffold); // e1
+    assert(J(CN(2, CP.pre), CN(2, CP.begin)) in scaffold); // e2
+    assert(J(CN(1, CP.end), CN(2, CP.begin)) in scaffold); // e3
+    assert(J(CN(2, CP.end), CN(2, CP.post)) in scaffold); // e4
+    assert(J(CN(2, CP.end), CN(3, CP.end)) !in scaffold); // e5
+    assert(J(CN(4, CP.end), CN(3, CP.end)) !in scaffold); // e6
+    assert(J(CN(4, CP.end), CN(4, CP.post)) in scaffold); // e7
+    assert(J(CN(3, CP.pre), CN(3, CP.begin)) in scaffold); // e8
+    assert(J(CN(3, CP.end), CN(3, CP.post)) in scaffold); // e9
     assert(J(CN(4, CP.end), CN(1, CP.begin)) !in scaffold); // e10
 
-    assert(scaffold.get(J(CN(1, CP.end), CN(1, CP.post ))).payload == 2); // e1
+    assert(scaffold.get(J(CN(1, CP.end), CN(1, CP.post))).payload == 2); // e1
 }
 
 /// Each contig has four designated parts where joins can start or end.
@@ -103,11 +107,11 @@ bool isReal(in ContigPart contigPart) pure nothrow
 {
     return contigPart == ContigPart.begin || contigPart == ContigPart.end;
 }
+
 bool isTranscendent(in ContigPart contigPart) pure nothrow
 {
     return contigPart == ContigPart.pre || contigPart == ContigPart.post;
 }
-
 
 /**
     A contig is represented by four `ContigNodes` in the scaffold graph.
@@ -350,7 +354,8 @@ Scaffold!T mergeExtensionsWithGaps(alias mergePayloads, T)(Scaffold!T scaffold)
 
         if (contigNode.contigPart.isReal && scaffold.degree(contigNode) == 3)
         {
-            auto incidentJoins = scaffold.incidentEdges(contigNode).filter!(j => !isDefault(j)).array;
+            auto incidentJoins = scaffold.incidentEdges(contigNode)
+                .filter!(j => !isDefault(j)).array;
             assert(incidentJoins.length == 2);
             // The gap join has real `contigPart`s on both ends.
             int gapJoinIdx = incidentJoins[0].target(contigNode).contigPart.isReal ? 0 : 1;
@@ -388,6 +393,7 @@ unittest
     //
     //   contig 5       contig 4      contig 3
     //
+    // dfmt off
     auto scaffold = buildScaffold!(sumPayloads!int, int)(5, [
         J(CN(1, CP.end), CN(1, CP.post ), 1), // e1
         J(CN(1, CP.end), CN(1, CP.post ), 1), // e1
@@ -398,14 +404,15 @@ unittest
         J(CN(3, CP.pre), CN(3, CP.begin), 1), // e8
         J(CN(3, CP.end), CN(3, CP.post ), 1), // e9
     ]).mergeExtensionsWithGaps!("a + b", int);
+    // dfmt on
 
-    assert(J(CN(1, CP.end), CN(1, CP.post )) !in scaffold); // e1
+    assert(J(CN(1, CP.end), CN(1, CP.post)) !in scaffold); // e1
     assert(J(CN(2, CP.pre), CN(2, CP.begin)) !in scaffold); // e2
-    assert(J(CN(1, CP.end), CN(2, CP.begin))  in scaffold); // e3
-    assert(J(CN(2, CP.end), CN(2, CP.post ))  in scaffold); // e4
-    assert(J(CN(4, CP.end), CN(4, CP.post ))  in scaffold); // e7
-    assert(J(CN(3, CP.pre), CN(3, CP.begin))  in scaffold); // e8
-    assert(J(CN(3, CP.end), CN(3, CP.post ))  in scaffold); // e9
+    assert(J(CN(1, CP.end), CN(2, CP.begin)) in scaffold); // e3
+    assert(J(CN(2, CP.end), CN(2, CP.post)) in scaffold); // e4
+    assert(J(CN(4, CP.end), CN(4, CP.post)) in scaffold); // e7
+    assert(J(CN(3, CP.pre), CN(3, CP.begin)) in scaffold); // e8
+    assert(J(CN(3, CP.end), CN(3, CP.post)) in scaffold); // e9
 
     assert(scaffold.get(J(CN(1, CP.end), CN(2, CP.begin))).payload == 4); // merged 2 * e1 + e2 + e3
 }
@@ -460,6 +467,7 @@ unittest
     //
     //   contig 5       contig 4      contig 3
     //
+    // dfmt off
     auto joins1 = [
         J(CN(1, CP.end), CN(2, CP.begin), 1), // e3
         J(CN(2, CP.end), CN(2, CP.post ), 1), // e4
@@ -467,7 +475,9 @@ unittest
         J(CN(3, CP.pre), CN(3, CP.begin), 1), // e8
         J(CN(3, CP.end), CN(3, CP.post ), 1), // e9
     ];
+    // dfmt on
     auto scaffold1 = buildScaffold!(sumPayloads!Payload, Payload)(5, joins1);
+    // dfmt off
     auto walks1 = [
         [
             getDefaultJoin!Payload(1),
@@ -485,6 +495,7 @@ unittest
             joins1[4],
         ],
     ];
+    // dfmt on
 
     alias getWalkStart = (walk) => walk[0].source(walk[0].getConnectingNode(walk[1]));
 
@@ -509,22 +520,27 @@ unittest
     //     \_________________/
     //              e2
     //
+    // dfmt off
     auto joins2 = [
         J(CN(1, CP.end), CN(2, CP.begin), 1), // e1
         J(CN(2, CP.end), CN(1, CP.begin ), 1), // e2
     ];
+    // dfmt on
     auto scaffold2 = buildScaffold!(sumPayloads!Payload, Payload)(2, joins2);
+    // dfmt off
     auto walk2 = [
         getDefaultJoin!Payload(1),
         joins2[0],
         getDefaultJoin!Payload(2),
         joins2[1],
     ];
+    // dfmt on
 
     {
         auto computedWalk = linearWalk!Payload(scaffold2, getWalkStart(walk2), walk2[0]);
         auto reverseWalk2 = walk2.retro.array;
-        auto computedReverseWalk2 = linearWalk!Payload(scaffold2, getWalkStart(reverseWalk2), reverseWalk2[0]);
+        auto computedReverseWalk2 = linearWalk!Payload(scaffold2,
+                getWalkStart(reverseWalk2), reverseWalk2[0]);
 
         assert(equal(walk2[], refRange(&computedWalk)));
         assert(computedWalk.isCyclic);
@@ -576,9 +592,11 @@ struct LinearWalk(T)
             return endOfWalk();
         }
 
+        // dfmt off
         auto candidateEdges = scaffold
             .incidentEdges(currentNode)
             .filter!(join => !visitedNodes.has(scaffold.indexOf(join.target(currentNode))));
+        // dfmt on
         bool noSuccessorNodes = candidateEdges.empty;
 
         if (noSuccessorNodes)
@@ -617,10 +635,12 @@ struct LinearWalk(T)
     {
         isCyclic = Yes.isCyclic;
         // Find the missing edge.
+        // dfmt off
         currentJoin = scaffold
             .incidentEdges(currentNode)
             .filter!(join => join != currentJoin)
             .front;
+        // dfmt on
     }
 
     private void endOfWalk()

@@ -104,7 +104,8 @@ string provideDamFileInWorkdir(in string dbFile, ProvideMethod provideMethod, in
 
 /// Build a new .dam file by using the given subset of reads in inDbFile.
 string dbSubset(Options, R)(in string inDbFile, R readIds, in Options options)
-        if (hasOption!(Options, "workdir", isSomeString) && hasOption!(Options, "dbsplitOptions", isOptionsList))
+        if (hasOption!(Options, "workdir", isSomeString)
+            && hasOption!(Options, "dbsplitOptions", isOptionsList))
 {
     immutable outDbNameTemplate = "subset-XXXXXX";
 
@@ -135,8 +136,7 @@ AlignmentChain[] getLocalAlignments(Options)(in string dbA, in string dbB, in Op
     return processGeneratedLasFiles(dbA, dbB, options);
 }
 
-AlignmentChain[] getMappings(Options)(in string dbA,
-        in string dbB, in Options options)
+AlignmentChain[] getMappings(Options)(in string dbA, in string dbB, in Options options)
         if (hasOption!(Options, "damapperOptions", isOptionsList) && hasOption!(Options,
             "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
@@ -145,7 +145,8 @@ AlignmentChain[] getMappings(Options)(in string dbA,
     return processGeneratedLasFiles(dbA, dbB, options);
 }
 
-private AlignmentChain[] processGeneratedLasFiles(Options)(in string dbA, in string dbB, in Options options)
+private AlignmentChain[] processGeneratedLasFiles(Options)(in string dbA,
+        in string dbB, in Options options)
         if (hasOption!(Options, "ladumpOptions", isOptionsList)
             && hasOption!(Options, "workdir", isSomeString))
 {
@@ -974,16 +975,16 @@ unittest
 
 enum DBdumpOptions
 {
-      readNumber = "-r",
-      originalHeader = "-h",
-      sequenceString = "-s",
-      sNROfACGTChannels = "-a",
-      intrinsicQualityVector = "-i",
-      quivaValues = "-q",
-      repeatProfileVector = "-p",
-      masks = "-m",
-      untrimmedDatabase = "-u",
-      upperCase = "-U",
+    readNumber = "-r",
+    originalHeader = "-h",
+    sequenceString = "-s",
+    sNROfACGTChannels = "-a",
+    intrinsicQualityVector = "-i",
+    quivaValues = "-q",
+    repeatProfileVector = "-p",
+    masks = "-m",
+    untrimmedDatabase = "-u",
+    upperCase = "-U",
 }
 
 /**
@@ -991,9 +992,8 @@ enum DBdumpOptions
     empty the whole DB will be converted.
 */
 auto getFastaEntries(Options, Range)(in string dbFile, Range recordNumbers, in Options options)
-        if (hasOption!(Options, "fastaLineWidth",
-            isIntegral) && hasOption!(Options, "workdir", isSomeString)
-            && isInputRange!Range && is(ElementType!Range : size_t))
+        if (hasOption!(Options, "fastaLineWidth", isIntegral) && hasOption!(Options,
+            "workdir", isSomeString) && isInputRange!Range && is(ElementType!Range : size_t))
 {
     // dfmt off
     string[] dbdumpOptions = [
@@ -1289,7 +1289,8 @@ string[] getConsensus(Options)(in string dbFile, in Options options)
 }
 
 private void computeErrorProfile(Options)(in string dbFile, in Options options)
-        if (hasOption!(Options, "daccordOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
+        if (hasOption!(Options, "daccordOptions", isOptionsList)
+            && hasOption!(Options, "workdir", isSomeString))
 {
     // dfmt off
     auto eProfOptions = options
@@ -1492,17 +1493,22 @@ Region[] readMask(Region, Options)(in string dbFile, in string maskDestination, 
 
     _enforce(maskHeader.numReads == numReads, "mask does not match DB");
     _enforce(maskHeader.size == 0, "corrupted mask: expected 0");
-    _enforce(maskHeader.dataPointers.length == numReads + 1, "corrupted mask: unexpected number of data pointers");
+    _enforce(maskHeader.dataPointers.length == numReads + 1,
+            "corrupted mask: unexpected number of data pointers");
 
     foreach (dataPtrRange; maskHeader.dataPointers[].slide!(No.withPartial)(2))
     {
-        auto dataPtrs = dataPtrRange.map!(ptr => ptr / MaskDataEntry.sizeof).takeExactly!2;
-        _enforce(0 <= dataPtrs[0] && dataPtrs[0] <= dataPtrs[1] && dataPtrs[1] <= maskData.length, "corrupted mask: data pointer out of bounds");
-        _enforce(dataPtrs[0] % 2 == 0 && dataPtrs[1] % 2 == 0, "corrupted mask: non-sense data pointers");
+        auto dataPtrs = dataPtrRange.map!(ptr => ptr / MaskDataEntry.sizeof)
+            .takeExactly!2;
+        _enforce(0 <= dataPtrs[0] && dataPtrs[0] <= dataPtrs[1]
+                && dataPtrs[1] <= maskData.length, "corrupted mask: data pointer out of bounds");
+        _enforce(dataPtrs[0] % 2 == 0 && dataPtrs[1] % 2 == 0,
+                "corrupted mask: non-sense data pointers");
 
         foreach (interval; maskData[dataPtrs[0] .. dataPtrs[1]].chunks(2))
         {
-            enforce!MaskReaderException(interval.length == 2 && 0 <= interval[0] && interval[0] <= interval[1], "corrupted mask: invalid interval");
+            enforce!MaskReaderException(interval.length == 2 && 0 <= interval[0]
+                    && interval[0] <= interval[1], "corrupted mask: invalid interval");
 
             Region newRegion;
             newRegion.contigId = currentContig.to!RegionContigId;
@@ -1526,11 +1532,12 @@ private auto readMaskHeader(in string fileName)
     auto pointerBuffer = uninitializedArray!(MaskDataPointer[])(numPointers);
 
     enforce!MaskReaderException(headerFile.rawRead(headerBuffer).length == headerBuffer.length,
-        format!"error while reading mask header `%s`: file too short"(fileName));
+            format!"error while reading mask header `%s`: file too short"(fileName));
     enforce!MaskReaderException(headerFile.rawRead(pointerBuffer).length == numPointers,
-        format!"error while reading mask header `%s`: file too short"(fileName));
+            format!"error while reading mask header `%s`: file too short"(fileName));
 
-    return tuple!("numReads", "size", "dataPointers")(headerBuffer[0], headerBuffer[1], pointerBuffer);
+    return tuple!("numReads", "size", "dataPointers")(headerBuffer[0],
+            headerBuffer[1], pointerBuffer);
 }
 
 private T[] getBinaryFile(T)(in string fileName)
@@ -1540,7 +1547,8 @@ private T[] getBinaryFile(T)(in string fileName)
     auto dataBuffer = file.rawRead(uninitializedArray!(T[])(bufferLength));
 
     enforce!MaskReaderException(dataBuffer.length == bufferLength,
-        format!"error while reading binary file `%s`: expected %d bytes of data but read only %d"(fileName, bufferLength * T.sizeof, dataBuffer.length * T.sizeof));
+            format!"error while reading binary file `%s`: expected %d bytes of data but read only %d"(
+                fileName, bufferLength * T.sizeof, dataBuffer.length * T.sizeof));
 
     return dataBuffer;
 }
@@ -1550,7 +1558,8 @@ private T[] getBinaryFile(T)(in string fileName)
 
     See_Also: `readMask`, `getMaskFiles`
 */
-void writeMask(Region, Options)(in string dbFile, in string maskDestination, in Region[] regions, in Options options)
+void writeMask(Region, Options)(in string dbFile, in string maskDestination,
+        in Region[] regions, in Options options)
         if (hasOption!(Options, "workdir", isSomeString))
 {
     // dfmt off
@@ -1674,7 +1683,8 @@ private
         return daccordedDb;
     }
 
-    void silentDaccord(in string dbFile, in string lasFile, in string[] daccordOpts, in string workdir)
+    void silentDaccord(in string dbFile, in string lasFile, in string[] daccordOpts,
+            in string workdir)
     {
         // dfmt off
         executeCommand(chain(

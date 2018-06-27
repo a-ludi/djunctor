@@ -14,7 +14,6 @@ import std.meta : AliasSeq;
 import std.range : ElementType, isInputRange;
 import std.typecons : tuple;
 
-
 /**
     Order `a` and `b` lexicographically by applying each `fun` to them. For
     unary functions compares `fun(a) < fun(b)`.

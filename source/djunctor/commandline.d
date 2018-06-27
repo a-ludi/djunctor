@@ -145,10 +145,10 @@ struct Options
     size_t minExtensionLength = 100;
 
     @Option("out-mask")
-    @Help("write inferred repeat mask into a Dazzler mask. Given a path-like " ~
-            "string without extension: the `dirname` designates the directory to " ~
-            "write the mask to. The mask comprises two hidden files " ~
-            "`.[REFERENCE].[MASK].{anno,data}`.")
+    @Help("write inferred repeat mask into a Dazzler mask. Given a path-like "
+            ~ "string without extension: the `dirname` designates the directory to "
+            ~ "write the mask to. The mask comprises two hidden files "
+            ~ "`.[REFERENCE].[MASK].{anno,data}`.")
     string outMask = null;
 
     @Option("in-mask")
@@ -335,12 +335,14 @@ private
 
         foreach (inputFile; damFiles)
         {
-            enforce!Exception(inputFile.endsWith(".dam"), format!"expected .dam file, got `%s`"(inputFile));
+            enforce!Exception(inputFile.endsWith(".dam"),
+                    format!"expected .dam file, got `%s`"(inputFile));
             enforce!Exception(inputFile.exists, format!"cannot open file `%s`"(inputFile));
 
             foreach (hiddenDbFile; getHiddenDbFiles(inputFile))
             {
-                enforce!Exception(hiddenDbFile.exists, format!"cannot open hidden database file `%s`"(hiddenDbFile));
+                enforce!Exception(hiddenDbFile.exists,
+                        format!"cannot open hidden database file `%s`"(hiddenDbFile));
             }
         }
     }
@@ -437,7 +439,8 @@ private
 
         if (options.readsList.length == 0)
         {
-            return provideDamFileInWorkdir(options.readsFile, options.provideMethod, options.workdir);
+            return provideDamFileInWorkdir(options.readsFile,
+                    options.provideMethod, options.workdir);
         }
         else
         {
@@ -466,8 +469,7 @@ private
         }
         catch (ErrnoException e)
         {
-            throw new Exception(format!"cannot open file `%s` for writing: %s"(
-                    fileName, e));
+            throw new Exception(format!"cannot open file `%s` for writing: %s"(fileName, e));
         }
 
         if (deleteAfterwards)
