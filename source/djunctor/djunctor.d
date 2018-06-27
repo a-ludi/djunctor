@@ -30,7 +30,7 @@ import std.algorithm : all, any, cache, canFind, chunkBy, each, equal, filter,
 import std.array : appender, Appender, array, join, minimallyInitializedArray;
 import std.container : BinaryHeap, heapify, make;
 import std.conv;
-import std.exception : assertNotThrown, assertThrown, ErrnoException;
+import std.exception : assertNotThrown, assertThrown, enforce, ErrnoException;
 import std.format : format, formattedWrite;
 import std.math : abs, floor, sgn;
 import std.range : assumeSorted, chain, chunks, drop, ElementType, enumerate,
@@ -355,6 +355,11 @@ private struct PileUpCropper
         auto tracePointDistance = pileUp[0][0].tracePointDistance;
         croppingRefPositions = pileUp.getCroppingRefPositions(repeatMask, tracePointDistance);
         logJsonDebug("croppingRefPositions", croppingRefPositions.toJson);
+
+        foreach (refPos; croppingRefPositions)
+        {
+            enforce!Exception(refPos.value != -1, "could not find a common trace point");
+        }
     }
 
     private auto getCroppedFastaEntries()
