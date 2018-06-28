@@ -14,12 +14,12 @@ import djunctor.util.fasta : parseFastaRecord;
 import djunctor.util.log;
 import djunctor.util.range : arrayChunks, takeExactly;
 import djunctor.util.tempfile : mkstemp;
-import std.algorithm : canFind, endsWith, equal, filter, isSorted, joiner, map,
+import std.algorithm : all, canFind, endsWith, equal, filter, isSorted, joiner, map,
     min, sort, splitter, startsWith, SwapStrategy, uniq;
 import std.array : appender, Appender, array, uninitializedArray;
 import std.conv : to;
 import std.exception : enforce;
-import std.file : remove;
+import std.file : exists, remove;
 import std.format : format, formattedRead;
 import std.meta : Instantiate;
 import std.path : absolutePath, baseName, buildPath, dirName, relativePath,
@@ -124,25 +124,48 @@ AlignmentChain[] getLocalAlignments(Options)(in string dbA, in Options options)
         if (hasOption!(Options, "dalignerOptions", isOptionsList) && hasOption!(Options,
             "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
-    return getLocalAlignments(dbA, null, options);
+    if (!lasFilesGenerated(dbA, options.workdir))
+    {
+        dalign(dbA, options.dalignerOptions, options.workdir);
+    }
+
+    return processGeneratedLasFiles(dbA, null, options);
 }
 
 AlignmentChain[] getLocalAlignments(Options)(in string dbA, in string dbB, in Options options)
         if (hasOption!(Options, "dalignerOptions", isOptionsList) && hasOption!(Options,
             "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
-    dalign(dbA, dbB, options.dalignerOptions, options.workdir);
+    if (!lasFilesGenerated(dbA, dbB, options.workdir))
+    {
+        dalign(dbA, dbB, options.dalignerOptions, options.workdir);
+    }
 
     return processGeneratedLasFiles(dbA, dbB, options);
+}
+
+void computeLocalAlignments(Options)(in string[] dbList, in Options options)
+        if (hasOption!(Options, "dalignerOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
+{
+    dalign(dbList, options.dalignerOptions, options.workdir);
 }
 
 AlignmentChain[] getMappings(Options)(in string dbA, in string dbB, in Options options)
         if (hasOption!(Options, "damapperOptions", isOptionsList) && hasOption!(Options,
             "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
-    damapper(dbA, dbB, options.damapperOptions, options.workdir);
+    if (!lasFilesGenerated(dbA, dbB, options.workdir))
+    {
+        damapper(dbA, dbB, options.damapperOptions, options.workdir);
+    }
 
     return processGeneratedLasFiles(dbA, dbB, options);
+}
+
+void computeMappings(Options)(in string[] dbList, in Options options)
+        if (hasOption!(Options, "damapperOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
+{
+    damapper(dbList, options.damapperOptions, options.workdir);
 }
 
 private AlignmentChain[] processGeneratedLasFiles(Options)(in string dbA,
@@ -1407,6 +1430,20 @@ string[] getLasFiles(in string dbA, in string dbB, in string baseDirectory)
     return fileList;
 }
 
+bool lasFilesGenerated(in string dbA, in string baseDirectory)
+{
+    return lasFilesGenerated(dbA, null, baseDirectory);
+}
+
+bool lasFilesGenerated(in string dbA, in string dbB, in string baseDirectory)
+{
+    // dfmt off
+    return getLasFiles(dbA, dbB, baseDirectory)
+        .map!(lasFile => lasFile.exists)
+        .all;
+    // dfmt on
+}
+
 size_t getNumContigs(Options)(in string damFile, in Options options)
         if (hasOption!(Options, "workdir", isSomeString))
 {
@@ -1642,24 +1679,36 @@ private
 
     void dalign(in string refDam, in string[] dalignerOpts, in string workdir)
     {
-        dalign(refDam, null, dalignerOpts, workdir);
+        dalign([refDam], dalignerOpts, workdir);
     }
 
     void dalign(in string refDam, in string readsDam, in string[] dalignerOpts, in string workdir)
     {
-        auto additionalOptions = only(readsDam is null ? "-I" : null);
-        auto secondInputFile = readsDam is null ? refDam : readsDam;
-        auto inputFiles = only(refDam.relativeToWorkdir(workdir),
-                secondInputFile.relativeToWorkdir(workdir));
+        dalign([refDam, readsDam], dalignerOpts, workdir);
+    }
+
+    void dalign(in string[] dbList, in string[] dalignerOpts, in string workdir)
+    {
+        assert(dbList.length >= 1);
+        auto isSelfAlignment = dbList.length == 1;
+        auto additionalOptions = only(isSelfAlignment ? "-I" : null);
+        auto inputFiles = isSelfAlignment ? [dbList[0], dbList[0]] : dbList;
+        const(string[]) inputFilesRelativeToWorkDir = inputFiles.map!(f => f.relativeToWorkdir(workdir)).array;
 
         executeCommand(chain(only("daligner"), additionalOptions, dalignerOpts,
-                inputFiles), workdir);
+                inputFilesRelativeToWorkDir), workdir);
     }
 
     void damapper(in string refDam, in string readsDam, in string[] damapperOpts, in string workdir)
     {
-        executeCommand(chain(only("damapper", "-C"), damapperOpts,
-                only(refDam.relativeToWorkdir(workdir), readsDam.relativeToWorkdir(workdir))),
+        damapper([refDam, readsDam], damapperOpts, workdir);
+    }
+
+    void damapper(in string[] dbList, in string[] damapperOpts, in string workdir)
+    {
+        const(string[]) dbListRelativeToWorkDir = dbList.map!(f => f.relativeToWorkdir(workdir)).array;
+
+        executeCommand(chain(only("damapper", "-C"), damapperOpts, dbListRelativeToWorkDir),
                 workdir);
     }
 
