@@ -62,13 +62,14 @@ alias ReadInterval = ReadMask.TaggedInterval;
 alias ReadPoint = ReadMask.TaggedPoint;
 
 /// Returns the alignment region of alignmentChain.
-ReferenceMask getRegion(in AlignmentChain alignmentChain) pure
+Mask getRegion(Mask = ReferenceMask)(in AlignmentChain alignmentChain) pure
+        if (is(Mask : Region!Args, Args...))
 {
     auto contigAId = alignmentChain.contigA.id;
     // dfmt off
-    return ReferenceMask(alignmentChain
+    return Mask(alignmentChain
         .localAlignments
-        .map!(la => ReferenceInterval(
+        .map!(la => Mask.TaggedInterval(
             contigAId,
             la.contigA.begin,
             la.contigA.end,
