@@ -1521,7 +1521,7 @@ Region[] readMask(Region, Options)(in string dbFile, in string maskDestination, 
     auto maskData = getBinaryFile!MaskDataEntry(maskFileNames.data);
 
     auto maskRegions = appender!(Region[]);
-    alias RegionContigId = typeof(maskRegions.data[0].contigId);
+    alias RegionContigId = typeof(maskRegions.data[0].tag);
     alias RegionBegin = typeof(maskRegions.data[0].begin);
     alias RegionEnd = typeof(maskRegions.data[0].end);
     auto numReads = getNumContigs(dbFile, options).to!int;
@@ -1548,7 +1548,7 @@ Region[] readMask(Region, Options)(in string dbFile, in string maskDestination, 
                     && interval[0] <= interval[1], "corrupted mask: invalid interval");
 
             Region newRegion;
-            newRegion.contigId = currentContig.to!RegionContigId;
+            newRegion.tag = currentContig.to!RegionContigId;
             newRegion.begin = interval[0].to!RegionBegin;
             newRegion.end = interval[1].to!RegionEnd;
 
@@ -1601,7 +1601,7 @@ void writeMask(Region, Options)(in string dbFile, in string maskDestination,
 {
     // dfmt off
     alias MaskRegion = Tuple!(
-        MaskHeaderEntry, "contigId",
+        MaskHeaderEntry, "tag",
         MaskDataEntry, "begin",
         MaskDataEntry, "end",
     );
@@ -1627,7 +1627,7 @@ void writeMask(Region, Options)(in string dbFile, in string maskDestination,
     // dfmt off
     auto maskRegions = regions
         .map!(region => MaskRegion(
-            region.contigId.to!MaskHeaderEntry,
+            region.tag.to!MaskHeaderEntry,
             region.begin.to!MaskDataEntry,
             region.end.to!MaskDataEntry,
         ))
@@ -1644,15 +1644,15 @@ void writeMask(Region, Options)(in string dbFile, in string maskDestination,
     maskHeader.rawWrite([dataPointer]);
     foreach (maskRegion; maskRegions)
     {
-        assert(maskRegion.contigId >= currentContig);
+        assert(maskRegion.tag >= currentContig);
 
-        while (maskRegion.contigId > currentContig)
+        while (maskRegion.tag > currentContig)
         {
             maskHeader.rawWrite([dataPointer]);
             ++currentContig;
         }
 
-        if (maskRegion.contigId == currentContig)
+        if (maskRegion.tag == currentContig)
         {
             maskData.rawWrite([maskRegion.begin, maskRegion.end]);
             dataPointer += typeof(maskRegion.begin).sizeof + typeof(maskRegion.end).sizeof;
