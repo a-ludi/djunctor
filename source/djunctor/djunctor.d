@@ -475,15 +475,6 @@ alias InsertionInfo = Tuple!(
     string, "sequenceDb",
     SpliceSite[], "spliceSites",
 );
-/// Information required for inserting the new sequence.
-alias SpliceSite = Tuple!(
-    ReferencePoint, "croppingRefPosition",
-    AlignmentChain.Complement, "complement",
-);
-alias InsertionInfo = Tuple!(
-    string, "sequenceDb",
-    SpliceSite[], "spliceSites",
-);
 // dfmt on
 /// This characterizes an insertion.
 alias ResultScaffold = Scaffold!InsertionInfo;
