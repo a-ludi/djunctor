@@ -151,6 +151,18 @@ bool isDefault(J)(in J join) pure nothrow
     // dfmt on
 }
 
+/// Returns true iff join is a unkown edge, ie. an edge for unkown sequence
+/// (`n`s) of the scaffold graph.
+bool isUnkown(J)(in J join) pure nothrow
+{
+    // dfmt off
+    return join.start.contigId != join.end.contigId &&
+        (join.start.contigPart != join.end.contigPart) &&
+        join.start.contigPart.isTranscendent &&
+        join.end.contigPart.isTranscendent;
+    // dfmt on
+}
+
 /// Returns true iff join is a gap edge of the scaffold graph.
 bool isGap(J)(in J join) pure nothrow
 {
@@ -202,7 +214,7 @@ bool isBackExtension(J)(in J join) pure nothrow
 /// Returns true iff join is a valid edge of the scaffold graph.
 bool isValid(J)(in J join) pure nothrow
 {
-    return isDefault(join) ^ isGap(join) ^ isExtension(join);
+    return isDefault(join) ^ isGap(join) ^ isExtension(join) ^ isUnkown(join);
 }
 
 /// Build a scaffold graph using `rawJoins`. This creates default edges and
@@ -296,7 +308,7 @@ private Scaffold!T addJoins(alias handleConflict, T)(Scaffold!T scaffold, Join!T
     return scaffold;
 }
 
-/// This marks ambiguous gap insertion for removal.
+/// This removes ambiguous gap insertion for removal.
 Scaffold!T discardAmbiguousJoins(T)(Scaffold!T scaffold)
 {
     foreach (contigNode; scaffold.nodes)
@@ -327,6 +339,284 @@ Scaffold!T discardAmbiguousJoins(T)(Scaffold!T scaffold)
     }
 
     return removeNoneJoins!T(scaffold);
+}
+
+/// Get join for a stretch of unkown sequence (`n`s).
+Join!T getUnkownJoin(T)(size_t preContigId, size_t postContigId, T payload) pure nothrow
+{
+    assert(preContigId != postContigId);
+    // dfmt off
+    return Join!T(
+        ContigNode(preContigId, ContigPart.post),
+        ContigNode(postContigId, ContigPart.pre),
+        payload,
+    );
+    // dfmt on
+}
+
+/// Normalizes unkown joins such that they join contigs or are removed as
+/// applicable.
+Scaffold!T normalizeUnkownJoins(T)(Scaffold!T scaffold)
+{
+    foreach (unkownJoin; scaffold.edges.filter!isUnkown.array)
+    {
+        auto preContigId = unkownJoin.start.contigId;
+        auto preContigEnd = ContigNode(preContigId, ContigPart.end);
+        auto postContigId = unkownJoin.end.contigId;
+        auto postContigBegin = ContigNode(postContigId, ContigPart.begin);
+
+        bool isPreContigUnconnected = scaffold.degree(preContigEnd) == 1;
+        // dfmt off
+        bool hasPreContigExtension = scaffold.has(Join!T(
+            preContigEnd,
+            unkownJoin.start,
+        ));
+        // dfmt on
+        bool hasPreContigGap = !isPreContigUnconnected && !hasPreContigExtension;
+        bool isPostContigUnconnected = scaffold.degree(postContigBegin) == 1;
+        // dfmt off
+        bool hasPostContigExtension = scaffold.has(Join!T(
+            unkownJoin.end,
+            postContigBegin,
+        ));
+        // dfmt on
+        bool hasPostContigGap = !isPostContigUnconnected && !hasPostContigExtension;
+
+        if (isPreContigUnconnected && isPostContigUnconnected)
+        {
+            // dfmt off
+            scaffold.add(Join!T(
+                preContigEnd,
+                postContigBegin,
+                unkownJoin.payload,
+            ));
+            // dfmt on
+
+            unkownJoin.payload = T.init;
+            scaffold.add!(scaffold.ConflictStrategy.replace)(unkownJoin);
+        }
+        else if (isPreContigUnconnected && hasPostContigExtension)
+        {
+            // dfmt off
+            scaffold.add(Join!T(
+                preContigEnd,
+                unkownJoin.end,
+                unkownJoin.payload,
+            ));
+            // dfmt on
+
+            unkownJoin.payload = T.init;
+            scaffold.add!(scaffold.ConflictStrategy.replace)(unkownJoin);
+        }
+        else if (hasPreContigExtension && isPostContigUnconnected)
+        {
+            // dfmt off
+            scaffold.add(Join!T(
+                unkownJoin.start,
+                postContigBegin,
+                unkownJoin.payload,
+            ));
+            // dfmt on
+
+            unkownJoin.payload = T.init;
+            scaffold.add!(scaffold.ConflictStrategy.replace)(unkownJoin);
+        }
+        else if (hasPreContigGap || hasPostContigGap)
+        {
+            unkownJoin.payload = T.init;
+            scaffold.add!(scaffold.ConflictStrategy.replace)(unkownJoin);
+        }
+    }
+
+    return removeNoneJoins!T(scaffold);
+}
+
+///
+unittest
+{
+    alias J = Join!int;
+    alias S = Scaffold!int;
+    alias CN = ContigNode;
+    alias CP = ContigPart;
+
+    //  Case 1:
+    //
+    //      o        oxxxxo        o   =>   o        o    o        o
+    //                                 =>
+    //        o -- o        o -- o     =>     o -- oxxxxxxxxo -- o
+    // dfmt off
+    auto scaffold1 = buildScaffold!(sumPayloads!int, int)(2, [
+        getUnkownJoin!int(1, 2, 1),
+    ]).normalizeUnkownJoins!int;
+    // dfmt on
+    assert(getDefaultJoin!int(1) in scaffold1);
+    assert(getDefaultJoin!int(2) in scaffold1);
+    assert(J(CN(1, CP.end), CN(2, CP.begin)) in scaffold1);
+    assert(scaffold1.edges.walkLength == 3);
+
+    //  Case 2:
+    //
+    //      o        oxxxxo        o  =>  o        o   xxxo        o
+    //                     \          =>              /    \
+    //        o -- o        o -- o    =>    o -- oxxxx      o -- o
+    // dfmt off
+    auto scaffold2 = buildScaffold!(sumPayloads!int, int)(2, [
+        getUnkownJoin!int(1, 2, 1),
+        J(CN(2, CP.pre), CN(2, CP.begin), 1),
+    ]).normalizeUnkownJoins!int;
+    // dfmt on
+    assert(getDefaultJoin!int(1) in scaffold2);
+    assert(getDefaultJoin!int(2) in scaffold2);
+    assert(J(CN(1, CP.end), CN(2, CP.pre)) in scaffold2);
+    assert(J(CN(2, CP.pre), CN(2, CP.begin)) in scaffold2);
+    assert(scaffold2.edges.walkLength == 4);
+
+    //  Case 3:
+    //
+    //      o        oxxxxo        o  =>  o        o    o        o
+    //                                =>
+    //        o -- o        o -- o    =>    o -- o        o -- o
+    //                      |         =>                  |
+    //                      o -- o    =>                  o -- o
+    //                                =>
+    //                    o        o  =>                o        o
+    // dfmt off
+    auto scaffold3 = buildScaffold!(sumPayloads!int, int)(3, [
+        getUnkownJoin!int(1, 2, 1),
+        J(CN(2, CP.begin), CN(3, CP.begin), 1),
+    ]).normalizeUnkownJoins!int;
+    // dfmt on
+    assert(getDefaultJoin!int(1) in scaffold3);
+    assert(getDefaultJoin!int(2) in scaffold3);
+    assert(getDefaultJoin!int(3) in scaffold3);
+    assert(J(CN(2, CP.begin), CN(3, CP.begin)) in scaffold3);
+    assert(scaffold3.edges.walkLength == 4);
+
+    //  Case 4:
+    //
+    //      o        oxxxxo        o  =>  o        oxxx   o        o
+    //              /                 =>          /    \
+    //        o -- o        o -- o    =>    o -- o      xxxxo -- o
+    // dfmt off
+    auto scaffold4 = buildScaffold!(sumPayloads!int, int)(2, [
+        getUnkownJoin!int(1, 2, 1),
+        J(CN(1, CP.end), CN(1, CP.post), 1),
+    ]).normalizeUnkownJoins!int;
+    // dfmt on
+    assert(getDefaultJoin!int(1) in scaffold4);
+    assert(getDefaultJoin!int(2) in scaffold4);
+    assert(J(CN(1, CP.post), CN(2, CP.begin)) in scaffold4);
+    assert(J(CN(1, CP.end), CN(1, CP.post)) in scaffold4);
+    assert(scaffold4.edges.walkLength == 4);
+
+    //  Case 5:
+    //
+    //      o        oxxxxo        o
+    //              /      \
+    //        o -- o        o -- o
+    // dfmt off
+    auto scaffold5 = buildScaffold!(sumPayloads!int, int)(2, [
+        getUnkownJoin!int(1, 2, 1),
+        J(CN(1, CP.end), CN(1, CP.post), 1),
+        J(CN(2, CP.pre), CN(2, CP.begin), 1),
+    ]).normalizeUnkownJoins!int;
+    // dfmt on
+    assert(getDefaultJoin!int(1) in scaffold5);
+    assert(getDefaultJoin!int(2) in scaffold5);
+    assert(getUnkownJoin!int(1, 2, 1) in scaffold5);
+    assert(J(CN(1, CP.end), CN(1, CP.post)) in scaffold5);
+    assert(J(CN(2, CP.pre), CN(2, CP.begin)) in scaffold5);
+    assert(scaffold5.edges.walkLength == 5);
+
+    //  Case 6:
+    //
+    //      o        oxxxxo        o  =>  o        o    o        o
+    //              /                 =>          /
+    //        o -- o        o -- o    =>    o -- o        o -- o
+    //                      |         =>                  |
+    //                      o -- o    =>                  o -- o
+    //                                =>
+    //                    o        o  =>                o        o
+    // dfmt off
+    auto scaffold6 = buildScaffold!(sumPayloads!int, int)(3, [
+        getUnkownJoin!int(1, 2, 1),
+        J(CN(1, CP.end), CN(1, CP.post), 1),
+        J(CN(2, CP.begin), CN(3, CP.begin), 1),
+    ]).normalizeUnkownJoins!int;
+    // dfmt on
+    assert(getDefaultJoin!int(1) in scaffold6);
+    assert(getDefaultJoin!int(2) in scaffold6);
+    assert(getDefaultJoin!int(3) in scaffold6);
+    assert(J(CN(1, CP.end), CN(1, CP.post)) in scaffold6);
+    assert(J(CN(2, CP.begin), CN(3, CP.begin)) in scaffold6);
+    assert(scaffold6.edges.walkLength == 5);
+
+    //  Case 7:
+    //
+    //      o        oxxxxo        o  =>  o        o    o        o
+    //                                =>
+    //        o -- o        o -- o    =>    o -- o        o -- o
+    //             |                  =>         |
+    //        o -- o                  =>    o -- o
+    //                                =>
+    //      o        o                =>  o        o
+    // dfmt off
+    auto scaffold7 = buildScaffold!(sumPayloads!int, int)(3, [
+        getUnkownJoin!int(1, 2, 1),
+        J(CN(1, CP.end), CN(3, CP.end), 1),
+    ]).normalizeUnkownJoins!int;
+    // dfmt on
+    assert(getDefaultJoin!int(1) in scaffold7);
+    assert(getDefaultJoin!int(2) in scaffold7);
+    assert(getDefaultJoin!int(3) in scaffold7);
+    assert(J(CN(1, CP.end), CN(3, CP.end)) in scaffold7);
+    assert(scaffold7.edges.walkLength == 4);
+
+    //  Case 8:
+    //
+    //      o        oxxxxo        o  =>  o        o    o        o
+    //                     \          =>                 \
+    //        o -- o        o -- o    =>    o -- o        o -- o
+    //             |                  =>         |
+    //        o -- o                  =>    o -- o
+    //                                =>
+    //      o        o                =>  o        o
+    // dfmt off
+    auto scaffold8 = buildScaffold!(sumPayloads!int, int)(3, [
+        getUnkownJoin!int(1, 2, 1),
+        J(CN(1, CP.end), CN(3, CP.end), 1),
+        J(CN(2, CP.pre), CN(2, CP.begin), 1),
+    ]).normalizeUnkownJoins!int;
+    // dfmt on
+    assert(getDefaultJoin!int(1) in scaffold8);
+    assert(getDefaultJoin!int(2) in scaffold8);
+    assert(getDefaultJoin!int(3) in scaffold8);
+    assert(J(CN(1, CP.end), CN(3, CP.end)) in scaffold8);
+    assert(J(CN(2, CP.pre), CN(2, CP.begin)) in scaffold8);
+    assert(scaffold8.edges.walkLength == 5);
+
+    //  Case 9:
+    //
+    //      o        oxxxxo        o  =>  o        o    o        o
+    //                                =>
+    //        o -- o        o -- o    =>    o -- o        o -- o
+    //             |        |         =>         |        |
+    //             o ------ o         =>         o ------ o
+    //                                =>
+    //           o            o       =>       o            o
+    // dfmt off
+    auto scaffold9 = buildScaffold!(sumPayloads!int, int)(3, [
+        getUnkownJoin!int(1, 2, 1),
+        J(CN(1, CP.end), CN(3, CP.begin), 1),
+        J(CN(2, CP.begin), CN(3, CP.end), 1),
+    ]).normalizeUnkownJoins!int;
+    // dfmt on
+    assert(getDefaultJoin!int(1) in scaffold9);
+    assert(getDefaultJoin!int(2) in scaffold9);
+    assert(getDefaultJoin!int(3) in scaffold9);
+    assert(J(CN(1, CP.end), CN(3, CP.begin)) in scaffold9);
+    assert(J(CN(2, CP.begin), CN(3, CP.end)) in scaffold9);
+    assert(scaffold9.edges.walkLength == 5);
 }
 
 /// Remove marked edges from the graph. This always keeps the default edges.
