@@ -146,10 +146,12 @@ struct Options
     size_t minExtensionLength = 100;
 
     @Option("out-mask")
-    @Help("write inferred repeat mask into a Dazzler mask. Given a path-like "
-            ~ "string without extension: the `dirname` designates the directory to "
-            ~ "write the mask to. The mask comprises two hidden files "
-            ~ "`.[REFERENCE].[MASK].{anno,data}`.")
+    @Help(q"<
+        write inferred repeat mask into a Dazzler mask. Given a path-like
+        string without extension: the `dirname` designates the directory to
+        write the mask to. The mask comprises two hidden files
+        `.[REFERENCE].[MASK].{anno,data}`.
+    >")
     string outMask = null;
 
     @Option("in-mask")
