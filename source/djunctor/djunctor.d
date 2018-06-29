@@ -473,12 +473,12 @@ alias SpliceSite = Tuple!(
     ReferencePoint, "croppingRefPosition",
     AlignmentChain.Complement, "complement",
 );
+/// This characterizes an insertion.
 alias InsertionInfo = Tuple!(
     string, "sequenceDb",
     SpliceSite[], "spliceSites",
 );
 // dfmt on
-/// This characterizes an insertion.
 alias ResultScaffold = Scaffold!InsertionInfo;
 /// This characterizes an insertion.
 alias Insertion = ResultScaffold.Edge;
