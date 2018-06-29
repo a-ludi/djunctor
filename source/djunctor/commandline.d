@@ -10,10 +10,11 @@ module djunctor.commandline;
 
 import darg : ArgParseError, ArgParseHelp, Argument, Help, helpString, Option,
     OptionFlag, parseArgs, usageString;
+import djunctor.dazzler : provideDamFileInWorkdir, ProvideMethod,
+    DaccordOptions, DamapperOptions, LAdumpOptions;
+import djunctor.util.log;
 import std.conv;
 import std.stdio;
-import djunctor.dazzler : provideDamFileInWorkdir, ProvideMethod;
-import djunctor.util.log;
 import std.meta : Instantiate;
 import std.range.primitives : ElementType, isForwardRange;
 import std.traits : hasMember, isSomeString;
@@ -167,7 +168,7 @@ struct Options
     @Help("list of options to pass to `damapper`")
     // dfmt off
     string[] damapperOptions = [
-        "-n.7", // produce the 30 % best chains
+        DamapperOptions.bestMatches ~ ".7",
     ];
     // dfmt on
 
@@ -175,7 +176,7 @@ struct Options
     @Help("list of options to pass to `daccord`")
     // dfmt off
     string[] daccordOptions = [
-        "-f", // produce full sequences
+        DaccordOptions.produceFullSequences,
     ];
     // dfmt on
 
@@ -191,9 +192,9 @@ struct Options
     @Option()
     // dfmt off
     string[] ladumpOptions = [
-        "-c", // output alignment coordinates
-        "-d", // output number of differences for each local alignment
-        "-l", // output lengths of the contigs
+        LAdumpOptions.coordinates,
+        LAdumpOptions.numDiffs,
+        LAdumpOptions.lengths,
     ];
     // dfmt on
 
@@ -201,8 +202,8 @@ struct Options
     @Option()
     // dfmt off
     string[] ladumpTraceOptions = [
-        "-c", // output alignment coordinates
-        "-t", // output number of differences for each local alignment
+        LAdumpOptions.coordinates,
+        LAdumpOptions.tracePoints,
     ];
     // dfmt on
 

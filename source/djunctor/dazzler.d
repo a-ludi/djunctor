@@ -14,8 +14,8 @@ import djunctor.util.fasta : parseFastaRecord;
 import djunctor.util.log;
 import djunctor.util.range : arrayChunks, takeExactly;
 import djunctor.util.tempfile : mkstemp;
-import std.algorithm : all, canFind, endsWith, equal, filter, isSorted, joiner, map,
-    min, sort, splitter, startsWith, SwapStrategy, uniq;
+import std.algorithm : all, canFind, endsWith, equal, filter, isSorted, joiner,
+    map, min, sort, splitter, startsWith, SwapStrategy, uniq;
 import std.array : appender, Appender, array, uninitializedArray;
 import std.conv : to;
 import std.exception : enforce;
@@ -146,7 +146,8 @@ AlignmentChain[] getLocalAlignments(Options)(in string dbA, in string dbB, in Op
 }
 
 void computeLocalAlignments(Options)(in string[] dbList, in Options options)
-        if (hasOption!(Options, "dalignerOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
+        if (hasOption!(Options, "dalignerOptions", isOptionsList)
+            && hasOption!(Options, "workdir", isSomeString))
 {
     dalign(dbList, options.dalignerOptions, options.workdir);
 }
@@ -164,7 +165,8 @@ AlignmentChain[] getMappings(Options)(in string dbA, in string dbB, in Options o
 }
 
 void computeMappings(Options)(in string[] dbList, in Options options)
-        if (hasOption!(Options, "damapperOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
+        if (hasOption!(Options, "damapperOptions", isOptionsList)
+            && hasOption!(Options, "workdir", isSomeString))
 {
     damapper(dbList, options.damapperOptions, options.workdir);
 }
@@ -979,7 +981,7 @@ size_t getTracePointDistance(in string[] dazzlerOptions) pure
 
     foreach (option; dazzlerOptions)
     {
-        if (option.startsWith("-s"))
+        if (option.startsWith(cast(const(string)) DalignerOptions.tracePointDistance))
         {
             return option[2 .. $].to!size_t;
         }
@@ -990,38 +992,28 @@ size_t getTracePointDistance(in string[] dazzlerOptions) pure
 
 unittest
 {
-    assert(getTracePointDistance([]) == 100);
-    assert(getTracePointDistance(["-I"]) == 100);
-    assert(getTracePointDistance(["-s42", "-e.8", "-I"]) == 42);
-    assert(getTracePointDistance(["-I", "-s42", "-e.8"]) == 42);
-    assert(getTracePointDistance(["-e.8", "-I", "-s42"]) == 42);
-}
-
-enum DBdumpOptions
-{
-    readNumber = "-r",
-    originalHeader = "-h",
-    sequenceString = "-s",
-    sNROfACGTChannels = "-a",
-    intrinsicQualityVector = "-i",
-    quivaValues = "-q",
-    repeatProfileVector = "-p",
-    masks = "-m",
-    untrimmedDatabase = "-u",
-    upperCase = "-U",
-}
-
-enum DBshowOptions
-{
-    untrimmedDatabase = "-u",
-    showQuiva = "-q",
-    showArrowPulseSequence = "-a",
-    noSequence = "-n",
-    masks = "-m",
-    produceQuivaFile = "-Q",
-    produceArrowFile = "-A",
-    upperCase = "-U",
-    fastaLineWidth = "-w",
+    with (DalignerOptions)
+    {
+        assert(getTracePointDistance([]) == 100);
+        assert(getTracePointDistance([identity]) == 100);
+        // dfmt off
+        assert(getTracePointDistance([
+            tracePointDistance ~ "42",
+            averageCorrelationRate ~ ".8",
+            identity,
+        ]) == 42);
+        assert(getTracePointDistance([
+            identity,
+            tracePointDistance ~ "42",
+            averageCorrelationRate ~ ".8",
+        ]) == 42);
+        assert(getTracePointDistance([
+            averageCorrelationRate ~ ".8",
+            identity,
+            tracePointDistance ~ "42",
+        ]) == 42);
+        // dfmt on
+    }
 }
 
 /**
@@ -1220,50 +1212,6 @@ unittest
     }
 }
 
-enum DaccordOptions : string
-{
-    /// number of threads (default 4)
-    numberOfThreads = "-t",
-    /// window size (default 40)
-    windowSize = "-w",
-    /// advance size (default 10)
-    advanceSize = "-a",
-    /// max depth (default 18446744073709551615)
-    maxDepth = "-d",
-    /// produce full sequences (default 0)
-    produceFullSequences = "-f",
-    /// verbosity (default 18446744073709551615)
-    verbosity = "-V",
-    /// read interval (default 0,18446744073709551615)
-    readInterval = "-I",
-    /// reads part (default 0,1)
-    readsPart = "-J",
-    /// error profile file name (default input.las.eprof)
-    errorProfileFileName = "-E",
-    /// minimum window coverage (default 3)
-    minWindowCoverage = "-m",
-    /// maximum window error (default 18446744073709551615)
-    maxWindowError = "-e",
-    /// minimum length of output (default 0)
-    minLengthOfOutput = "-l",
-    /// minimum k-mer filter frequency (default 0)
-    minKMerFilterFrequency = "--minfilterfreq",
-    /// maximum k-mer filter frequency (default 2)
-    maxKMerFilterFrequency = "--maxfilterfreq",
-    /// temporary file prefix (default daccord_ozelot_4500_1529654843)
-    temporaryFilePrefix = "-T",
-    /// maximum number of alignments considered per read (default 5000)
-    maxAlignmentsPerRead = "-D",
-    /// maximum number of alignments considered per read (default 0)
-    maxAlignmentsPerReadVard = "--vard",
-    /// compute error profile only (default disable)
-    computeErrorProfileOnly = "--eprofonly",
-    /// compute error distribution estimate (default disable)
-    computeErrorDistributionEstimate = "--deepprofileonly",
-    /// kmer size (default 8)
-    kmerSize = "-k",
-}
-
 /**
     Self-dalign dbFile and build consensus using daccord.
 
@@ -1375,7 +1323,20 @@ unittest
     }
 
     auto tmpDir = mkdtemp("./.unittest-XXXXXX");
-    auto options = Options([], ["-l15"], [], ["-r", "-h", "-s"], 74, tmpDir);
+    // dfmt off
+    auto options = Options(
+        [],
+        [DalignerOptions.minAlignmentLength ~ "15"],
+        [],
+        [
+            DBdumpOptions.readNumber,
+            DBdumpOptions.originalHeader,
+            DBdumpOptions.sequenceString,
+        ],
+        74,
+        tmpDir,
+    );
+    // dfmt on
     scope (exit)
         rmdirRecurse(tmpDir);
 
@@ -1587,7 +1548,8 @@ private struct ScaffoldStructureReader
             nextContigPart.scaffoldId = lastContigPart.scaffoldId + 1;
         }
 
-        if (currentPart.peek!GapPart !is null || lastContigPart.scaffoldId != nextContigPart.scaffoldId)
+        if (currentPart.peek!GapPart !is null
+                || lastContigPart.scaffoldId != nextContigPart.scaffoldId)
         {
             assert(nextContigPart.header[$ - 1] == ' ');
             // Remove the trailing space
@@ -1889,6 +1851,212 @@ void writeMask(Region, Options)(in string dbFile, in string maskDestination,
     }
 }
 
+/// Options for `daccord`.
+enum DaccordOptions : string
+{
+    /// number of threads (default 4)
+    numberOfThreads = "-t",
+    /// window size (default 40)
+    windowSize = "-w",
+    /// advance size (default 10)
+    advanceSize = "-a",
+    /// max depth (default 18446744073709551615)
+    maxDepth = "-d",
+    /// produce full sequences (default 0)
+    produceFullSequences = "-f",
+    /// verbosity (default 18446744073709551615)
+    verbosity = "-V",
+    /// read interval (default 0,18446744073709551615)
+    readInterval = "-I",
+    /// reads part (default 0,1)
+    readsPart = "-J",
+    /// error profile file name (default input.las.eprof)
+    errorProfileFileName = "-E",
+    /// minimum window coverage (default 3)
+    minWindowCoverage = "-m",
+    /// maximum window error (default 18446744073709551615)
+    maxWindowError = "-e",
+    /// minimum length of output (default 0)
+    minLengthOfOutput = "-l",
+    /// minimum k-mer filter frequency (default 0)
+    minKMerFilterFrequency = "--minfilterfreq",
+    /// maximum k-mer filter frequency (default 2)
+    maxKMerFilterFrequency = "--maxfilterfreq",
+    /// temporary file prefix (default daccord_ozelot_4500_1529654843)
+    temporaryFilePrefix = "-T",
+    /// maximum number of alignments considered per read (default 5000)
+    maxAlignmentsPerRead = "-D",
+    /// maximum number of alignments considered per read (default 0)
+    maxAlignmentsPerReadVard = "--vard",
+    /// compute error profile only (default disable)
+    computeErrorProfileOnly = "--eprofonly",
+    /// compute error distribution estimate (default disable)
+    computeErrorDistributionEstimate = "--deepprofileonly",
+    /// kmer size (default 8)
+    kmerSize = "-k",
+}
+
+/// Options for `daligner`.
+enum DalignerOptions : string
+{
+    verbose = "-v",
+    /// If the -b option is set, then the daligner assumes the data has a
+    /// strong compositional bias (e.g. >65% AT rich).
+    strongCompositionalBias = "-b",
+    /// If the -A option is set (“A” for “asymmetric”) then just overlaps
+    /// where the a-read is in block X and the b-read is in block Y are
+    /// reported, and if X = Y then it further reports only those overlaps
+    /// where the a-read index is less than the b-read index.
+    asymmetric = "-A",
+    /// If the -I option is set (“I” for “identity”) then when X = Y, overlaps
+    /// between different portions of the same read will also be found and
+    /// reported.
+    identity = "-I",
+    /// Search code looks for a pair of diagonal bands of width 2^^w
+    /// (default 26 = 64) that contain a collection of exact matching k-mers
+    /// (default 14) between the two reads, such that the total number of
+    /// bases covered by the k-mer hits is h (default 35).
+    kMerSize = "-k",
+    /// ditto
+    bandWidth = "-w",
+    /// ditto
+    hitBaseCoverage = "-h",
+    /// Suppresses the use of any k-mer that occurs more than t times in
+    /// either the subject or target block.
+    maxKmerOccurence = "-t",
+    /// Let the program automatically select a value of t that meets a given
+    /// memory usage limit specified (in Gb) by the -M parameter.
+    maxKmerMemory = "-M",
+    tempDir = "-P",
+    /// Searching for local alignments involving at least -l base pairs
+    /// (default 1000) or more, that have an average correlation rate of
+    /// -e (default 70%).
+    minAlignmentLength = "-l",
+    /// ditto
+    averageCorrelationRate = "-e",
+    /// The local alignments found will be output in a sparse encoding where
+    /// a trace point on the alignment is recorded every -s base pairs of
+    /// the a-read (default 100bp).
+    tracePointDistance = "-s",
+    /// By setting the -H parameter to say N, one alters daligner so that it
+    /// only reports overlaps where the a-read is over N base-pairs long.
+    minAReadLength = "-H",
+    /// The program runs with 4 threads by default, but this may be set to
+    /// any power of 2 with the -T option.
+    numThreads = "-T",
+    /// If there are one or more interval tracks specified with the -m option
+    /// (m for mask), then the reads of the DB or DB’s to which the track
+    /// applies are soft masked with the union of the intervals of all the
+    /// interval tracks that apply, that is any k-mers that contain any bases
+    /// in any of the masked intervals are ignored for the purposes of seeding
+    /// a match.
+    masks = "-m",
+}
+
+/// Options for `damapper`.
+enum DamapperOptions : string
+{
+    verbose = "-v",
+    /// If the -b option is set, then the daligner assumes the data has a
+    /// strong compositional bias (e.g. >65% AT rich).
+    strongCompositionalBias = "-b",
+    /// Search code looks for a pair of diagonal bands of width 2^^w
+    /// (default 26 = 64) that contain a collection of exact matching k-mers
+    /// (default 14) between the two reads, such that the total number of
+    /// bases covered by the k-mer hits is h (default 35).
+    kMerSize = "-k",
+    /// Suppresses the use of any k-mer that occurs more than t times in
+    /// either the subject or target block.
+    maxKmerOccurence = "-t",
+    /// Let the program automatically select a value of t that meets a given
+    /// memory usage limit specified (in Gb) by the -M parameter.
+    maxKmerMemory = "-M",
+    /// ditto
+    averageCorrelationRate = "-e",
+    /// The local alignments found will be output in a sparse encoding where
+    /// a trace point on the alignment is recorded every -s base pairs of
+    /// the a-read (default 100bp).
+    tracePointDistance = "-s",
+    /// The program runs with 4 threads by default, but this may be set to
+    /// any power of 2 with the -T option.
+    numThreads = "-T",
+    /// If there are one or more interval tracks specified with the -m option
+    /// (m for mask), then the reads of the DB or DB’s to which the track
+    /// applies are soft masked with the union of the intervals of all the
+    /// interval tracks that apply, that is any k-mers that contain any bases
+    /// in any of the masked intervals are ignored for the purposes of seeding
+    /// a match.
+    masks = "-m",
+    /// If the -n option is given then all chains that are within the given
+    /// fraction of the best are also reported, e.g. -n.95 reports all
+    /// matches within 95% of the top match.
+    bestMatches = "-n",
+    /// The -p option requests that damapper produce a repeat profile track
+    /// for each read.
+    repeatProfileTrack = "-p",
+    /// The parameter -z asks that LAs are sorted in pile order as opposed to
+    /// map order (see the -a option of daligner for which this is the
+    /// negation).
+    sortPileOrder = "-z",
+    /// If the -C option is set, then damapper also outputs a file Y.X.las
+    /// for a given block pair that contains all the same matches as in
+    /// X.Y.las but where the A-read is a contig of the reference and the
+    /// B-read is a mapped read. And if the -N options is set, then the file
+    /// Y.X.las is not produced.
+    symmetric = "-C",
+    /// ditto
+    oneDirection = "-N",
+}
+
+/// Options for `DBdump`.
+enum DBdumpOptions
+{
+    readNumber = "-r",
+    originalHeader = "-h",
+    sequenceString = "-s",
+    sNROfACGTChannels = "-a",
+    intrinsicQualityVector = "-i",
+    quivaValues = "-q",
+    repeatProfileVector = "-p",
+    masks = "-m",
+    untrimmedDatabase = "-u",
+    upperCase = "-U",
+}
+
+/// Options for `DBshow`.
+enum DBshowOptions
+{
+    untrimmedDatabase = "-u",
+    showQuiva = "-q",
+    showArrowPulseSequence = "-a",
+    noSequence = "-n",
+    masks = "-m",
+    produceQuivaFile = "-Q",
+    produceArrowFile = "-A",
+    upperCase = "-U",
+    fastaLineWidth = "-w",
+}
+
+/// Options for `fasta2DAM` and `fasta2DB`.
+enum Fasta2DazzlerOptions
+{
+    verbose = "-v",
+    /// Import files listed 1/line in given file.
+    fromFile = "-f",
+    /// Import data from stdin, use optional name as data source.
+    fromStdin = "-i",
+}
+
+/// Options for `LAdump`.
+enum LAdumpOptions
+{
+    coordinates = "-c",
+    numDiffs = "-d",
+    tracePoints = "-t",
+    lengths = "-l",
+    properOverlapsOnly = "-o",
+}
+
 private
 {
     bool lasEmpty(in string lasFile, in string dbA, in string dbB, in string workdir)
@@ -1915,9 +2083,10 @@ private
     {
         assert(dbList.length >= 1);
         auto isSelfAlignment = dbList.length == 1;
-        auto additionalOptions = only(isSelfAlignment ? "-I" : null);
+        auto additionalOptions = only(isSelfAlignment ? DalignerOptions.identity : null);
         auto inputFiles = isSelfAlignment ? [dbList[0], dbList[0]] : dbList;
-        const(string[]) inputFilesRelativeToWorkDir = inputFiles.map!(f => f.relativeToWorkdir(workdir)).array;
+        const(string[]) inputFilesRelativeToWorkDir = inputFiles.map!(
+                f => f.relativeToWorkdir(workdir)).array;
 
         executeCommand(chain(only("daligner"), additionalOptions, dalignerOpts,
                 inputFilesRelativeToWorkDir), workdir);
@@ -1930,10 +2099,11 @@ private
 
     void damapper(in string[] dbList, in string[] damapperOpts, in string workdir)
     {
-        const(string[]) dbListRelativeToWorkDir = dbList.map!(f => f.relativeToWorkdir(workdir)).array;
+        const(string[]) dbListRelativeToWorkDir = dbList.map!(
+                f => f.relativeToWorkdir(workdir)).array;
 
-        executeCommand(chain(only("damapper", "-C"), damapperOpts, dbListRelativeToWorkDir),
-                workdir);
+        executeCommand(chain(only("damapper", DamapperOptions.symmetric),
+                damapperOpts, dbListRelativeToWorkDir), workdir);
     }
 
     string daccord(in string dbFile, in string lasFile, in string[] daccordOpts, in string workdir)
@@ -1948,7 +2118,7 @@ private
             only(esc(lasFile.relativeToWorkdir(workdir))),
             only(esc(dbFile.relativeToWorkdir(workdir))),
             only("|"),
-            only("fasta2DAM", "-i"),
+            only("fasta2DAM", Fasta2DazzlerOptions.fromStdin),
             only(esc(daccordedDb.relativeToWorkdir(workdir))),
         ), workdir);
         // dfmt on
@@ -1985,7 +2155,7 @@ private
             only(esc(inDbFile.relativeToWorkdir(workdir))),
             escapedReadIds,
             only("|"),
-            only("fasta2DAM", "-i"),
+            only("fasta2DAM", Fasta2DazzlerOptions.fromStdin),
             only(esc(outDbFile.relativeToWorkdir(workdir))),
         ), workdir);
         // dfmt on
@@ -2001,7 +2171,7 @@ private
 
         immutable writeChunkSize = 1024 * 1024;
         auto outFileArg = outFile.relativeToWorkdir(workdir);
-        auto command = ["fasta2DAM", "-i", outFileArg];
+        auto command = ["fasta2DAM", Fasta2DazzlerOptions.fromStdin, outFileArg];
         //dfmt off
         logJsonDebug(
             "action", "execute",
@@ -2011,8 +2181,8 @@ private
             "state", "pre",
         );
         //dfmt on
-        auto process = pipeProcess(["fasta2DAM", "-i", outFileArg],
-                Redirect.stdin, null, // env
+        auto process = pipeProcess(["fasta2DAM", Fasta2DazzlerOptions.fromStdin,
+                outFileArg], Redirect.stdin, null, // env
                 Config.none, workdir);
         //dfmt off
         fastaRecords
@@ -2193,7 +2363,8 @@ private
 
     string dbshow(in string dbFile, in string[] dbshowOptions, in string workdir)
     {
-        return executeCommand(chain(only("DBshow"), dbshowOptions, only(dbFile.relativeToWorkdir(workdir))), workdir);
+        return executeCommand(chain(only("DBshow"), dbshowOptions,
+                only(dbFile.relativeToWorkdir(workdir))), workdir);
     }
 
     size_t getNumBlocks(in string damFile)

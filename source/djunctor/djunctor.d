@@ -13,9 +13,10 @@ import djunctor.alignments : AlignmentChain, alignmentCoverage,
     getType, haveEqualIds, isExtension, isGap, isValid, makeJoin, PileUp,
     ReadAlignment, ReadAlignmentType, safeGapTypes;
 import djunctor.commandline : Options;
-import djunctor.dazzler : buildDamFile, getConsensus, getFastaEntries,
-    getLocalAlignments, getMappings, getNumContigs, getTracePointDistance,
-    attachTracePoints, readMask, writeMask;
+import djunctor.dazzler : attachTracePoints, buildDamFile, DalignerOptions,
+    DamapperOptions, getConsensus, getFastaEntries, getLocalAlignments,
+    getMappings, getNumContigs, getTracePointDistance, LAdumpOptions, readMask,
+    writeMask;
 import djunctor.util.fasta : parseFasta, parseFastaRecord, parsePacBioHeader,
     reverseComplement;
 import djunctor.util.log;
@@ -614,15 +615,15 @@ class DJunctor
         // dfmt off
         selfAlignment = getLocalAlignments(options.refDb, const(SelfAlignmentOptions)(
             options.dalignerOptions ~ [
-                format!"-l%d"(options.minAnchorLength),
-                format!"-e%f"((1 - options.referenceErrorRate)^^2),
+                format!(DalignerOptions.minAlignmentLength ~ "%d")(options.minAnchorLength),
+                format!(DalignerOptions.averageCorrelationRate ~ "%f")((1 - options.referenceErrorRate)^^2),
             ],
-            options.ladumpOptions[].filter!"a != \"-o\"".array,
+            options.ladumpOptions[].filter!(o => o != LAdumpOptions.properOverlapsOnly).array,
             options.workdir,
         ));
         readsAlignment = getMappings(options.refDb, options.readsDb, const(ReadsToRefAlignmentOptions)(
             options.damapperOptions ~ [
-                format!"-e%f"((1 - options.referenceErrorRate) * (1 - options.readsErrorRate)),
+                format!(DamapperOptions.averageCorrelationRate ~ "%f")((1 - options.referenceErrorRate) * (1 - options.readsErrorRate)),
             ],
             options.ladumpOptions[].array,
             options.workdir,
@@ -999,8 +1000,8 @@ class DJunctor
         string consensusDb = getConsensus(croppedDb, referenceReadId, const(ConsensusAlignmentOptions)(
             options.daccordOptions,
             options.dalignerOptions ~ [
-                format!"-l%d"(options.minAnchorLength),
-                format!"-e%f"((1 - options.readsErrorRate)^^2),
+                format!(DalignerOptions.minAlignmentLength ~ "%d")(options.minAnchorLength),
+                format!(DalignerOptions.averageCorrelationRate ~ "%f")((1 - options.readsErrorRate)^^2),
             ],
             options.dbsplitOptions,
             options.workdir,
