@@ -32,6 +32,7 @@ import std.stdio : File, writeln;
 import std.string : lineSplitter, outdent;
 import std.traits : hasMember, isIntegral, isSomeChar, isSomeString, Unqual;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
+import std.variant : Algebraic;
 import vibe.data.json : Json, toJson = serializeToJson;
 
 /// File suffixes of hidden DB files.
@@ -1010,6 +1011,19 @@ enum DBdumpOptions
     upperCase = "-U",
 }
 
+enum DBshowOptions
+{
+    untrimmedDatabase = "-u",
+    showQuiva = "-q",
+    showArrowPulseSequence = "-a",
+    noSequence = "-n",
+    masks = "-m",
+    produceQuivaFile = "-Q",
+    produceArrowFile = "-A",
+    upperCase = "-U",
+    fastaLineWidth = "-w",
+}
+
 /**
     Get the designated set of records in FASTA format. If recordNumbers is
     empty the whole DB will be converted.
@@ -1470,6 +1484,216 @@ size_t getNumContigs(Options)(in string damFile, in Options options)
     }
 
     return numContigs;
+}
+
+auto getScaffoldStructure(Options)(in string damFile, in Options options)
+        if (hasOption!(Options, "workdir", isSomeString))
+{
+    immutable string[] dbshowOptions = [DBshowOptions.noSequence];
+
+    auto rawScaffoldInfo = dbshow(damFile, dbshowOptions, ptions.workdir);
+}
+
+alias ScaffoldPart = Algebraic!(ContigPart, GapPart);
+
+struct ContigPart
+{
+    size_t globalContigId;
+    size_t scaffoldId;
+    size_t contigId;
+    size_t begin;
+    size_t end;
+    string header;
+
+    invariant
+    {
+        assert(begin < end);
+    }
+
+    @property size_t length() const pure nothrow
+    {
+        return end - begin;
+    }
+}
+
+struct GapPart
+{
+    size_t beginGlobalContigId;
+    size_t endGlobalContigId;
+    size_t scaffoldId;
+    size_t beginContigId;
+    size_t endContigId;
+    size_t begin;
+    size_t end;
+
+    invariant
+    {
+        assert(begin < end);
+    }
+
+    @property size_t length() const pure nothrow
+    {
+        return end - begin;
+    }
+}
+
+private struct ScaffoldStructureReader
+{
+    static immutable scaffoldInfoLineFormat = "%s:: Contig %d[%d,%d]";
+    alias RawScaffoldInfo = typeof("".lineSplitter);
+
+    private RawScaffoldInfo rawScaffoldInfo;
+    private ContigPart lastContigPart;
+    private ScaffoldPart currentPart;
+    private bool _empty;
+
+    this(string rawScaffoldInfo)
+    {
+        this.rawScaffoldInfo = rawScaffoldInfo.lineSplitter;
+        // Force the first element to be a contigPart.
+        this.currentPart = GapPart();
+        // Make `scaffoldId`s start at 0.
+        this.lastContigPart.scaffoldId = -1UL;
+
+        if (!empty)
+        {
+            popFront();
+        }
+    }
+
+    void popFront()
+    {
+        assert(!empty, "Attempting to popFront an empty ScaffoldStructureReader");
+
+        if (rawScaffoldInfo.empty)
+        {
+            _empty = true;
+
+            return;
+        }
+
+        auto nextContigPart = ContigPart(lastContigPart.globalContigId + 1);
+
+        // dfmt off
+        rawScaffoldInfo.front.formattedRead!scaffoldInfoLineFormat(
+            nextContigPart.header,
+            nextContigPart.contigId,
+            nextContigPart.begin,
+            nextContigPart.end,
+        );
+        // dfmt on
+        if (lastContigPart.contigId >= nextContigPart.contigId)
+        {
+            nextContigPart.scaffoldId = lastContigPart.scaffoldId + 1;
+        }
+
+        if (currentPart.peek!GapPart !is null || lastContigPart.scaffoldId != nextContigPart.scaffoldId)
+        {
+            assert(nextContigPart.header[$ - 1] == ' ');
+            // Remove the trailing space
+            nextContigPart.header = nextContigPart.header[0 .. $ - 1];
+            lastContigPart = nextContigPart;
+            currentPart = nextContigPart;
+            rawScaffoldInfo.popFront();
+        }
+        else
+        {
+            // dfmt off
+            currentPart = GapPart(
+                lastContigPart.globalContigId,
+                nextContigPart.globalContigId,
+                lastContigPart.scaffoldId,
+                lastContigPart.contigId,
+                nextContigPart.contigId,
+                lastContigPart.end,
+                nextContigPart.begin,
+            );
+            // dfmt on
+        }
+    }
+
+    @property ScaffoldPart front() const
+    {
+        assert(!empty, "Attempting to fetch the front of an empty ScaffoldStructureReader");
+        return currentPart;
+    }
+
+    @property bool empty() const
+    {
+        return _empty;
+    }
+}
+
+unittest
+{
+    auto exampleDump = q"EOS
+>reference_mod/1/0_837550 RQ=0.850 :: Contig 0[0,8300]
+>reference_mod/1/0_837550 RQ=0.850 :: Contig 1[12400,20750]
+>reference_mod/1/0_837550 RQ=0.850 :: Contig 2[29200,154900]
+>reference_mod/1/0_837550 RQ=0.850 :: Contig 3[159900,169900]
+>reference_mod/1/0_837550 RQ=0.850 :: Contig 4[174900,200650]
+>reference_mod/1/0_837550 RQ=0.850 :: Contig 5[203650,216400]
+>reference_mod/1/0_837550 RQ=0.850 :: Contig 6[218900,235150]
+>reference_mod/1/0_837550 RQ=0.850 :: Contig 7[238750,260150]
+>reference_mod/1/0_837550 RQ=0.850 :: Contig 8[263650,837500]
+>reference_mod/2/0_1450 RQ=0.850 :: Contig 0[0,1450]
+EOS";
+
+    auto reader = ScaffoldStructureReader(exampleDump);
+    auto scaffoldStructure = reader.array;
+
+    // dfmt off
+    assert(scaffoldStructure == [
+        ScaffoldPart(ContigPart(
+            1, 0, 0, 0, 8300,
+            ">reference_mod/1/0_837550 RQ=0.850",
+        )),
+        ScaffoldPart(GapPart(1, 2, 0, 0, 1, 8300, 12400)),
+        ScaffoldPart(ContigPart(
+            2, 0, 1, 12400, 20750,
+            ">reference_mod/1/0_837550 RQ=0.850",
+        )),
+        ScaffoldPart(GapPart(2, 3, 0, 1, 2, 20750, 29200)),
+        ScaffoldPart(ContigPart(
+            3, 0, 2, 29200, 154900,
+            ">reference_mod/1/0_837550 RQ=0.850",
+        )),
+        ScaffoldPart(GapPart(3, 4, 0, 2, 3, 154900, 159900)),
+        ScaffoldPart(ContigPart(
+            4, 0, 3, 159900, 169900,
+            ">reference_mod/1/0_837550 RQ=0.850",
+        )),
+        ScaffoldPart(GapPart(4, 5, 0, 3, 4, 169900, 174900)),
+        ScaffoldPart(ContigPart(
+            5, 0, 4, 174900, 200650,
+            ">reference_mod/1/0_837550 RQ=0.850",
+        )),
+        ScaffoldPart(GapPart(5, 6, 0, 4, 5, 200650, 203650)),
+        ScaffoldPart(ContigPart(
+            6, 0, 5, 203650, 216400,
+            ">reference_mod/1/0_837550 RQ=0.850",
+        )),
+        ScaffoldPart(GapPart(6, 7, 0, 5, 6, 216400, 218900)),
+        ScaffoldPart(ContigPart(
+            7, 0, 6, 218900, 235150,
+            ">reference_mod/1/0_837550 RQ=0.850",
+        )),
+        ScaffoldPart(GapPart(7, 8, 0, 6, 7, 235150, 238750)),
+        ScaffoldPart(ContigPart(
+            8, 0, 7, 238750, 260150,
+            ">reference_mod/1/0_837550 RQ=0.850",
+        )),
+        ScaffoldPart(GapPart(8, 9, 0, 7, 8, 260150, 263650)),
+        ScaffoldPart(ContigPart(
+            9, 0, 8, 263650, 837500,
+            ">reference_mod/1/0_837550 RQ=0.850",
+        )),
+        ScaffoldPart(ContigPart(
+            10, 1, 0, 0, 1450,
+            ">reference_mod/2/0_1450 RQ=0.850",
+        )),
+    ]);
+    // dfmt on
 }
 
 /**
@@ -1965,6 +2189,11 @@ private
     string dbshow(in string dbFile, in string contigId, in string workdir)
     {
         return executeCommand(only("DBshow", dbFile.relativeToWorkdir(workdir), contigId), workdir);
+    }
+
+    string dbshow(in string dbFile, in string[] dbshowOptions, in string workdir)
+    {
+        return executeCommand(chain(only("DBshow"), dbshowOptions, only(dbFile.relativeToWorkdir(workdir))), workdir);
     }
 
     size_t getNumBlocks(in string damFile)
