@@ -1452,7 +1452,9 @@ auto getScaffoldStructure(Options)(in string damFile, in Options options)
 {
     immutable string[] dbshowOptions = [DBshowOptions.noSequence];
 
-    auto rawScaffoldInfo = dbshow(damFile, dbshowOptions, ptions.workdir);
+    auto rawScaffoldInfo = dbshow(damFile, dbshowOptions, options.workdir);
+
+    return ScaffoldStructureReader(rawScaffoldInfo);
 }
 
 alias ScaffoldPart = Algebraic!(ContigPart, GapPart);
@@ -1583,6 +1585,18 @@ private struct ScaffoldStructureReader
     @property bool empty() const
     {
         return _empty;
+    }
+
+    ScaffoldStructureReader save()
+    {
+        ScaffoldStructureReader copy;
+
+        copy.rawScaffoldInfo = this.rawScaffoldInfo.save;
+        copy.lastContigPart = this.lastContigPart;
+        copy.currentPart = this.currentPart;
+        copy._empty = this._empty;
+
+        return copy;
     }
 }
 
