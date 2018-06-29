@@ -5,7 +5,7 @@ test:
 	dub test
 
 format:
-	find source/ -name '*.d' -type f -exec dfmt -i {} \;
+	find source/ -name '*.d' -type f -exec dfmt -i {} \; -exec sed -i 's/\s\+$$//' {} \;
 
 clean:
 	dub clean
