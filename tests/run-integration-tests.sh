@@ -22,6 +22,7 @@ DJUNCTOR_OPTS=(
     --input-provide-method symlink
     --reads-error 0.05
     --reference-error 0.01
+    --join-policy contigs
 )
 BUILD_OPTS=(--build=debug)
 RESULT_TO_REFERENCE_DALIGNER_OPTS=(

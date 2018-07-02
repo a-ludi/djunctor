@@ -13,10 +13,10 @@ import djunctor.alignments : AlignmentChain, alignmentCoverage,
     getType, haveEqualIds, isExtension, isGap, isValid, makeJoin, PileUp,
     ReadAlignment, ReadAlignmentType, safeGapTypes;
 import djunctor.commandline : Options;
-import djunctor.dazzler : attachTracePoints, buildDamFile, DalignerOptions,
-    DamapperOptions, getConsensus, getFastaEntries, getLocalAlignments,
-    getMappings, getNumContigs, getTracePointDistance, LAdumpOptions, readMask,
-    writeMask;
+import djunctor.dazzler : attachTracePoints, buildDamFile, ContigPart,
+    DalignerOptions, DamapperOptions, GapPart, getConsensus, getFastaEntries,
+    getLocalAlignments, getMappings, getNumContigs, getScaffoldStructure,
+    getTracePointDistance, LAdumpOptions, readMask, ScaffoldPart, writeMask;
 import djunctor.util.fasta : parseFasta, parseFastaRecord, parsePacBioHeader,
     reverseComplement;
 import djunctor.util.log;
@@ -25,8 +25,9 @@ import djunctor.util.math : absdiff, ceil, floor, mean, median,
 import djunctor.util.range : Comparator;
 import djunctor.util.region : empty, min, Region, sup, union_;
 import djunctor.util.scaffold : concatenatePayloads, ContigNode, contigStarts,
-    getDefaultJoin, initScaffold, isAntiParallel, isBackExtension, isDefault,
-    isExtension, isFrontExtension, isGap, isValid, Join, linearWalk, Scaffold;
+    enforceJoinPolicy, getDefaultJoin, getUnkownJoin, initScaffold,
+    isAntiParallel, isBackExtension, isDefault, isExtension, isFrontExtension,
+    isGap, isUnkown, isValid, Join, linearWalk, normalizeUnkownJoins, Scaffold;
 import djunctor.util.string : indent;
 import dstats.distrib : invPoissonCDF;
 import core.exception : AssertError;
@@ -42,7 +43,8 @@ import std.format : format, formattedWrite;
 import std.math : abs, floor, sgn;
 import std.range : assumeSorted, chain, chunks, drop, ElementType, enumerate,
     ForwardRange, InputRange, inputRangeObject, iota, isForwardRange,
-    isInputRange, only, retro, slide, SortedRange, tail, take, walkLength, zip;
+    isInputRange, only, repeat, retro, slide, SortedRange, tail, take,
+    walkLength, zip;
 import std.stdio : File, write, writeln;
 import std.string : outdent;
 import std.traits : Unqual;
@@ -496,6 +498,11 @@ Insertion concatenateSpliceSites(Insertion existingJoin, Insertion newJoin)
 
 auto getFastaRecord(in string sequenceDb, in size_t sequenceId, in Options options)
 {
+    if (sequenceDb is null)
+    {
+        return typeof(parseFastaRecord("")).init;
+    }
+
     auto records = getFastaEntries(sequenceDb, [sequenceId + 0], options).map!parseFastaRecord;
 
     if (records.empty)
@@ -547,6 +554,8 @@ class DJunctor
     AlignmentChain[] catCandidates;
     /// A scaffold graph accumulating all planned insertions.
     ResultScaffold catHits;
+    /// Scaffold structure of the reference.
+    const(ScaffoldPart)[] scaffoldStructure;
     /// Keep track of unused reads.
     NaturalNumberSet unusedReads;
 
@@ -605,6 +614,7 @@ class DJunctor
         logJsonDiagnostic("state", "enter", "function", "djunctor.init");
         numReferenceContigs = getNumContigs(options.refDb, options);
         numReads = getNumContigs(options.readsDb, options);
+        scaffoldStructure = getScaffoldStructure(options.refDb, options).array;
 
         if (options.inMask !is null)
         {
@@ -637,6 +647,7 @@ class DJunctor
             InsertionInfo
         )(numReferenceContigs);
         // dfmt on
+        insertUnkownJoins();
 
         unusedReads.reserveFor(numReads);
         foreach (readId; iota(1, numReads + 1))
@@ -805,12 +816,31 @@ class DJunctor
                 refValueLarge - refValueLarge * 2 * maxRelativeDiff / AlignmentChain.maxScore));
     }
 
-    protected void addCandidatesToUnusedReads()
+    protected void insertUnkownJoins()
     {
-        foreach (alignmentChain; catCandidates)
-        {
-            unusedReads.add(alignmentChain.contigB.id);
-        }
+        // dfmt off
+        scaffoldStructure[]
+            .filter!(part => part.peek!GapPart !is null)
+            .map!(gapPart => gapPart.get!GapPart)
+            .map!(gapPart => getUnkownJoin(
+                gapPart.beginGlobalContigId,
+                gapPart.endGlobalContigId,
+                InsertionInfo(
+                    null,
+                    [
+                        SpliceSite(ReferencePoint(
+                            gapPart.beginGlobalContigId,
+                            gapPart.begin,
+                        ), AlignmentChain.Complement.no),
+                        SpliceSite(ReferencePoint(
+                            gapPart.beginGlobalContigId,
+                            gapPart.end,
+                        ), AlignmentChain.Complement.no),
+                    ]
+                ),
+            ))
+            .each!(unkownJoin => catHits.add(unkownJoin));
+        // dfmt on
     }
 
     protected PileUp[] buildPileUps()
@@ -1018,6 +1048,12 @@ class DJunctor
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.writeNewAssembly");
 
+        // dfmt off
+        catHits = catHits
+            .enforceJoinPolicy!InsertionInfo(options.joinPolicy)
+            .normalizeUnkownJoins!InsertionInfo();
+        // dfmt on
+
         foreach (startNode; contigStarts!InsertionInfo(catHits))
         {
             writeNewContig(startNode);
@@ -1058,6 +1094,7 @@ class DJunctor
         assert(insertion.isValid, "invalid insertion");
 
         auto isContig = insertion.isDefault;
+        auto isUnkownSequence = insertion.isUnkown;
         auto sequenceDb = insertion.payload.sequenceDb;
         auto sequenceId = isContig ? begin.contigId : 1;
         auto fastaRecord = getFastaRecord(sequenceDb, sequenceId, options);
@@ -1113,6 +1150,14 @@ class DJunctor
             sequence = fastaRecord[contigSpliceStart .. contigSpliceEnd].array;
             assert(globalComplement != (begin < insertion.target(begin)));
         }
+        else if (isUnkownSequence)
+        {
+            assert(spliceSites.length == 2);
+            auto sequenceLength = spliceSites[1].croppingRefPosition.value
+                - spliceSites[0].croppingRefPosition.value;
+
+            sequence = (cast(dchar) 'n').repeat.take(sequenceLength).array;
+        }
         else
         {
             if (insertion.isExtension)
@@ -1165,7 +1210,14 @@ class DJunctor
         foreach (sequenceChunk; sequence.drop(options.fastaLineWidth - currentOutputColumn)
                 .chunks(options.fastaLineWidth))
         {
-            writeln(sequenceChunk);
+            if (sequenceChunk.walkLength == options.fastaLineWidth)
+            {
+                writeln(sequenceChunk);
+            }
+            else
+            {
+                write(sequenceChunk);
+            }
         }
 
         return (currentOutputColumn + sequence.length) % options.fastaLineWidth;

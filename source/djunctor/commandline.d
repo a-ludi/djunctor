@@ -12,6 +12,7 @@ import darg : ArgParseError, ArgParseHelp, Argument, Help, helpString, Option,
     OptionFlag, parseArgs, usageString;
 import djunctor.dazzler : provideDamFileInWorkdir, ProvideMethod,
     DaccordOptions, DamapperOptions, LAdumpOptions;
+import djunctor.util.scaffold : JoinPolicy;
 import djunctor.util.log;
 import std.conv;
 import std.stdio;
@@ -161,6 +162,17 @@ struct Options
     @Option("unused-reads")
     @Help("if given write unused read IDs to the designated file as JSON array")
     string unusedReadsList = null;
+
+    @Option("join-policy")
+    @Help(q"<
+        allow only joins (gap filling) in the given mode:
+        `scaffoldGaps` (only join gaps inside of scaffolds –
+        marked by `n`s in FASTA),
+        `scaffolds` (join gaps inside of scaffolds and try to join scaffolds),
+        `contigs` (break input into contigs and re-scaffold everything;
+        maintains scaffold gaps where new scaffolds are consistent)
+    >")
+    JoinPolicy joinPolicy = JoinPolicy.scaffoldGaps;
 
     @Option("daligner-options")
     @Help("list of options to pass to `daligner`")
