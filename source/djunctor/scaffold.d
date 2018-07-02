@@ -11,7 +11,7 @@ module djunctor.util.scaffold;
 import djunctor.util.log;
 import djunctor.util.math : Graph, MissingNodeException, NaturalNumberSet;
 import std.algorithm : canFind, countUntil, equal, filter, fold, joiner, map,
-    minElement, sort, sum, swap;
+    minElement, setDifference, sort, sum, swap;
 import std.array : Appender, array;
 import std.exception : assertThrown;
 import std.functional : binaryFun;
@@ -617,6 +617,95 @@ unittest
     assert(J(CN(1, CP.end), CN(3, CP.begin)) in scaffold9);
     assert(J(CN(2, CP.begin), CN(3, CP.end)) in scaffold9);
     assert(scaffold9.edges.walkLength == 5);
+}
+
+/// Determine which kinds of joins are allowed.
+enum JoinPolicy
+{
+    /// Only join gaps inside of scaffolds (marked by `n`s in FASTA).
+    scaffoldGaps,
+    /// Join gaps inside of scaffolds (marked by `n`s in FASTA) and try to
+    /// join scaffolds.
+    scaffolds,
+    /// Break input into contigs and re-scaffold everything; maintains scaffold gaps where new
+    /// scaffolds are consistent.
+    contigs,
+}
+
+/// Enforce joinPolicy in scaffold.
+Scaffold!T enforceJoinPolicy(T)(Scaffold!T scaffold, in JoinPolicy joinPolicy)
+{
+    if (joinPolicy == JoinPolicy.contigs)
+    {
+        // Just do nothing; this is the default mode of operation.
+        return scaffold;
+    }
+
+    alias orderByNodes = Scaffold!T.orderByNodes;
+
+    assert(joinPolicy == JoinPolicy.scaffoldGaps || joinPolicy == JoinPolicy.scaffolds);
+
+    // dfmt off
+    auto allowedJoins = scaffold
+        .edges
+        .filter!isUnkown
+        .map!(join => only(
+            Join!T(
+                ContigNode(join.start.contigId, ContigPart.end),
+                ContigNode(join.start.contigId, ContigPart.post),
+            ),
+            Join!T(
+                ContigNode(join.start.contigId, ContigPart.end),
+                ContigNode(join.end.contigId, ContigPart.begin),
+            ),
+            Join!T(
+                ContigNode(join.end.contigId, ContigPart.pre),
+                ContigNode(join.end.contigId, ContigPart.begin),
+            ),
+        ))
+        .joiner;
+    // dfmt on
+    auto gapJoins = scaffold.edges.filter!isGap;
+    auto forbiddenJoins = setDifference!orderByNodes(gapJoins, allowedJoins).array;
+
+    foreach (forbiddenJoin; forbiddenJoins)
+    {
+        forbiddenJoin.payload = T.init;
+        scaffold.add!(scaffold.ConflictStrategy.replace)(forbiddenJoin);
+    }
+
+    scaffold = removeNoneJoins!T(scaffold);
+
+    if (joinPolicy == JoinPolicy.scaffolds)
+    {
+        scaffold = normalizeUnkownJoins!T(scaffold);
+
+        alias validJoin = (candidate) => scaffold.degree(candidate.start) == 1
+            && scaffold.degree(candidate.end) == 1;
+        foreach (scaffoldJoin; forbiddenJoins.filter!validJoin)
+        {
+            scaffold.add(scaffoldJoin);
+        }
+
+        if (shouldLog(LogLevel.info))
+        {
+            forbiddenJoins = forbiddenJoins.filter!(j => !validJoin(j)).array;
+        }
+    }
+
+    // dfmt off
+    logJsonInfo("forbiddenJoins", forbiddenJoins
+        .filter!(gapJoin => scaffold.degree(gapJoin.start) == 1 && scaffold.degree(gapJoin.end) == 1)
+        .map!(join => [
+            "start": join.start.toJson,
+            "end": join.end.toJson,
+            "payload": join.payload.toJson,
+        ])
+        .array
+        .toJson);
+    // dfmt on
+
+    return scaffold;
 }
 
 /// Remove marked edges from the graph. This always keeps the default edges.

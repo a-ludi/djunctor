@@ -396,7 +396,7 @@ struct Graph(Node, Weight = void, Flag!"isDirected" isDirected = No.isDirected, 
         }
     }
 
-    protected static bool orderByNodes(in Edge a, in Edge b) nothrow pure
+    static bool orderByNodes(in Edge a, in Edge b) nothrow pure
     {
         return a.compareNodes(b) < 0;
     }
