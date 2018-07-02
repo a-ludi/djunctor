@@ -11,43 +11,34 @@ module djunctor.djunctor;
 import djunctor.alignments : AlignmentChain, alignmentCoverage,
     buildPileUpsFromReadAlignments = buildPileUps, getAlignmentChainRefs,
     getType, haveEqualIds, isExtension, isGap, isValid, makeJoin, PileUp,
-    ReadAlignment, ReadAlignmentType, safeGapTypes;
+    ReadAlignment, ReadAlignmentType;
 import djunctor.commandline : Options;
-import djunctor.dazzler : attachTracePoints, buildDamFile, ContigPart,
-    DalignerOptions, DamapperOptions, GapPart, getConsensus, getFastaEntries,
-    getLocalAlignments, getMappings, getNumContigs, getScaffoldStructure,
-    getTracePointDistance, LAdumpOptions, readMask, ScaffoldPart, writeMask;
-import djunctor.util.fasta : parseFasta, parseFastaRecord, parsePacBioHeader,
+import djunctor.dazzler : attachTracePoints, buildDamFile, DalignerOptions,
+    DamapperOptions, GapPart, getConsensus, getFastaEntries, getLocalAlignments,
+    getMappings, getNumContigs, getScaffoldStructure, LAdumpOptions, readMask,
+    ScaffoldPart, writeMask;
+import djunctor.util.fasta : parseFastaRecord, parsePacBioHeader,
     reverseComplement;
 import djunctor.util.log;
-import djunctor.util.math : absdiff, ceil, floor, mean, median,
-    NaturalNumberSet;
-import djunctor.util.range : Comparator;
-import djunctor.util.region : empty, min, Region, sup, union_;
-import djunctor.util.scaffold : concatenatePayloads, ContigNode, contigStarts,
-    enforceJoinPolicy, getDefaultJoin, getUnkownJoin, initScaffold,
-    isAntiParallel, isBackExtension, isDefault, isExtension, isFrontExtension,
-    isGap, isUnkown, isValid, Join, linearWalk, normalizeUnkownJoins, Scaffold;
-import djunctor.util.string : indent;
+import djunctor.util.math : ceil, floor, NaturalNumberSet;
+import djunctor.util.region : empty, min, Region, sup;
+import djunctor.util.scaffold : ContigNode, contigStarts, enforceJoinPolicy,
+    getDefaultJoin, getUnkownJoin, initScaffold, isAntiParallel, isDefault,
+    isExtension, isFrontExtension, isGap, isUnkown, isValid, linearWalk,
+    normalizeUnkownJoins, Scaffold;
 import dstats.distrib : invPoissonCDF;
-import core.exception : AssertError;
-import std.algorithm : all, any, cache, canFind, chunkBy, each, equal, filter,
-    find, fold, group, isSorted, joiner, map, max, maxElement, maxIndex, min,
-    multiwayUnion, predSwitch, setDifference, sort, sum, swap, SwapStrategy,
-    uniq;
-import std.array : appender, Appender, array, join, minimallyInitializedArray;
-import std.container : BinaryHeap, heapify, make;
+import std.algorithm : all, chunkBy, each, equal, filter, find, fold, isSorted,
+    joiner, map, max, maxIndex, min, setDifference, sort, sum, swap,
+    SwapStrategy, uniq;
+import std.array : appender, array, join, minimallyInitializedArray;
 import std.conv;
-import std.exception : assertNotThrown, assertThrown, enforce, ErrnoException;
-import std.format : format, formattedWrite;
-import std.math : abs, floor, sgn;
-import std.range : assumeSorted, chain, chunks, drop, ElementType, enumerate,
-    ForwardRange, InputRange, inputRangeObject, iota, isForwardRange,
-    isInputRange, only, repeat, retro, slide, SortedRange, tail, take,
-    walkLength, zip;
+import std.exception : enforce, ErrnoException;
+import std.format : format;
+import std.math : abs, floor;
+import std.range : assumeSorted, chain, chunks, drop, ElementType, InputRange,
+    inputRangeObject, iota, isInputRange, only, repeat, retro, take, walkLength,
+    zip;
 import std.stdio : File, write, writeln;
-import std.string : outdent;
-import std.traits : Unqual;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
 import vibe.data.json : Json, toJson = serializeToJson;
 
