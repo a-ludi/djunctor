@@ -1,3 +1,5 @@
+.PHONY: build test format stylecheck clean todos
+
 build:
 	dub build
 
@@ -6,6 +8,9 @@ test:
 
 format:
 	find source/ -name '*.d' -type f -exec dfmt -i {} \; -exec sed -i 's/\s\+$$//' {} \;
+
+stylecheck:
+	dub run dscanner -- --styleCheck | less
 
 clean:
 	dub clean
