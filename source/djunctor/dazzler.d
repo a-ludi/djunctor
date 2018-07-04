@@ -1457,9 +1457,9 @@ auto getScaffoldStructure(Options)(in string damFile, in Options options)
     return ScaffoldStructureReader(rawScaffoldInfo);
 }
 
-alias ScaffoldPart = Algebraic!(ContigPart, GapPart);
+alias ScaffoldSegment = Algebraic!(ContigSegment, GapSegment);
 
-struct ContigPart
+struct ContigSegment
 {
     size_t globalContigId;
     size_t scaffoldId;
@@ -1479,7 +1479,7 @@ struct ContigPart
     }
 }
 
-struct GapPart
+struct GapSegment
 {
     size_t beginGlobalContigId;
     size_t endGlobalContigId;
@@ -1506,15 +1506,15 @@ private struct ScaffoldStructureReader
     alias RawScaffoldInfo = typeof("".lineSplitter);
 
     private RawScaffoldInfo rawScaffoldInfo;
-    private ContigPart lastContigPart;
-    private ScaffoldPart currentPart;
+    private ContigSegment lastContigPart;
+    private ScaffoldSegment currentPart;
     private bool _empty;
 
     this(string rawScaffoldInfo)
     {
         this.rawScaffoldInfo = rawScaffoldInfo.lineSplitter;
         // Force the first element to be a contigPart.
-        this.currentPart = GapPart();
+        this.currentPart = GapSegment();
         // Make `scaffoldId`s start at 0.
         this.lastContigPart.scaffoldId = -1UL;
 
@@ -1535,7 +1535,7 @@ private struct ScaffoldStructureReader
             return;
         }
 
-        auto nextContigPart = ContigPart(lastContigPart.globalContigId + 1);
+        auto nextContigPart = ContigSegment(lastContigPart.globalContigId + 1);
 
         // dfmt off
         rawScaffoldInfo.front.formattedRead!scaffoldInfoLineFormat(
@@ -1550,7 +1550,7 @@ private struct ScaffoldStructureReader
             nextContigPart.scaffoldId = lastContigPart.scaffoldId + 1;
         }
 
-        if (currentPart.peek!GapPart !is null
+        if (currentPart.peek!GapSegment !is null
                 || lastContigPart.scaffoldId != nextContigPart.scaffoldId)
         {
             assert(nextContigPart.header[$ - 1] == ' ');
@@ -1563,7 +1563,7 @@ private struct ScaffoldStructureReader
         else
         {
             // dfmt off
-            currentPart = GapPart(
+            currentPart = GapSegment(
                 lastContigPart.globalContigId,
                 nextContigPart.globalContigId,
                 lastContigPart.scaffoldId,
@@ -1576,7 +1576,7 @@ private struct ScaffoldStructureReader
         }
     }
 
-    @property ScaffoldPart front() const
+    @property ScaffoldSegment front() const
     {
         assert(!empty, "Attempting to fetch the front of an empty ScaffoldStructureReader");
         return currentPart;
@@ -1620,51 +1620,51 @@ EOS";
 
     // dfmt off
     assert(scaffoldStructure == [
-        ScaffoldPart(ContigPart(
+        ScaffoldSegment(ContigSegment(
             1, 0, 0, 0, 8300,
             ">reference_mod/1/0_837550 RQ=0.850",
         )),
-        ScaffoldPart(GapPart(1, 2, 0, 0, 1, 8300, 12400)),
-        ScaffoldPart(ContigPart(
+        ScaffoldSegment(GapSegment(1, 2, 0, 0, 1, 8300, 12400)),
+        ScaffoldSegment(ContigSegment(
             2, 0, 1, 12400, 20750,
             ">reference_mod/1/0_837550 RQ=0.850",
         )),
-        ScaffoldPart(GapPart(2, 3, 0, 1, 2, 20750, 29200)),
-        ScaffoldPart(ContigPart(
+        ScaffoldSegment(GapSegment(2, 3, 0, 1, 2, 20750, 29200)),
+        ScaffoldSegment(ContigSegment(
             3, 0, 2, 29200, 154900,
             ">reference_mod/1/0_837550 RQ=0.850",
         )),
-        ScaffoldPart(GapPart(3, 4, 0, 2, 3, 154900, 159900)),
-        ScaffoldPart(ContigPart(
+        ScaffoldSegment(GapSegment(3, 4, 0, 2, 3, 154900, 159900)),
+        ScaffoldSegment(ContigSegment(
             4, 0, 3, 159900, 169900,
             ">reference_mod/1/0_837550 RQ=0.850",
         )),
-        ScaffoldPart(GapPart(4, 5, 0, 3, 4, 169900, 174900)),
-        ScaffoldPart(ContigPart(
+        ScaffoldSegment(GapSegment(4, 5, 0, 3, 4, 169900, 174900)),
+        ScaffoldSegment(ContigSegment(
             5, 0, 4, 174900, 200650,
             ">reference_mod/1/0_837550 RQ=0.850",
         )),
-        ScaffoldPart(GapPart(5, 6, 0, 4, 5, 200650, 203650)),
-        ScaffoldPart(ContigPart(
+        ScaffoldSegment(GapSegment(5, 6, 0, 4, 5, 200650, 203650)),
+        ScaffoldSegment(ContigSegment(
             6, 0, 5, 203650, 216400,
             ">reference_mod/1/0_837550 RQ=0.850",
         )),
-        ScaffoldPart(GapPart(6, 7, 0, 5, 6, 216400, 218900)),
-        ScaffoldPart(ContigPart(
+        ScaffoldSegment(GapSegment(6, 7, 0, 5, 6, 216400, 218900)),
+        ScaffoldSegment(ContigSegment(
             7, 0, 6, 218900, 235150,
             ">reference_mod/1/0_837550 RQ=0.850",
         )),
-        ScaffoldPart(GapPart(7, 8, 0, 6, 7, 235150, 238750)),
-        ScaffoldPart(ContigPart(
+        ScaffoldSegment(GapSegment(7, 8, 0, 6, 7, 235150, 238750)),
+        ScaffoldSegment(ContigSegment(
             8, 0, 7, 238750, 260150,
             ">reference_mod/1/0_837550 RQ=0.850",
         )),
-        ScaffoldPart(GapPart(8, 9, 0, 7, 8, 260150, 263650)),
-        ScaffoldPart(ContigPart(
+        ScaffoldSegment(GapSegment(8, 9, 0, 7, 8, 260150, 263650)),
+        ScaffoldSegment(ContigSegment(
             9, 0, 8, 263650, 837500,
             ">reference_mod/1/0_837550 RQ=0.850",
         )),
-        ScaffoldPart(ContigPart(
+        ScaffoldSegment(ContigSegment(
             10, 1, 0, 0, 1450,
             ">reference_mod/2/0_1450 RQ=0.850",
         )),

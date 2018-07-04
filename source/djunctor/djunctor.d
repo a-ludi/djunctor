@@ -13,10 +13,10 @@ import djunctor.alignments : AlignmentChain, alignmentCoverage,
     getAlignmentRefs, getType, haveEqualIds, isExtension, isGap, isValid,
     makeJoin, PileUp, ReadAlignment, ReadAlignmentType, SeededAlignment;
 import djunctor.commandline : Options;
-import djunctor.dazzler : attachTracePoints, buildDamFile, DalignerOptions,
-    DamapperOptions, GapPart, getConsensus, getFastaEntries, getLocalAlignments,
-    getMappings, getNumContigs, getScaffoldStructure, LAdumpOptions, readMask,
-    ScaffoldPart, writeMask;
+import djunctor.dazzler : attachTracePoints, buildDamFile, ContigSegment,
+    DalignerOptions, DamapperOptions, GapSegment, getConsensus, getFastaEntries,
+    getLocalAlignments, getMappings, getNumContigs, getScaffoldStructure,
+    LAdumpOptions, readMask, ScaffoldSegment, writeMask;
 import djunctor.util.fasta : parseFastaRecord, parsePacBioHeader,
     reverseComplement;
 import djunctor.util.log;
@@ -562,7 +562,7 @@ class DJunctor
     /// A scaffold graph accumulating all planned insertions.
     ResultScaffold catHits;
     /// Scaffold structure of the reference.
-    const(ScaffoldPart)[] scaffoldStructure;
+    const(ScaffoldSegment)[] scaffoldStructure;
     /// Keep track of unused reads.
     NaturalNumberSet unusedReads;
 
@@ -833,8 +833,8 @@ class DJunctor
     {
         // dfmt off
         scaffoldStructure[]
-            .filter!(part => part.peek!GapPart !is null)
-            .map!(gapPart => gapPart.get!GapPart)
+            .filter!(part => part.peek!GapSegment !is null)
+            .map!(gapPart => gapPart.get!GapSegment)
             .map!(gapPart => getUnkownJoin(
                 gapPart.beginGlobalContigId,
                 gapPart.endGlobalContigId,
