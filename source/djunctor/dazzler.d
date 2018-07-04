@@ -139,24 +139,24 @@ AlignmentChain[] getLocalAlignments(Options)(in string dbA, in Options options)
         if (hasOption!(Options, "dalignerOptions", isOptionsList) && hasOption!(Options,
             "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
-    if (!lasFilesGenerated(dbA, options.workdir))
+    if (!lasFileGenerated(dbA, options.workdir))
     {
         dalign(dbA, options.dalignerOptions, options.workdir);
     }
 
-    return processGeneratedLasFiles(dbA, null, options);
+    return processGeneratedLasFile(dbA, null, options);
 }
 
 AlignmentChain[] getLocalAlignments(Options)(in string dbA, in string dbB, in Options options)
         if (hasOption!(Options, "dalignerOptions", isOptionsList) && hasOption!(Options,
             "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
-    if (!lasFilesGenerated(dbA, dbB, options.workdir))
+    if (!lasFileGenerated(dbA, dbB, options.workdir))
     {
         dalign(dbA, dbB, options.dalignerOptions, options.workdir);
     }
 
-    return processGeneratedLasFiles(dbA, dbB, options);
+    return processGeneratedLasFile(dbA, dbB, options);
 }
 
 void computeLocalAlignments(Options)(in string[] dbList, in Options options)
@@ -170,12 +170,12 @@ AlignmentChain[] getMappings(Options)(in string dbA, in string dbB, in Options o
         if (hasOption!(Options, "damapperOptions", isOptionsList) && hasOption!(Options,
             "ladumpOptions", isOptionsList) && hasOption!(Options, "workdir", isSomeString))
 {
-    if (!lasFilesGenerated(dbA, dbB, options.workdir))
+    if (!lasFileGenerated(dbA, dbB, options.workdir))
     {
         damapper(dbA, dbB, options.damapperOptions, options.workdir);
     }
 
-    return processGeneratedLasFiles(dbA, dbB, options);
+    return processGeneratedLasFile(dbA, dbB, options);
 }
 
 void computeMappings(Options)(in string[] dbList, in Options options)
@@ -185,22 +185,30 @@ void computeMappings(Options)(in string[] dbList, in Options options)
     damapper(dbList, options.damapperOptions, options.workdir);
 }
 
-private AlignmentChain[] processGeneratedLasFiles(Options)(in string dbA,
+private AlignmentChain[] processGeneratedLasFile(Options)(in string dbA,
         in string dbB, in Options options)
         if (hasOption!(Options, "ladumpOptions", isOptionsList)
             && hasOption!(Options, "workdir", isSomeString))
 {
-    auto lasFileList = getLasFiles(dbA, dbB, options.workdir);
+    auto lasFile = getLasFile(dbA, dbB, options.workdir);
+
+    return processLasFile(dbA, dbB, lasFile, options);
+}
+
+private AlignmentChain[] processLasFile(Options)(in string dbA, in string dbB,
+        in string lasFile, in Options options)
+        if (hasOption!(Options, "ladumpOptions", isOptionsList)
+            && hasOption!(Options, "workdir", isSomeString))
+{
     auto dbFiles = tuple(dbA, dbB);
 
     // dfmt off
-    auto alignmentChains =
-        lasFileList
-            .map!(lasFile => ladump(lasFile, dbFiles.expand,
-                    options.ladumpOptions, options.workdir))
-            .map!(lasDump => readAlignmentList(lasDump))
-            .joiner
-            .array;
+    auto alignmentChains = readAlignmentList(ladump(
+        lasFile,
+        dbFiles.expand,
+        options.ladumpOptions,
+        options.workdir,
+    )).array;
     // dfmt on
     alignmentChains.sort!("a < b", SwapStrategy.stable);
 
@@ -479,19 +487,19 @@ void attachTracePoints(Options)(AlignmentChain*[] alignmentChains, in string dbA
         if (hasOption!(Options, "workdir", isSomeString)
             && hasOption!(Options, "ladumpTraceOptions", isOptionsList))
 {
-    auto lasFileList = getLasFiles(dbA, dbB, options.workdir);
+    auto lasFile = getLasFile(dbA, dbB, options.workdir);
     // NOTE: dump only for matching A reads; better would be for matching
     //       B reads but that is not possible with `LAdump`.
     auto aReadIds = alignmentChains.map!"a.contigA.id".uniq.array;
 
     // dfmt off
-    auto tracePointDumps =
-        lasFileList
-            .map!(lasFile => ladump(lasFile, dbA, dbB, aReadIds,
-                    options.ladumpTraceOptions, options.workdir))
-            .map!(lasDump => readTracePointList(lasDump))
-            .joiner
-            .array;
+    auto tracePointDumps = readTracePointList(ladump(
+        lasFile,
+        dbA,
+        dbB,
+        aReadIds,
+        options.ladumpTraceOptions, options.workdir,
+    )).array;
     // dfmt on
     tracePointDumps.sort!("a < b", SwapStrategy.stable);
     assert(isSorted!"*a < *b"(alignmentChains), "alignmentChains must be sorted");
@@ -1247,7 +1255,7 @@ string getConsensus(Options)(in string dbFile, in size_t readId, in Options opti
 
     auto readIdx = readId - 1;
     // dfmt off
-    auto consensusDbs = getConsensus(dbFile, const(ModifiedOptions)(
+    auto consensusDb = getConsensus(dbFile, const(ModifiedOptions)(
         options.daccordOptions ~ format!"%s%d,%d"(cast(string) DaccordOptions.readInterval, readIdx, readIdx),
         options.dalignerOptions,
         options.dbsplitOptions,
@@ -1255,18 +1263,16 @@ string getConsensus(Options)(in string dbFile, in size_t readId, in Options opti
     ));
     // dfmt on
 
-    if (consensusDbs.length == 0)
+    if (consensusDb is null)
     {
         throw new Exception("empty consensus");
     }
 
-    assert(consensusDbs.length == 1, "too many consensus DBs");
-
-    return consensusDbs[0];
+    return consensusDb;
 }
 
-///
-string[] getConsensus(Options)(in string dbFile, in Options options)
+/// ditto
+string getConsensus(Options)(in string dbFile, in Options options)
         if (hasOption!(Options, "daccordOptions", isOptionsList)
             && hasOption!(Options, "dalignerOptions",
             isOptionsList) && hasOption!(Options, "dbsplitOptions",
@@ -1275,16 +1281,17 @@ string[] getConsensus(Options)(in string dbFile, in Options options)
     dalign(dbFile, options.dalignerOptions, options.workdir);
     computeErrorProfile(dbFile, options);
 
-    // dfmt off
-    auto consensusDbs = getLasFiles(dbFile, options.workdir)
-        .filter!(lasFile => !lasEmpty(lasFile, dbFile, null, options.workdir))
-        .map!(lasFile => daccord(dbFile, lasFile, options.daccordOptions, options.workdir))
-        .array;
-    // dfmt on
-    foreach (consensusDb; consensusDbs)
-        dbsplit(consensusDb, options.dbsplitOptions, options.workdir);
+    auto lasFile = getLasFile(dbFile, options.workdir);
 
-    return consensusDbs;
+    if (lasEmpty(lasFile, dbFile, null, options.workdir))
+    {
+        return null;
+    }
+
+    auto consensusDb = daccord(dbFile, lasFile, options.daccordOptions, options.workdir);
+    dbsplit(consensusDb, options.dbsplitOptions, options.workdir);
+
+    return consensusDb;
 }
 
 private void computeErrorProfile(Options)(in string dbFile, in Options options)
@@ -1302,15 +1309,13 @@ private void computeErrorProfile(Options)(in string dbFile, in Options options)
         ))
         .chain(only(DaccordOptions.computeErrorProfileOnly))
         .array;
-    auto lasFiles = getLasFiles(dbFile, options.workdir)
-        .filter!(lasFile => !lasEmpty(lasFile, dbFile, null, options.workdir));
     // dfmt on
+    auto lasFile = getLasFile(dbFile, options.workdir);
+    enforce!DazzlerCommandException(!lasEmpty(lasFile, dbFile, null,
+            options.workdir), "empty pre-consensus alignment");
 
-    foreach (lasFile; lasFiles)
-    {
-        // Produce error profile
-        silentDaccord(dbFile, lasFile, eProfOptions, options.workdir);
-    }
+    // Produce error profile
+    silentDaccord(dbFile, lasFile, eProfOptions, options.workdir);
 }
 
 unittest
@@ -1355,9 +1360,9 @@ unittest
         rmdirRecurse(tmpDir);
 
     string dbName = buildDamFile(fastaRecords[], options);
-    string[] consensusDbs = getConsensus(dbName, options);
-    assert(consensusDbs.length >= 1);
-    auto consensusFasta = getFastaEntries(consensusDbs[0], cast(size_t[])[], options);
+    string consensusDb = getConsensus(dbName, options);
+    assert(consensusDb !is null);
+    auto consensusFasta = getFastaEntries(consensusDb, cast(size_t[])[], options);
     auto expectedSequence = fastaRecords[$ - 1].lineSplitter.drop(1).joiner.array;
     auto consensusSequence = consensusFasta.front.lineSplitter.drop(1).joiner.array;
 
@@ -1365,72 +1370,30 @@ unittest
             format!"expected %s but got %s"(expectedSequence, consensusSequence));
 }
 
-string[] getLasFiles(in string dbA, in string baseDirectory)
+string getLasFile(in string dbA, in string baseDirectory)
 {
-    return getLasFiles(dbA, null, baseDirectory);
+    return getLasFile(dbA, null, baseDirectory);
 }
 
-string[] getLasFiles(in string dbA, in string dbB, in string baseDirectory)
+string getLasFile(in string dbA, in string dbB, in string baseDirectory)
 {
-    import std.algorithm : max;
-
-    static struct InferredParams
-    {
-        size_t numBlocks;
-        string directory;
-        string fileStem;
-
-        this(string dbFile)
-        {
-            if (dbFile != null)
-            {
-                this.numBlocks = getNumBlocks(dbFile);
-                this.directory = dbFile.dirName;
-                this.fileStem = dbFile.baseName.stripExtension;
-            }
-        }
-
-        string fileNamePart(in size_t blockIdx = 0)
-        {
-            assert(blockIdx <= this.numBlocks);
-            if (this.numBlocks == 1)
-                return this.fileStem;
-            else
-                return format!"%s.%d"(this.fileStem, blockIdx + 1);
-        }
-    }
+    alias dbName = dbFile => dbFile.baseName.stripExtension;
 
     immutable fileTemplate = "%s/%s.%s.las";
-    auto aOptions = InferredParams(dbA);
-    auto bOptions = dbB == null ? aOptions : InferredParams(dbB);
-    size_t numLasFiles = aOptions.numBlocks * max(1, bOptions.numBlocks);
-    string[] fileList;
+    auto dbAName = dbName(dbA);
+    auto dbBName = dbB is null ? dbAName : dbName(dbB);
 
-    fileList.length = numLasFiles;
-    foreach (size_t i; 0 .. aOptions.numBlocks)
-    {
-        foreach (size_t j; 0 .. bOptions.numBlocks)
-        {
-            fileList[i * bOptions.numBlocks + j] = format!fileTemplate(baseDirectory,
-                    aOptions.fileNamePart(i), bOptions.fileNamePart(j));
-        }
-    }
-
-    return fileList;
+    return format!fileTemplate(baseDirectory, dbAName, dbBName);
 }
 
-bool lasFilesGenerated(in string dbA, in string baseDirectory)
+bool lasFileGenerated(in string dbA, in string baseDirectory)
 {
-    return lasFilesGenerated(dbA, null, baseDirectory);
+    return lasFileGenerated(dbA, null, baseDirectory);
 }
 
-bool lasFilesGenerated(in string dbA, in string dbB, in string baseDirectory)
+bool lasFileGenerated(in string dbA, in string dbB, in string baseDirectory)
 {
-    // dfmt off
-    return getLasFiles(dbA, dbB, baseDirectory)
-        .map!(lasFile => lasFile.exists)
-        .all;
-    // dfmt on
+    return getLasFile(dbA, dbB, baseDirectory).exists;
 }
 
 size_t getNumContigs(Options)(in string damFile, in Options options)
