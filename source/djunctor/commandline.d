@@ -10,8 +10,8 @@ module djunctor.commandline;
 
 import darg : ArgParseError, ArgParseHelp, Argument, Help, helpString, Option,
     OptionFlag, parseArgs, usageString;
-import djunctor.dazzler : provideDamFileInWorkdir, provideLasFileInWorkdir, ProvideMethod,
-    DaccordOptions, DamapperOptions, LAdumpOptions;
+import djunctor.dazzler : provideDamFileInWorkdir, provideLasFileInWorkdir,
+    ProvideMethod, DaccordOptions, DamapperOptions, LAdumpOptions;
 import djunctor.util.scaffold : JoinPolicy;
 import djunctor.util.log;
 import std.conv;
@@ -195,7 +195,7 @@ struct Options
 
     @Option("extend-contigs")
     @Help("if given extend contigs even if no spanning reads can be found")
-    bool shouldExtendContigs = false;
+    OptionFlag shouldExtendContigs;
 
     @Option("daligner-options")
     @Help("list of options to pass to `daligner`")
