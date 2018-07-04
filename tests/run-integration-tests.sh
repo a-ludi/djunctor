@@ -497,6 +497,13 @@ function align_classified_reads_against_reference_mod()
     fi
 }
 
+function get_num_contigs()
+{
+    local DB="$1"
+
+    DBdump "$DB" | sed -nr '/^\+\s+R\s+([0-9]+$)/ { s/[^0-9]//g; p }'
+}
+
 #-----------------------------------------------------------------------------
 # Test Cases
 #-----------------------------------------------------------------------------
@@ -629,8 +636,7 @@ function test_pile_ups_contain_enough_valid_read()
 
 function test_result_contigs_properly_align_to_reference()
 {
-    local NUM_RESULT_CONTIGS="$(json_log 'numReferenceContigs' | \
-        jq --raw-output 'select(has("numReferenceContigs")) | .numReferenceContigs')"
+    local NUM_RESULT_CONTIGS="$(get_num_contigs "$RESULT_DB")"
 
     for (( I = 1; I <= NUM_RESULT_CONTIGS; I++ ));
     do
