@@ -261,9 +261,19 @@ function do_tests()
     do
         if $test_case > "$TEST_CASE_LOG";
         then
-            echo -n "."
+            if $VERBOSE;
+            then
+                echo "$test_case: passed"
+            else
+                echo -n "."
+            fi
         else
-            echo -n "f"
+            if $VERBOSE;
+            then
+                echo "$test_case: FAILED"
+            else
+                echo -n "f"
+            fi
             FAILURES+=("$test_case: $(cat "$TEST_CASE_LOG")")
         fi
     done
