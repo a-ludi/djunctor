@@ -14,7 +14,7 @@ import djunctor.util.fasta : parseFastaRecord;
 import djunctor.util.log;
 import djunctor.util.range : arrayChunks, takeExactly;
 import djunctor.util.tempfile : mkstemp;
-import std.algorithm : all, canFind, endsWith, equal, filter, isSorted, joiner,
+import std.algorithm : all, cache, canFind, endsWith, equal, filter, isSorted, joiner,
     map, min, sort, splitter, startsWith, SwapStrategy, uniq;
 import std.array : appender, Appender, array, uninitializedArray;
 import std.conv : to;
@@ -1049,7 +1049,6 @@ private auto readDbDump(S, Range)(S dbDump, Range recordNumbers, in size_t lineL
     immutable recordFormat = "R %d;H %d %s;L %d %d %d;S %d %s";
     immutable numRecordLines = recordFormat.count(subrecordSeparator) + 1;
 
-    auto sortedRecordNumbers = recordNumbers.sort;
     /// Build chunks of numRecordLines lines.
     alias byRecordSplitter = dbDump => dbDump.drop(6).arrayChunks(numRecordLines);
     /// Parse chunks of numRecordLines lines into FASTA format.
@@ -1080,9 +1079,10 @@ private auto readDbDump(S, Range)(S dbDump, Range recordNumbers, in size_t lineL
         // dfmt on
         assert(numMatches == 8, format!"%d matches in chunk: `%s`"(numMatches, joinedLines.array));
 
+        bool isSkipping = recordNumbers.length > 0 && !recordNumbers.canFind(recordNumber);
         // dfmt off
         debug logJsonDebug(
-            "isSkipping", sortedRecordNumbers.length > 0 && !sortedRecordNumbers.contains(recordNumber),
+            "isSkipping", isSkipping,
             "wantedRecordNumbers", recordNumbers.toJson,
             "recordNumber", recordNumber,
             "headerLine", headerLine,
@@ -1090,7 +1090,7 @@ private auto readDbDump(S, Range)(S dbDump, Range recordNumbers, in size_t lineL
         // dfmt on
 
         // skip unwanted records
-        if (sortedRecordNumbers.length > 0 && !sortedRecordNumbers.contains(recordNumber))
+        if (isSkipping)
             return null;
 
         auto fastaData = appender!string;
@@ -1104,7 +1104,7 @@ private auto readDbDump(S, Range)(S dbDump, Range recordNumbers, in size_t lineL
 
     return byRecordSplitter(dbDump).map!parseRecord
         .map!"a()"
-        .filter!`!(a is null)`;
+        .cache;
 }
 
 unittest
