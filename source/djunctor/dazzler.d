@@ -79,28 +79,42 @@ enum ProvideMethod
 */
 string provideDamFileInWorkdir(in string dbFile, ProvideMethod provideMethod, in string workdir)
 {
-    import std.file : copy, symlink;
-    import std.range : chain, only;
-
-    alias inWorkdir = anyDbFile => buildPath(workdir, anyDbFile.baseName);
-    auto allDbFiles = chain(only(dbFile), getHiddenDbFiles(dbFile));
-
-    foreach (anyDbFile; allDbFiles)
+    foreach (hiddenDbFile; getHiddenDbFiles(dbFile))
     {
-        switch (provideMethod)
-        {
-        case ProvideMethod.copy:
-            copy(anyDbFile, inWorkdir(anyDbFile));
-            break;
-        case ProvideMethod.symlink:
-            symlink(anyDbFile, inWorkdir(anyDbFile));
-            break;
-        default:
-            assert(0);
-        }
+        provideFileInWorkdir(hiddenDbFile, provideMethod, workdir);
     }
 
-    return inWorkdir(dbFile);
+    return provideFileInWorkdir(dbFile, provideMethod, workdir);
+}
+
+/**
+    Provide lasFile in `workdir`.
+
+    Returns: Path of the lasFile in `workdir`.
+*/
+string provideLasFileInWorkdir(in string lasFile, ProvideMethod provideMethod, in string workdir)
+{
+    return provideFileInWorkdir(lasFile, provideMethod, workdir);
+}
+
+/// Provide file in `workdir`.
+private string provideFileInWorkdir(in string file, ProvideMethod provideMethod, in string workdir)
+{
+    import std.file : copy, symlink;
+
+    auto fileInWorkdir = buildPath(workdir, file.baseName);
+
+    final switch (provideMethod)
+    {
+    case ProvideMethod.copy:
+        copy(file, fileInWorkdir);
+        break;
+    case ProvideMethod.symlink:
+        symlink(file, fileInWorkdir);
+        break;
+    }
+
+    return fileInWorkdir;
 }
 
 /// Build a new .dam file by using the given subset of reads in inDbFile.
