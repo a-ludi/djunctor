@@ -10,7 +10,7 @@ module djunctor.commandline;
 
 import darg : ArgParseError, ArgParseHelp, Argument, Help, helpString, Option,
     OptionFlag, parseArgs, usageString;
-import djunctor.dazzler : provideDamFileInWorkdir, ProvideMethod,
+import djunctor.dazzler : provideDamFileInWorkdir, provideLasFileInWorkdir, ProvideMethod,
     DaccordOptions, DamapperOptions, LAdumpOptions;
 import djunctor.util.scaffold : JoinPolicy;
 import djunctor.util.log;
@@ -92,6 +92,8 @@ Options processOptions(string[] args)
     createWorkDir(options);
     options.refDb = provideDamFileInWorkdir(options.refFile, options.provideMethod, options.workdir);
     options.readsDb = getReadsDb(options);
+    provideLasFileInWorkdir(options.selfAlignmentFile, options.provideMethod, options.workdir);
+    provideLasFileInWorkdir(options.refVsReadsAlignmentFile, options.provideMethod, options.workdir);
 
     return options;
 }
@@ -116,8 +118,25 @@ struct Options
     string readsFile;
     string readsDb;
 
+    @Argument("SELF-ALIGNMENT")
+    @Help(q"{
+        local alignments of the reference against itself in form of a .las
+        file as produced by `daligner`
+    }")
+    string selfAlignmentFile;
+
+    @Argument("REF-VS-READS-ALIGNMENT")
+    @Help(q"{
+        alignments chains of the reads against the reference in form of a .las
+        file as produced by `damapper`
+    }")
+    string refVsReadsAlignmentFile;
+
     @Option("reads")
-    @Help("restrict the set of reads to this list of IDs given in a file as produced by --unused-reads")
+    @Help(q"{
+        restrict the set of reads to this list of IDs given in a file as
+        produced by --unused-reads
+    }")
     string readsListFile = null;
     @Option()
     size_t[] readsList;
@@ -147,12 +166,12 @@ struct Options
     size_t minExtensionLength = 100;
 
     @Option("out-mask")
-    @Help(q"<
+    @Help(q"{
         write inferred repeat mask into a Dazzler mask. Given a path-like
         string without extension: the `dirname` designates the directory to
         write the mask to. The mask comprises two hidden files
         `.[REFERENCE].[MASK].{anno,data}`.
-    >")
+    }")
     string outMask = null;
 
     @Option("in-mask")
@@ -164,14 +183,14 @@ struct Options
     string unusedReadsList = null;
 
     @Option("join-policy")
-    @Help(q"<
+    @Help(q"{
         allow only joins (gap filling) in the given mode:
         `scaffoldGaps` (only join gaps inside of scaffolds –
         marked by `n`s in FASTA),
         `scaffolds` (join gaps inside of scaffolds and try to join scaffolds),
         `contigs` (break input into contigs and re-scaffold everything;
         maintains scaffold gaps where new scaffolds are consistent)
-    >")
+    }")
     JoinPolicy joinPolicy = JoinPolicy.scaffoldGaps;
 
     @Option("extend-contigs")

@@ -13,6 +13,8 @@ TEST_DATA_ARCHIVE="integration-tests.tar.xz"
 TEST_DATA_READS="reads"
 TEST_DATA_REF="reference"
 TEST_DATA_MODREF="reference_mod"
+TEST_DATA_REF_VS_REF="reference_mod.reference_mod.las"
+TEST_DATA_REF_VS_READS="reference_mod.reads.las"
 TEST_DATA_OUT_MASK="djunctor_repeat"
 GDB_INIT_SCRIPT="gdbinit"
 DJUNCTOR_OPTS=(
@@ -197,6 +199,8 @@ function set_test_data_paths()
     TEST_DATA_READS="$WORKDIR/$TEST_DATA_READS"
     TEST_DATA_REF="$WORKDIR/$TEST_DATA_REF"
     TEST_DATA_MODREF="$WORKDIR/$TEST_DATA_MODREF"
+    TEST_DATA_REF_VS_REF="$WORKDIR/$TEST_DATA_REF_VS_REF"
+    TEST_DATA_REF_VS_READS="$WORKDIR/$TEST_DATA_REF_VS_READS"
     TEST_DATA_OUT_MASK="$WORKDIR/$TEST_DATA_OUT_MASK"
 }
 
@@ -205,6 +209,8 @@ function run_djunctor()
     DJUNCTOR_OPTS+=("--out-mask" "$TEST_DATA_OUT_MASK")
     DJUNCTOR_OPTS+=("$TEST_DATA_MODREF.dam")
     DJUNCTOR_OPTS+=("$TEST_DATA_READS.dam")
+    DJUNCTOR_OPTS+=("$TEST_DATA_REF_VS_REF")
+    DJUNCTOR_OPTS+=("$TEST_DATA_REF_VS_READS")
 
     if $RUN_GDB;
     then
