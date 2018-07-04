@@ -708,6 +708,20 @@ Scaffold!T enforceJoinPolicy(T)(Scaffold!T scaffold, in JoinPolicy joinPolicy)
     return scaffold;
 }
 
+/// Enforce joinPolicy in scaffold.
+Scaffold!T removeExtensions(T)(Scaffold!T scaffold)
+{
+    auto extensionJoins = scaffold.edges.filter!isExtension;
+
+    foreach (extensionJoin; extensionJoins)
+    {
+        extensionJoin.payload = T.init;
+        scaffold.add!(scaffold.ConflictStrategy.replace)(extensionJoin);
+    }
+
+    return removeNoneJoins!T(scaffold);
+}
+
 /// Remove marked edges from the graph. This always keeps the default edges.
 Scaffold!T removeNoneJoins(T)(Scaffold!T scaffold)
 {

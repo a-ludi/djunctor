@@ -174,6 +174,10 @@ struct Options
     >")
     JoinPolicy joinPolicy = JoinPolicy.scaffoldGaps;
 
+    @Option("extend-contigs")
+    @Help("if given extend contigs even if no spanning reads can be found")
+    bool shouldExtendContigs = false;
+
     @Option("daligner-options")
     @Help("list of options to pass to `daligner`")
     string[] dalignerOptions = [];

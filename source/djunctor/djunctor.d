@@ -22,13 +22,13 @@ import djunctor.util.fasta : parseFastaRecord, parsePacBioHeader,
 import djunctor.util.log;
 import djunctor.util.math : ceil, floor, NaturalNumberSet;
 import djunctor.util.region : empty, min, Region, sup;
-import djunctor.util.scaffold : ContigNode, contigStarts, enforceJoinPolicy,
-    getDefaultJoin, getUnkownJoin, initScaffold, isAntiParallel, isDefault,
-    isExtension, isFrontExtension, isGap, isUnkown, isValid, linearWalk,
-    normalizeUnkownJoins, Scaffold;
+import djunctor.util.scaffold : ContigNode, ContigPart, contigStarts,
+    enforceJoinPolicy, getDefaultJoin, getUnkownJoin, initScaffold,
+    isAntiParallel, isDefault, isExtension, isFrontExtension, isGap, isUnkown,
+    isValid, linearWalk, normalizeUnkownJoins, removeExtensions, Scaffold;
 import dstats.distrib : invPoissonCDF;
-import std.algorithm : all, chunkBy, each, equal, filter, find, fold, isSorted,
-    joiner, map, max, maxIndex, min, setDifference, sort, sum, swap,
+import std.algorithm : all, canFind, chunkBy, each, equal, filter, find, fold,
+    isSorted, joiner, map, max, maxIndex, min, setDifference, sort, sum, swap,
     SwapStrategy, uniq;
 import std.array : appender, array, join, minimallyInitializedArray;
 import std.conv;
@@ -485,12 +485,18 @@ alias SpliceSite = Tuple!(
 /// This characterizes an insertion.
 alias InsertionInfo = Tuple!(
     string, "sequenceDb",
+    size_t, "contigLength",
     SpliceSite[], "spliceSites",
 );
 // dfmt on
 alias ResultScaffold = Scaffold!InsertionInfo;
 /// This characterizes an insertion.
 alias Insertion = ResultScaffold.Edge;
+
+bool isOutputGap(in Insertion insertion)
+{
+    return insertion.payload.sequenceDb is null;
+}
 
 Insertion concatenateSpliceSites(Insertion existingJoin, Insertion newJoin)
 {
@@ -501,6 +507,53 @@ Insertion concatenateSpliceSites(Insertion existingJoin, Insertion newJoin)
     existingJoin.payload.spliceSites ~= newJoin.payload.spliceSites;
 
     return existingJoin;
+}
+
+/// Remove conti cropping where no new sequence is to be inserted.
+ResultScaffold fixContigCropping(ResultScaffold scaffold)
+{
+    alias replace = ResultScaffold.ConflictStrategy.replace;
+    auto contigJoins = scaffold.edges.filter!isDefault;
+
+    foreach (contigJoin; contigJoins)
+    {
+        bool insertionUpdated;
+
+        foreach (contigNode; [contigJoin.start, contigJoin.end])
+        {
+            // dfmt off
+            auto shouldInsertNewSequence = scaffold
+                .incidentEdges(contigNode)
+                .canFind!(insertion => !insertion.isOutputGap && (insertion.isGap || insertion.isExtension));
+            // dfmt on
+
+            if (!shouldInsertNewSequence)
+            {
+                auto contigLength = contigJoin.payload.contigLength;
+                // dfmt off
+                auto newSpliceSites = contigJoin
+                    .payload
+                    .spliceSites
+                    .filter!(spliceSite => contigNode.contigPart == ContigPart.begin
+                        ? !(spliceSite.croppingRefPosition.value < contigLength / 2)
+                        : !(spliceSite.croppingRefPosition.value >= contigLength / 2))
+                    .array;
+                // dfmt on
+                if (newSpliceSites.length < contigJoin.payload.spliceSites.length)
+                {
+                    contigJoin.payload.spliceSites = newSpliceSites;
+                    insertionUpdated = true;
+                }
+            }
+        }
+
+        if (insertionUpdated)
+        {
+            scaffold.add!replace(contigJoin);
+        }
+    }
+
+    return scaffold;
 }
 
 auto getFastaRecord(in string sequenceDb, in size_t sequenceId, in Options options)
@@ -586,14 +639,17 @@ class DJunctor
         }
 
         // dfmt off
-        logJsonDebug("catHits", [
-            "nodes": catHits.nodes.toJson,
-            "joins": catHits.edges.map!(join => [
-                "start": join.start.toJson,
-                "end": join.end.toJson,
-                "payload": join.payload.toJson,
-            ]).array.toJson,
-        ]);
+        logJsonDebug(
+            "catHits", [
+                "nodes": catHits.nodes.toJson,
+                "joins": catHits.edges.map!(join => [
+                    "start": join.start.toJson,
+                    "end": join.end.toJson,
+                    "payload": join.payload.toJson,
+                ]).array.toJson,
+            ],
+            "state", "raw",
+        );
         // dfmt on
 
         writeNewAssembly();
@@ -622,6 +678,7 @@ class DJunctor
         numReferenceContigs = getNumContigs(options.refDb, options);
         numReads = getNumContigs(options.readsDb, options);
         scaffoldStructure = getScaffoldStructure(options.refDb, options).array;
+        auto contigLengths = getContigLengths();
         // dfmt off
         logJsonDiagnostic(
             "numReferenceContigs", numReferenceContigs,
@@ -656,7 +713,7 @@ class DJunctor
 
         // dfmt off
         catHits = initScaffold!(
-            (contigId) => InsertionInfo(options.refDb, []),
+            (contigId) => InsertionInfo(options.refDb, contigLengths[contigId - 1], []),
             InsertionInfo
         )(numReferenceContigs);
         // dfmt on
@@ -668,6 +725,17 @@ class DJunctor
             unusedReads.add(readId);
         }
         logJsonDiagnostic("state", "exit", "function", "djunctor.init");
+    }
+
+    protected size_t[] getContigLengths()
+    {
+        // dfmt off
+        return scaffoldStructure[]
+            .filter!(part => part.peek!ContigSegment !is null)
+            .map!(contigPart => contigPart.get!ContigSegment)
+            .map!(contigPart => contigPart.end - contigPart.begin + 0)
+            .array;
+        // dfmt on
     }
 
     protected void assessRepeatStructure()
@@ -840,6 +908,7 @@ class DJunctor
                 gapPart.endGlobalContigId,
                 InsertionInfo(
                     null,
+                    gapPart.end - gapPart.begin,
                     [
                         SpliceSite(ReferencePoint(
                             gapPart.beginGlobalContigId,
@@ -933,6 +1002,7 @@ class DJunctor
         // dfmt off
         insertion.payload = InsertionInfo(
             consensusDb,
+            0,
             zip(referencePositions, referenceRead[].map!"a.complement")
                 .map!(spliceSite => cast(SpliceSite) spliceSite)
                 .array,
@@ -949,7 +1019,8 @@ class DJunctor
             auto contigEdge = getDefaultJoin!InsertionInfo(referencePosition.contigId);
             // dfmt off
             contigEdge.payload = InsertionInfo(
-                options.refDb,
+                null,
+                0,
                 [SpliceSite(referencePosition, AlignmentChain.Complement.no)],
             );
             // dfmt on
@@ -1061,16 +1132,51 @@ class DJunctor
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.writeNewAssembly");
 
+        if (!options.shouldExtendContigs)
+        {
+            catHits = catHits.removeExtensions!InsertionInfo();
+        }
         // dfmt off
         catHits = catHits
             .enforceJoinPolicy!InsertionInfo(options.joinPolicy)
-            .normalizeUnkownJoins!InsertionInfo();
+            .normalizeUnkownJoins!InsertionInfo()
+            .fixContigCropping();
+        // dfmt on
+
+        // dfmt off
+        logJsonDebug(
+            "catHits", [
+                "nodes": catHits.nodes.toJson,
+                "joins": catHits.edges.map!(join => [
+                    "start": join.start.toJson,
+                    "end": join.end.toJson,
+                    "payload": join.payload.toJson,
+                ]).array.toJson,
+            ],
+            "state", "finished",
+        );
         // dfmt on
 
         foreach (startNode; contigStarts!InsertionInfo(catHits))
         {
             writeNewContig(startNode);
         }
+
+        // dfmt off
+        debug logJsonDebug(
+            "insertionWalks", contigStarts!InsertionInfo(catHits)
+                .map!(startNode => linearWalk!InsertionInfo(catHits, startNode)
+                    .map!(join => [
+                        "start": join.start.toJson,
+                        "end": join.end.toJson,
+                        "payload": join.payload.toJson,
+                    ])
+                    .array
+                )
+                .array
+                .toJson
+        );
+        // dfmt on
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.writeNewAssembly");
     }
@@ -1107,7 +1213,7 @@ class DJunctor
         assert(insertion.isValid, "invalid insertion");
 
         auto isContig = insertion.isDefault;
-        auto isUnkownSequence = insertion.isUnkown;
+        auto isOutputGap = insertion.isOutputGap;
         auto sequenceDb = insertion.payload.sequenceDb;
         auto sequenceId = isContig ? begin.contigId : 1;
         auto fastaRecord = getFastaRecord(sequenceDb, sequenceId, options);
@@ -1116,13 +1222,12 @@ class DJunctor
         bool localComplement = false;
         alias Sequence = typeof(fastaRecord[].array);
         Sequence sequence;
+        auto contigLength = insertion.payload.contigLength;
         size_t contigSpliceStart;
         size_t contigSpliceEnd;
 
         if (isContig)
         {
-            auto contigLength = fastaRecord.length;
-
             switch (spliceSites.length)
             {
             case 0:
@@ -1163,13 +1268,11 @@ class DJunctor
             sequence = fastaRecord[contigSpliceStart .. contigSpliceEnd].array;
             assert(globalComplement != (begin < insertion.target(begin)));
         }
-        else if (isUnkownSequence)
+        else if (isOutputGap)
         {
             assert(spliceSites.length == 2);
-            auto sequenceLength = spliceSites[1].croppingRefPosition.value
-                - spliceSites[0].croppingRefPosition.value;
 
-            sequence = (cast(dchar) 'n').repeat.take(sequenceLength).array;
+            sequence = (cast(dchar) 'n').repeat.take(contigLength).array;
         }
         else
         {
