@@ -9,9 +9,9 @@
 module djunctor.djunctor;
 
 import djunctor.alignments : AlignmentChain, alignmentCoverage,
-    buildPileUpsFromReadAlignments = buildPileUps, getAlignmentChainRefs,
-    getType, haveEqualIds, isExtension, isGap, isValid, makeJoin, PileUp,
-    ReadAlignment, ReadAlignmentType;
+    AlignmentLocationSeed, buildPileUpsFromReadAlignments = buildPileUps,
+    getAlignmentRefs, getType, haveEqualIds, isExtension, isGap, isValid,
+    makeJoin, PileUp, ReadAlignment, ReadAlignmentType, SeededAlignment;
 import djunctor.commandline : Options;
 import djunctor.dazzler : attachTracePoints, buildDamFile, DalignerOptions,
     DamapperOptions, GapPart, getConsensus, getFastaEntries, getLocalAlignments,
@@ -93,7 +93,10 @@ private ReferencePoint[] getCroppingRefPositions(PileUp pileUp,
     // dfmt off
     debug logJsonDebug(
         "alignmentsByContig", alignmentsByContig.toJson,
-        "pileUp", pileUp.toJson,
+        "pileUp", [
+            "type": Json(pileUp.getType.to!string),
+            "readAlignments": pileUp.map!"a[]".array.toJson,
+        ],
         "cropPos", cropPos.toJson,
     );
     // dfmt on
@@ -102,7 +105,7 @@ private ReferencePoint[] getCroppingRefPositions(PileUp pileUp,
 }
 
 /// Sort alignment chains of pileUp into groups with the same `contigA.id`.
-private const(AlignmentChain)[][] splitAlignmentsByContigA(PileUp pileUp)
+private SeededAlignment[][] splitAlignmentsByContigA(PileUp pileUp)
 {
     if (pileUp.length == 0)
     {
@@ -121,8 +124,6 @@ private const(AlignmentChain)[][] splitAlignmentsByContigA(PileUp pileUp)
     // dfmt off
     return alignmentsByContig
         .filter!"!a.empty"
-        .map!(acsByContig => acsByContig
-            .map!(ac => cast(const(typeof(ac))) ac))
         .map!array
         .array;
     // dfmt on
@@ -130,7 +131,7 @@ private const(AlignmentChain)[][] splitAlignmentsByContigA(PileUp pileUp)
 
 /// Returns a common trace points wrt. contigA that is not in mask and is on
 /// the relevant half of the contig.
-private long getCommonTracePoint(in AlignmentChain[] alignmentChains,
+private long getCommonTracePoint(in SeededAlignment[] alignments,
         in ReferenceMask mask, in size_t tracePointDistance)
 {
     static long getCommonTracePoint(R)(R tracePointCandidates, ReferenceMask allowedTracePointRegion) pure
@@ -140,18 +141,27 @@ private long getCommonTracePoint(in AlignmentChain[] alignmentChains,
         return commonTracePoints.empty ? -1 : commonTracePoints.front.value.to!long;
     }
 
-    auto contigA = alignmentChains[0].contigA;
-    auto alignmentType = ReadAlignment(alignmentChains[0]).type;
-    assert(alignmentType != ReadAlignmentType.gap);
+    auto contigA = alignments[0].contigA;
+    auto locationSeed = alignments[0].seed;
     // dfmt off
-    auto commonAlignmentRegion = alignmentChains
+    auto commonAlignmentRegion = alignments
         .map!getRegion
         .fold!"a & b";
-    auto relevantContigHalf = alignmentType == ReadAlignmentType.front
+    auto relevantContigHalf = locationSeed == AlignmentLocationSeed.front
         ? ReferenceMask(contigA.id, 0, contigA.length / 2)
         : ReferenceMask(contigA.id, contigA.length / 2, contigA.length);
     // dfmt on
     auto allowedTracePointRegion = (relevantContigHalf & commonAlignmentRegion) - mask;
+
+    assert(alignments.all!(a => a.contigA == contigA && a.seed == locationSeed));
+    // dfmt off
+    debug logJsonDebug(
+        "alignments", alignments.toJson,
+        "commonAlignmentRegion", commonAlignmentRegion.toJson,
+        "relevantContigHalf", relevantContigHalf.toJson,
+        "allowedTracePointRegion", allowedTracePointRegion.toJson,
+    );
+    // dfmt on
 
     if (allowedTracePointRegion.empty)
     {
@@ -166,7 +176,7 @@ private long getCommonTracePoint(in AlignmentChain[] alignmentChains,
     // dfmt on
 
     // dfmt off
-    return alignmentType == ReadAlignmentType.front
+    return locationSeed == AlignmentLocationSeed.front
         ? getCommonTracePoint(tracePointCandidates.retro, allowedTracePointRegion)
         : getCommonTracePoint(tracePointCandidates, allowedTracePointRegion);
     // dfmt on
@@ -178,7 +188,7 @@ unittest
     immutable tracePointDistance = 5UL;
 
     size_t readId = 0;
-    AlignmentChain getDummyRead(size_t begin, size_t end)
+    SeededAlignment getDummyRead(size_t begin, size_t end)
     {
         immutable referenceLength = 25;
         immutable extensionLength = 5;
@@ -187,7 +197,7 @@ unittest
         with (AlignmentChain) with (LocalAlignment)
             {
                 // dfmt off
-                return AlignmentChain(
+                return SeededAlignment.from(AlignmentChain(
                     readId,
                     Contig(1, 25),
                     Contig(1, readLength),
@@ -198,7 +208,7 @@ unittest
                             ? Locus(extensionLength, readLength)
                             : Locus(0, readLength - extensionLength),
                     )],
-                );
+                )).front;
                 // dfmt on
             }
     }
@@ -258,15 +268,14 @@ unittest
     assert(getCommonTracePoint(frontExtensions, mask3, tracePointDistance) == -1);
 }
 
-ReadInterval getCroppingSlice(const AlignmentChain alignmentChain,
-        in ReferencePoint[] croppingRefPoints)
+ReadInterval getCroppingSlice(const SeededAlignment alignment, in ReferencePoint[] croppingRefPoints)
 {
-    auto alignmentType = ReadAlignment(alignmentChain).type;
-    auto read = alignmentChain.contigB;
-    auto tracePointDistance = alignmentChain.tracePointDistance;
+    auto locationSeed = alignment.seed;
+    auto read = alignment.contigB;
+    auto tracePointDistance = alignment.tracePointDistance;
     // dfmt off
     auto croppingRefPos = croppingRefPoints
-        .filter!(p => p.contigId == alignmentChain.contigA.id)
+        .filter!(p => p.contigId == alignment.contigA.id)
         .front
         .value;
     // dfmt on
@@ -274,7 +283,7 @@ ReadInterval getCroppingSlice(const AlignmentChain alignmentChain,
     size_t croppingTracePointIdx(in AlignmentChain.LocalAlignment localAlignment)
     {
         auto firstTracePointRefPos = ceil(localAlignment.contigA.begin, tracePointDistance);
-        auto openInterval = alignmentType == ReadAlignmentType.front;
+        auto openInterval = locationSeed == AlignmentLocationSeed.front;
         assert(croppingRefPos >= firstTracePointRefPos);
 
         return (croppingRefPos - firstTracePointRefPos) / tracePointDistance + (openInterval ? 0 : 1);
@@ -287,7 +296,7 @@ ReadInterval getCroppingSlice(const AlignmentChain alignmentChain,
     }
 
     // dfmt off
-    auto coveringLocalAlignment = alignmentChain
+    auto coveringLocalAlignment = alignment
         .localAlignments
         .filter!coversCroppingRefPos
         .front;
@@ -301,28 +310,36 @@ ReadInterval getCroppingSlice(const AlignmentChain alignmentChain,
     size_t readBeginIdx;
     size_t readEndIdx;
 
-    final switch (alignmentType)
+    final switch (locationSeed)
     {
-    case ReadAlignmentType.front:
+    case AlignmentLocationSeed.front:
         readBeginIdx = 0;
         readEndIdx = readCroppingPos;
         break;
-    case ReadAlignmentType.back:
+    case AlignmentLocationSeed.back:
         readBeginIdx = readCroppingPos;
         readEndIdx = read.length;
         break;
-    case ReadAlignmentType.gap:
-        assert(0, "unreachable");
     }
 
-    if (alignmentChain.complement)
+    if (alignment.complement)
     {
         swap(readBeginIdx, readEndIdx);
         readBeginIdx = read.length - readBeginIdx;
         readEndIdx = read.length - readEndIdx;
     }
 
-    return ReadInterval(read.id, readBeginIdx, readEndIdx);
+    auto croppingSlice = ReadInterval(read.id, readBeginIdx, readEndIdx);
+
+    // dfmt off
+    debug logJsonDebug(
+        "alignment", alignment.toJson,
+        "croppingRefPoints", croppingRefPoints.toJson,
+        "croppingSlice", croppingSlice.toJson,
+    );
+    // dfmt on
+
+    return croppingSlice;
 }
 
 auto cropPileUp(PileUp pileUp, in ReferenceMask mask, in Options options)
@@ -357,7 +374,6 @@ private struct PileUpCropper
     private void preparePileUp()
     {
         fetchTracePoints(pileUp, options);
-        pileUp.sort!"a[0].contigB.id < b[0].contigB.id"();
     }
 
     private void fetchCroppingRefPositions()
@@ -409,7 +425,7 @@ private struct PileUpCropper
     {
         // dfmt off
         auto readCroppingSlice = readAlignment[]
-            .map!(alignmentChain => alignmentChain.getCroppingSlice(croppingRefPositions))
+            .map!(alignment => alignment.getCroppingSlice(croppingRefPositions))
             .fold!"a & b";
         // dfmt on
         assert(!readCroppingSlice.empty, "invalid/empty read cropping slice");
@@ -452,7 +468,7 @@ private struct PileUpCropper
 
 ref PileUp fetchTracePoints(ref PileUp pileUp, in Options options)
 {
-    auto allAlignmentChains = pileUp.getAlignmentChainRefs();
+    auto allAlignmentChains = pileUp.getAlignmentRefs();
     allAlignmentChains.sort!("*a < *b", SwapStrategy.stable);
     allAlignmentChains.attachTracePoints(options.refDb, options.readsDb,
             options.damapperOptions, options);
@@ -606,6 +622,12 @@ class DJunctor
         numReferenceContigs = getNumContigs(options.refDb, options);
         numReads = getNumContigs(options.readsDb, options);
         scaffoldStructure = getScaffoldStructure(options.refDb, options).array;
+        // dfmt off
+        logJsonDiagnostic(
+            "numReferenceContigs", numReferenceContigs,
+            "numReads", numReads,
+        );
+        // dfmt on
 
         if (options.inMask !is null)
         {

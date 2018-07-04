@@ -14,8 +14,8 @@ import djunctor.util.fasta : parseFastaRecord;
 import djunctor.util.log;
 import djunctor.util.range : arrayChunks, takeExactly;
 import djunctor.util.tempfile : mkstemp;
-import std.algorithm : all, cache, canFind, endsWith, equal, filter, isSorted, joiner,
-    map, min, sort, splitter, startsWith, SwapStrategy, uniq;
+import std.algorithm : all, cache, canFind, endsWith, equal, filter, isSorted,
+    joiner, map, min, sort, splitter, startsWith, SwapStrategy, uniq;
 import std.array : appender, Appender, array, uninitializedArray;
 import std.conv : to;
 import std.exception : enforce;

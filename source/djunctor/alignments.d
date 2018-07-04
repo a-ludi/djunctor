@@ -8,7 +8,7 @@
 */
 module djunctor.alignments;
 
-import djunctor.util.algorithm : orderLexicographically;
+import djunctor.util.algorithm : cmpLexicographically, orderLexicographically;
 import djunctor.util.log;
 import djunctor.util.math : absdiff;
 import djunctor.util.scaffold : buildScaffold, concatenatePayloads, ContigNode,
@@ -24,7 +24,8 @@ import std.format : format;
 import std.functional : binaryFun, unaryFun;
 import std.math : sgn;
 import std.meta : AliasSeq;
-import std.range : assumeSorted, chunks, enumerate, only, retro, tee, zip;
+import std.range : assumeSorted, chain, chunks, enumerate, InputRange,
+    inputRangeObject, iota, only, retro, slide, takeNone, tee, zip;
 import std.traits : isCallable;
 import std.typecons : Flag, No, tuple, Tuple, Yes;
 import vibe.data.json : toJson = serializeToJson;
@@ -776,11 +777,94 @@ unittest
 }
 
 /// Type of the read alignment.
+enum AlignmentLocationSeed
+{
+    front,
+    back,
+}
+
+/**
+    An alignment chain with a "seed", ie. hint for it's intended location.
+*/
+struct SeededAlignment
+{
+    AlignmentChain alignment;
+    AlignmentLocationSeed seed;
+
+    alias alignment this;
+
+    invariant
+    {
+        assert(seed != AlignmentLocationSeed.front || isFrontExtension(alignment));
+        assert(seed != AlignmentLocationSeed.back || isBackExtension(alignment));
+    }
+
+    int opCmp(ref const SeededAlignment other) const pure nothrow
+    {
+        // dfmt off
+        return cmpLexicographically!(
+            typeof(this),
+            "a.alignment",
+            "a.seed",
+        )(this, other);
+        // dfmt on
+    }
+
+    static InputRange!SeededAlignment from(AlignmentChain alignmentChain)
+    {
+        alias Seed = AlignmentLocationSeed;
+
+        if (isFrontExtension(alignmentChain) && isBackExtension(alignmentChain))
+        {
+            // dfmt off
+            return inputRangeObject(only(
+                SeededAlignment(alignmentChain, Seed.front),
+                SeededAlignment(alignmentChain, Seed.back),
+            ));
+            // dfmt on
+        }
+        else if (isFrontExtension(alignmentChain) && !isBackExtension(alignmentChain))
+        {
+            return inputRangeObject(only(SeededAlignment(alignmentChain, Seed.front)));
+        }
+        else if (isBackExtension(alignmentChain) && !isFrontExtension(alignmentChain))
+        {
+            return inputRangeObject(only(SeededAlignment(alignmentChain, Seed.back)));
+        }
+        else
+        {
+            return inputRangeObject(takeNone!(SeededAlignment[]));
+        }
+    }
+}
+
+/// Type of the read alignment.
 static enum ReadAlignmentType
 {
     front = 0,
     gap = 1,
     back = 2,
+}
+
+private bool isExtension(in AlignmentChain alignment) pure nothrow
+{
+    return isFrontExtension(alignment) ^ isBackExtension(alignment);
+}
+
+private bool isFrontExtension(in AlignmentChain alignment) pure nothrow
+{
+    auto readExtensionLength = alignment.first.contigB.begin;
+    auto referenceExtensionLength = alignment.first.contigA.begin;
+
+    return readExtensionLength > referenceExtensionLength;
+}
+
+private bool isBackExtension(in AlignmentChain alignment) pure nothrow
+{
+    auto readExtensionLength = alignment.contigB.length - alignment.last.contigB.end;
+    auto referenceExtensionLength = alignment.contigA.length - alignment.last.contigA.end;
+
+    return readExtensionLength > referenceExtensionLength;
 }
 
 /**
@@ -790,10 +874,10 @@ static enum ReadAlignmentType
 */
 struct ReadAlignment
 {
-    AlignmentChain[2] _alignments;
+    SeededAlignment[2] _alignments;
     size_t _length;
 
-    this(in AlignmentChain[] alignments...)
+    this(SeededAlignment[] alignments...)
     {
         if (1 <= alignments.length && alignments.length <= 2)
         {
@@ -801,7 +885,7 @@ struct ReadAlignment
 
             foreach (i, alignment; alignments)
             {
-                this._alignments[i] = cast(AlignmentChain) alignment;
+                this._alignments[i] = alignment;
             }
         }
         else
@@ -827,20 +911,20 @@ struct ReadAlignment
         return _length;
     }
 
-    inout(AlignmentChain[]) opIndex() inout pure nothrow
+    inout(SeededAlignment[]) opIndex() inout pure nothrow
     {
         return _alignments[0 .. _length];
     }
 
-    inout(AlignmentChain) opIndex(T)(T idx) inout pure nothrow
+    inout(SeededAlignment) opIndex(T)(T idx) inout pure nothrow
     {
         return this[][idx];
     }
 
     unittest
     {
-        auto ac1 = AlignmentChain(1);
-        auto ac2 = AlignmentChain(2);
+        auto ac1 = SeededAlignment(AlignmentChain(1), AlignmentLocationSeed.front);
+        auto ac2 = SeededAlignment(AlignmentChain(2), AlignmentLocationSeed.back);
 
         auto ra1 = ReadAlignment(ac1);
 
@@ -868,12 +952,14 @@ struct ReadAlignment
         return !isGap || _alignments[0].contigA.id < _alignments[1].contigA.id;
     }
 
-    void forceInOrder() pure nothrow
+    ReadAlignment getInOrder() pure nothrow
     {
         if (isGap && !isInOrder)
         {
             swap(_alignments[0], _alignments[1]);
         }
+
+        return this;
     }
 
     /**
@@ -909,30 +995,6 @@ struct ReadAlignment
     }
 
     /**
-        Get the type of each alignment for this gap.
-
-        Throws: Exception if this is not a gap.
-        See_Also: `isFrontExtension`, `isBackExtension`, `isGap`
-    */
-    @property ReadAlignmentType[2] gapTypes() const pure
-    {
-        assert(isValid, "invalid read alignment");
-
-        if (!isGap)
-        {
-            throw new Exception("must be a gap");
-        }
-
-        // dfmt off
-        alias partialType = (alignment) => _isFrontExtension(alignment)
-            ? ReadAlignmentType.front
-            : ReadAlignmentType.back;
-        // dfmt on
-
-        return [partialType(_alignments[0]), partialType(_alignments[1])];
-    }
-
-    /**
         Returns true iff the read alignment is an extension, ie. it is a front or
         back extension.
 
@@ -940,17 +1002,8 @@ struct ReadAlignment
     */
     @property bool isExtension() const pure nothrow
     {
-        if (_length != 1)
-        {
-            return false;
-        }
-
-        return _isExtension(_alignments[0]);
-    }
-
-    private static bool _isExtension(in AlignmentChain alignment) pure nothrow
-    {
-        return _isFrontExtension(alignment) ^ _isBackExtension(alignment);
+        // A single SeededAlignment is always a valid extension.
+        return _length == 1;
     }
 
     /**
@@ -977,20 +1030,7 @@ struct ReadAlignment
     */
     @property bool isFrontExtension() const pure nothrow
     {
-        if (_length != 1)
-        {
-            return false;
-        }
-
-        return _isFrontExtension(_alignments[0]);
-    }
-
-    private static bool _isFrontExtension(in AlignmentChain alignment) pure nothrow
-    {
-        auto readExtensionLength = alignment.first.contigB.begin;
-        auto referenceExtensionLength = alignment.first.contigA.begin;
-
-        return readExtensionLength > referenceExtensionLength;
+        return _length == 1 && _alignments[0].seed == AlignmentLocationSeed.front;
     }
 
     /**
@@ -1017,20 +1057,7 @@ struct ReadAlignment
     */
     @property bool isBackExtension() const pure nothrow
     {
-        if (_length != 1)
-        {
-            return false;
-        }
-
-        return _isBackExtension(_alignments[0]);
-    }
-
-    private static bool _isBackExtension(in AlignmentChain alignment) pure nothrow
-    {
-        auto readExtensionLength = alignment.contigB.length - alignment.last.contigB.end;
-        auto referenceExtensionLength = alignment.contigA.length - alignment.last.contigA.end;
-
-        return readExtensionLength > referenceExtensionLength;
+        return _length == 1 && _alignments[0].seed == AlignmentLocationSeed.back;
     }
 
     /**
@@ -1066,8 +1093,7 @@ struct ReadAlignment
         // dfmt off
         return _length == 2 &&
             _alignments[0].contigA.id != _alignments[1].contigA.id &&
-            _alignments[0].contigB.id == _alignments[1].contigB.id &&
-            _isExtension(_alignments[0]) && _isExtension(_alignments[1]);
+            _alignments[0].contigB.id == _alignments[1].contigB.id;
         // dfmt on
     }
 
@@ -1075,7 +1101,7 @@ struct ReadAlignment
     {
         // dfmt off
         return joinsTwoContigs &&
-            _isFrontExtension(_alignments[0]) == _isBackExtension(_alignments[1]) &&
+            _alignments[0].seed != _alignments[1].seed &&
             _alignments[0].complement == _alignments[1].complement;
         // dfmt on
     }
@@ -1084,7 +1110,7 @@ struct ReadAlignment
     {
         // dfmt off
         return joinsTwoContigs &&
-            _isFrontExtension(_alignments[0]) != _isBackExtension(_alignments[1]) &&
+            _alignments[0].seed == _alignments[1].seed &&
             _alignments[0].complement != _alignments[1].complement;
         // dfmt on
     }
@@ -1095,48 +1121,50 @@ struct ReadAlignment
                 {
                     // dfmt off
                     auto testData = [
-                        "innerAlignment": ReadAlignment(
-                            AlignmentChain(
-                                1,
-                                Contig(1, 100),
-                                Contig(1, 10),
-                                no,
-                                [
-                                    LocalAlignment(
-                                        Locus(10, 11),
-                                        Locus(0, 1),
-                                        0,
-                                    ),
-                                    LocalAlignment(
-                                        Locus(19, 20),
-                                        Locus(9, 10),
-                                        0,
-                                    ),
-                                ],
-                            ),
-                        ),
-                        "innerAlignmentComplement": ReadAlignment(
-                            AlignmentChain(
-                                2,
-                                Contig(1, 100),
-                                Contig(1, 10),
-                                yes,
-                                [
-                                    LocalAlignment(
-                                        Locus(10, 11),
-                                        Locus(0, 1),
-                                        0,
-                                    ),
-                                    LocalAlignment(
-                                        Locus(19, 20),
-                                        Locus(9, 10),
-                                        0,
-                                    ),
-                                ],
-                            ),
-                        ),
+                        // TODO drop this case?
+                        //"innerAlignment": ReadAlignment(
+                        //    SeededAlignment.from(AlignmentChain(
+                        //        1,
+                        //        Contig(1, 100),
+                        //        Contig(1, 10),
+                        //        no,
+                        //        [
+                        //            LocalAlignment(
+                        //                Locus(10, 11),
+                        //                Locus(0, 1),
+                        //                0,
+                        //            ),
+                        //            LocalAlignment(
+                        //                Locus(19, 20),
+                        //                Locus(9, 10),
+                        //                0,
+                        //            ),
+                        //        ],
+                        //    )).front,
+                        //),
+                        // TODO drop this case?
+                        //"innerAlignmentComplement": ReadAlignment(
+                        //    SeededAlignment.from(AlignmentChain(
+                        //        2,
+                        //        Contig(1, 100),
+                        //        Contig(1, 10),
+                        //        yes,
+                        //        [
+                        //            LocalAlignment(
+                        //                Locus(10, 11),
+                        //                Locus(0, 1),
+                        //                0,
+                        //            ),
+                        //            LocalAlignment(
+                        //                Locus(19, 20),
+                        //                Locus(9, 10),
+                        //                0,
+                        //            ),
+                        //        ],
+                        //    )).front,
+                        //),
                         "frontExtension": ReadAlignment(
-                            AlignmentChain(
+                            SeededAlignment.from(AlignmentChain(
                                 3,
                                 Contig(1, 100),
                                 Contig(1, 10),
@@ -1153,10 +1181,10 @@ struct ReadAlignment
                                         0,
                                     ),
                                 ],
-                            ),
+                            )).front,
                         ),
                         "frontExtensionComplement": ReadAlignment(
-                            AlignmentChain(
+                            SeededAlignment.from(AlignmentChain(
                                 4,
                                 Contig(1, 100),
                                 Contig(1, 10),
@@ -1173,10 +1201,10 @@ struct ReadAlignment
                                         0,
                                     ),
                                 ],
-                            ),
+                            )).front,
                         ),
                         "backExtension": ReadAlignment(
-                            AlignmentChain(
+                            SeededAlignment.from(AlignmentChain(
                                 5,
                                 Contig(1, 100),
                                 Contig(1, 10),
@@ -1193,10 +1221,10 @@ struct ReadAlignment
                                         0,
                                     ),
                                 ],
-                            ),
+                            )).front,
                         ),
                         "backExtensionComplement": ReadAlignment(
-                            AlignmentChain(
+                            SeededAlignment.from(AlignmentChain(
                                 6,
                                 Contig(1, 100),
                                 Contig(1, 10),
@@ -1213,10 +1241,10 @@ struct ReadAlignment
                                         0,
                                     ),
                                 ],
-                            ),
+                            )).front,
                         ),
                         "gapEnd2Front": ReadAlignment(
-                            AlignmentChain(
+                            SeededAlignment.from(AlignmentChain(
                                 7,
                                 Contig(1, 100),
                                 Contig(1, 10),
@@ -1233,8 +1261,8 @@ struct ReadAlignment
                                         0,
                                     ),
                                 ],
-                            ),
-                            AlignmentChain(
+                            )).front,
+                            SeededAlignment.from(AlignmentChain(
                                 8,
                                 Contig(2, 100),
                                 Contig(1, 10),
@@ -1251,10 +1279,10 @@ struct ReadAlignment
                                         0,
                                     ),
                                 ],
-                            ),
+                            )).front,
                         ),
                         "gapFront2EndComplement": ReadAlignment(
-                            AlignmentChain(
+                            SeededAlignment.from(AlignmentChain(
                                 9,
                                 Contig(2, 100),
                                 Contig(1, 10),
@@ -1271,8 +1299,8 @@ struct ReadAlignment
                                         0,
                                     ),
                                 ],
-                            ),
-                            AlignmentChain(
+                            )).front,
+                            SeededAlignment.from(AlignmentChain(
                                 10,
                                 Contig(1, 100),
                                 Contig(1, 10),
@@ -1289,10 +1317,10 @@ struct ReadAlignment
                                         0,
                                     ),
                                 ],
-                            ),
+                            )).front,
                         ),
                         "gapEnd2End": ReadAlignment(
-                            AlignmentChain(
+                            SeededAlignment.from(AlignmentChain(
                                 11,
                                 Contig(1, 100),
                                 Contig(1, 10),
@@ -1309,8 +1337,8 @@ struct ReadAlignment
                                         0,
                                     ),
                                 ],
-                            ),
-                            AlignmentChain(
+                            )).front,
+                            SeededAlignment.from(AlignmentChain(
                                 12,
                                 Contig(2, 100),
                                 Contig(1, 10),
@@ -1327,10 +1355,10 @@ struct ReadAlignment
                                         0,
                                     ),
                                 ],
-                            ),
+                            )).front,
                         ),
                         "gapBegin2Begin": ReadAlignment(
-                            AlignmentChain(
+                            SeededAlignment.from(AlignmentChain(
                                 13,
                                 Contig(2, 100),
                                 Contig(1, 10),
@@ -1347,8 +1375,8 @@ struct ReadAlignment
                                         0,
                                     ),
                                 ],
-                            ),
-                            AlignmentChain(
+                            )).front,
+                            SeededAlignment.from(AlignmentChain(
                                 14,
                                 Contig(1, 100),
                                 Contig(1, 10),
@@ -1365,7 +1393,7 @@ struct ReadAlignment
                                         0,
                                     ),
                                 ],
-                            ),
+                            )).front,
                         ),
                     ];
                     //                               +--------- isInOrder
@@ -1380,8 +1408,8 @@ struct ReadAlignment
                     //                               |||||||||
                     //                               |||||||||
                     auto testCases = [
-                        "innerAlignment":           "+.F......",
-                        "innerAlignmentComplement": "+.F......",
+                        //"innerAlignment":           "+.F......",
+                        //"innerAlignmentComplement": "+.F......",
                         "frontExtension":           "++F++....",
                         "frontExtensionComplement": "++F++....",
                         "backExtension":            "++B+.+...",
@@ -1450,20 +1478,6 @@ struct ReadAlignment
     }
 }
 
-auto safeGapTypes(T)(in T thing) pure nothrow
-{
-    assert(thing.isGap, "thing must be of type `gap`");
-
-    try
-    {
-        return thing.gapTypes;
-    }
-    catch (Exception e)
-    {
-        assert(0, "should not throw");
-    }
-}
-
 /// Generate basic join from read alignment.
 J makeJoin(J)(ReadAlignment readAlignment)
 {
@@ -1484,21 +1498,18 @@ J makeJoin(J)(ReadAlignment readAlignment)
         // dfmt on
     case ReadAlignmentType.gap:
         // dfmt off
-        alias contigPart = (gapType) => gapType == ReadAlignmentType.front
+        alias contigPart = (locationSeed) => locationSeed == AlignmentLocationSeed.front
                     ? ContigPart.begin
                     : ContigPart.end;
-        // dfmt on
-        auto gapTypes = readAlignment.gapTypes;
 
-        // dfmt off
         return J(
             ContigNode(
                 readAlignment[0].contigA.id,
-                contigPart(gapTypes[0]),
+                contigPart(readAlignment[0].seed),
             ),
             ContigNode(
                 readAlignment[1].contigA.id,
-                contigPart(gapTypes[1]),
+                contigPart(readAlignment[1].seed),
             ),
         );
         // dfmt on
@@ -1534,7 +1545,7 @@ unittest
             {
                 // dfmt off
                 auto frontExtension = ReadAlignment(
-                    AlignmentChain(
+                    SeededAlignment.from(AlignmentChain(
                         3,
                         Contig(1, 100),
                         Contig(1, 10),
@@ -1551,10 +1562,10 @@ unittest
                                 0,
                             ),
                         ],
-                    ),
+                    )).front,
                 );
                 auto backExtension = ReadAlignment(
-                    AlignmentChain(
+                    SeededAlignment.from(AlignmentChain(
                         5,
                         Contig(1, 100),
                         Contig(1, 10),
@@ -1571,10 +1582,10 @@ unittest
                                 0,
                             ),
                         ],
-                    ),
+                    )).front,
                 );
                 auto gap = ReadAlignment(
-                    AlignmentChain(
+                    SeededAlignment.from(AlignmentChain(
                         11,
                         Contig(1, 100),
                         Contig(1, 10),
@@ -1591,8 +1602,8 @@ unittest
                                 0,
                             ),
                         ],
-                    ),
-                    AlignmentChain(
+                    )).front,
+                    SeededAlignment.from(AlignmentChain(
                         12,
                         Contig(2, 100),
                         Contig(1, 10),
@@ -1609,7 +1620,7 @@ unittest
                                 0,
                             ),
                         ],
-                    ),
+                    )).front,
                 );
                 // dfmt on
 
@@ -1649,10 +1660,10 @@ PileUp[] buildPileUps(in size_t numReferenceContigs, AlignmentChain[] candidates
     // dfmt off
     auto readAlignmentJoins = candidates
         .chunkBy!isSameRead
-        .map!array
-        .map!ReadAlignment
+        .map!collectReadAlignments
+        .joiner
         .filter!"a.isValid"
-        .tee!(ra => ra.forceInOrder())
+        .map!"a.getInOrder()"
         .map!(to!ReadAlignmentJoin)
         .array;
     // dfmt on
@@ -1677,6 +1688,7 @@ PileUp[] buildPileUps(in size_t numReferenceContigs, AlignmentChain[] candidates
 
 unittest
 {
+    // FIXME add test case with contig spanning read
     //               c1                       c2                       c3
     //        0    5   10   15         0    5   10   15         0    5   10   15
     // ref:   |---->---->----|.........|---->---->----|.........|---->---->----|
@@ -1745,7 +1757,7 @@ unittest
                 if (beginContigId == endContigId)
                 {
                     // dfmt off
-                    return ReadAlignment(AlignmentChain(
+                    return ReadAlignment(SeededAlignment.from(AlignmentChain(
                         alignmentChainId - 2,
                         Contig(beginContigId, contigLength),
                         Contig(readId, readLength),
@@ -1762,7 +1774,7 @@ unittest
                                 numDiffs,
                             ),
                         ],
-                    ));
+                    )).front);
                     // dfmt on
                 }
                 else
@@ -1772,7 +1784,7 @@ unittest
 
                     // dfmt off
                     return ReadAlignment(
-                        AlignmentChain(
+                        SeededAlignment.from(AlignmentChain(
                             alignmentChainId - 2,
                             Contig(beginContigId, contigLength),
                             Contig(readId, readLength),
@@ -1789,8 +1801,8 @@ unittest
                                     numDiffs,
                                 ),
                             ],
-                        ),
-                        AlignmentChain(
+                        )).front,
+                        SeededAlignment.from(AlignmentChain(
                             alignmentChainId - 1,
                             Contig(endContigId, contigLength),
                             Contig(readId, readLength),
@@ -1807,7 +1819,7 @@ unittest
                                     numDiffs,
                                 ),
                             ],
-                        ),
+                        )).front,
                     );
                     // dfmt on
                 }
@@ -1849,6 +1861,7 @@ unittest
                 .joiner
                 .map!"a[]"
                 .joiner
+                .map!"a.alignment"
                 .array;
             // dfmt on
             auto computedPileUps = buildPileUps(3, alignmentChains);
@@ -1867,6 +1880,452 @@ unittest
                 }
             }
         }
+}
+
+// Not meant for public usage.
+ReadAlignment[] collectReadAlignments(Chunk)(Chunk sameReadAlignments)
+{
+    // dfmt off
+    alias beginRelToContigB = (alignment) => alignment.complement
+        ? alignment.contigB.length - alignment.last.contigB.end
+        : alignment.first.contigB.begin;
+    alias endRelToContigB = (alignment) => alignment.complement
+        ? alignment.contigB.length - alignment.first.contigB.begin
+        : alignment.last.contigB.end;
+    alias seedRelToContigB = (alignment) => alignment.complement
+        ? 0 - alignment.seed
+        : 0 + alignment.seed;
+    alias orderByLocusAndSeed = orderLexicographically!(
+        SeededAlignment,
+        beginRelToContigB,
+        endRelToContigB,
+        seedRelToContigB,
+    );
+    // dfmt on
+    alias seededPartsOfOneAlignment = (a, b) => a.alignment == b.alignment && a.seed != b.seed;
+    alias shareReadSequence = (a, b) => endRelToContigB(a) > beginRelToContigB(b);
+    alias emptyRange = () => cast(ReadAlignment[])[];
+
+    auto seededAlignments = sameReadAlignments.map!(SeededAlignment.from).joiner.array;
+    seededAlignments.sort!orderByLocusAndSeed;
+
+    if (seededAlignments.length == 0)
+    {
+        return emptyRange();
+    }
+
+    // Validate seeded alignments and discard accordingly.
+    foreach (saPair; seededAlignments.slide!(No.withPartial)(2))
+    {
+        if (shareReadSequence(saPair[0], saPair[1])
+                && !seededPartsOfOneAlignment(saPair[0], saPair[1]))
+        {
+            return emptyRange();
+        }
+    }
+
+    // Collect read alignments
+    bool startWithExtension = beginRelToContigB(seededAlignments[0]) > 0;
+    size_t sliceStart = startWithExtension ? 1 : 0;
+
+    // dfmt off
+    auto remainingReadAlignments = iota(sliceStart, seededAlignments.length, 2)
+        .map!(i => ReadAlignment(seededAlignments[i .. min(i + 2, $)]));
+    auto readAlignments = startWithExtension
+        ? chain(
+            only(ReadAlignment(seededAlignments[0 .. 1])),
+            remainingReadAlignments,
+        ).array
+        : remainingReadAlignments.array;
+    // dfmt on
+
+    if (readAlignments.any!"!a.isValid")
+    {
+        // If one read alignment is invalid we should not touch this read at all.
+        return emptyRange();
+    }
+
+    return readAlignments;
+}
+
+unittest
+{
+    alias Contig = AlignmentChain.Contig;
+    alias Complement = AlignmentChain.Complement;
+    alias LocalAlignment = AlignmentChain.LocalAlignment;
+    alias Locus = LocalAlignment.Locus;
+    alias Seed = AlignmentLocationSeed;
+
+    {
+        // Case 1:
+        //
+        // |-->-->-->--|  |-->-->-->--| |-->-->-->--|
+        //
+        //       |----->  <-----------> <-----|
+        // dfmt off
+        auto alignmentChains = [
+            AlignmentChain(
+                0,
+                Contig(1, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(10, 20),
+                    Locus(0, 10),
+                )]
+            ),
+            AlignmentChain(
+                1,
+                Contig(2, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(0, 20),
+                    Locus(20, 40),
+                )]
+            ),
+            AlignmentChain(
+                2,
+                Contig(3, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(0, 10),
+                    Locus(50, 60),
+                )]
+            ),
+        ];
+        assert(collectReadAlignments(alignmentChains).equal([
+            ReadAlignment([
+                SeededAlignment(alignmentChains[0], Seed.back),
+                SeededAlignment(alignmentChains[1], Seed.front),
+            ]),
+            ReadAlignment([
+                SeededAlignment(alignmentChains[1], Seed.back),
+                SeededAlignment(alignmentChains[2], Seed.front),
+            ]),
+        ]));
+        // dfmt on
+    }
+    {
+        // Case 2:
+        //
+        // |-->-->-->--|  |--<--<--<--| |-->-->-->--|
+        //
+        //       |----->  <-----------> <-----|
+        // dfmt off
+        auto alignmentChains = [
+            AlignmentChain(
+                0,
+                Contig(1, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(10, 20),
+                    Locus(0, 10),
+                )]
+            ),
+            AlignmentChain(
+                1,
+                Contig(2, 20),
+                Contig(1, 60),
+                Complement.yes,
+                [LocalAlignment(
+                    Locus(0, 20),
+                    Locus(20, 40),
+                )]
+            ),
+            AlignmentChain(
+                2,
+                Contig(3, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(0, 10),
+                    Locus(50, 60),
+                )]
+            ),
+        ];
+        assert(collectReadAlignments(alignmentChains).equal([
+            ReadAlignment([
+                SeededAlignment(alignmentChains[0], Seed.back),
+                SeededAlignment(alignmentChains[1], Seed.back),
+            ]),
+            ReadAlignment([
+                SeededAlignment(alignmentChains[1], Seed.front),
+                SeededAlignment(alignmentChains[2], Seed.front),
+            ]),
+        ]));
+        // dfmt on
+    }
+    {
+        // Case 3:
+        //
+        //                |--<--<--<--| |-->-->-->--|
+        //
+        //                <-----------> <-----|
+        // dfmt off
+        auto alignmentChains = [
+            AlignmentChain(
+                1,
+                Contig(2, 20),
+                Contig(1, 60),
+                Complement.yes,
+                [LocalAlignment(
+                    Locus(0, 20),
+                    Locus(20, 40),
+                )]
+            ),
+            AlignmentChain(
+                2,
+                Contig(3, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(0, 10),
+                    Locus(50, 60),
+                )]
+            ),
+        ];
+        assert(collectReadAlignments(alignmentChains).equal([
+            ReadAlignment([
+                SeededAlignment(alignmentChains[0], Seed.back),
+            ]),
+            ReadAlignment([
+                SeededAlignment(alignmentChains[0], Seed.front),
+                SeededAlignment(alignmentChains[1], Seed.front),
+            ]),
+        ]));
+        // dfmt on
+    }
+    {
+        // Case 4:
+        //
+        // |-->-->-->--|  |--<--<--<--|
+        //
+        //       |----->  <----------->
+        // dfmt off
+        auto alignmentChains = [
+            AlignmentChain(
+                0,
+                Contig(1, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(10, 20),
+                    Locus(0, 10),
+                )]
+            ),
+            AlignmentChain(
+                1,
+                Contig(2, 20),
+                Contig(1, 60),
+                Complement.yes,
+                [LocalAlignment(
+                    Locus(0, 20),
+                    Locus(20, 40),
+                )]
+            ),
+        ];
+        assert(collectReadAlignments(alignmentChains).equal([
+            ReadAlignment([
+                SeededAlignment(alignmentChains[0], Seed.back),
+                SeededAlignment(alignmentChains[1], Seed.back),
+            ]),
+            ReadAlignment([
+                SeededAlignment(alignmentChains[1], Seed.front),
+            ]),
+        ]));
+        // dfmt on
+    }
+    {
+        // Case 5:
+        //
+        //                |--<--<--<--|
+        //
+        //                <----------->
+        // dfmt off
+        auto alignmentChains = [
+            AlignmentChain(
+                1,
+                Contig(2, 20),
+                Contig(1, 60),
+                Complement.yes,
+                [LocalAlignment(
+                    Locus(0, 20),
+                    Locus(20, 40),
+                )]
+            ),
+        ];
+        assert(collectReadAlignments(alignmentChains).equal([
+            ReadAlignment([
+                SeededAlignment(alignmentChains[0], Seed.back),
+            ]),
+            ReadAlignment([
+                SeededAlignment(alignmentChains[0], Seed.front),
+            ]),
+        ]));
+        // dfmt on
+    }
+    {
+        // Case 6:
+        //
+        // |-->-->-->--|
+        // |-->-->-->--|  |--<--<--<--| |-->-->-->--|
+        //
+        //       |----->  <-----------> <-----|
+        // dfmt off
+        auto alignmentChains = [
+            AlignmentChain(
+                0,
+                Contig(1, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(10, 20),
+                    Locus(0, 10),
+                )]
+            ),
+            AlignmentChain(
+                1,
+                Contig(2, 20),
+                Contig(1, 60),
+                Complement.yes,
+                [LocalAlignment(
+                    Locus(0, 20),
+                    Locus(20, 40),
+                )]
+            ),
+            AlignmentChain(
+                2,
+                Contig(3, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(0, 10),
+                    Locus(50, 60),
+                )]
+            ),
+            AlignmentChain(
+                3,
+                Contig(4, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(10, 20),
+                    Locus(0, 10),
+                )]
+            ),
+        ];
+        // dfmt on
+        assert(collectReadAlignments(alignmentChains).length == 0);
+    }
+    {
+        // Case 7:
+        //
+        //                |-->-->-->--|
+        // |-->-->-->--|  |--<--<--<--| |-->-->-->--|
+        //
+        //       |----->  <-----------> <-----|
+        // dfmt off
+        auto alignmentChains = [
+            AlignmentChain(
+                0,
+                Contig(1, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(10, 20),
+                    Locus(0, 10),
+                )]
+            ),
+            AlignmentChain(
+                1,
+                Contig(2, 20),
+                Contig(1, 60),
+                Complement.yes,
+                [LocalAlignment(
+                    Locus(0, 20),
+                    Locus(20, 40),
+                )]
+            ),
+            AlignmentChain(
+                2,
+                Contig(3, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(0, 10),
+                    Locus(50, 60),
+                )]
+            ),
+            AlignmentChain(
+                3,
+                Contig(4, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(0, 20),
+                    Locus(20, 40),
+                )]
+            ),
+        ];
+        // dfmt on
+        assert(collectReadAlignments(alignmentChains).length == 0);
+    }
+    {
+        // Case 8:
+        //
+        //                        |-->-->-->--|
+        // |-->-->-->--|  |--<--<--<--| |-->-->-->--|
+        //
+        //       |----->  <-----------> <-----|
+        // dfmt off
+        auto alignmentChains = [
+            AlignmentChain(
+                0,
+                Contig(1, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(10, 20),
+                    Locus(0, 10),
+                )]
+            ),
+            AlignmentChain(
+                1,
+                Contig(2, 20),
+                Contig(1, 60),
+                Complement.yes,
+                [LocalAlignment(
+                    Locus(0, 20),
+                    Locus(20, 40),
+                )]
+            ),
+            AlignmentChain(
+                2,
+                Contig(3, 20),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(0, 10),
+                    Locus(50, 60),
+                )]
+            ),
+            AlignmentChain(
+                3,
+                Contig(4, 30),
+                Contig(1, 60),
+                Complement.no,
+                [LocalAlignment(
+                    Locus(0, 30),
+                    Locus(30, 60),
+                )]
+            ),
+        ];
+        // dfmt on
+        assert(collectReadAlignments(alignmentChains).length == 0);
+    }
 }
 
 /**
@@ -1939,34 +2398,17 @@ auto isAntiParallel(in PileUp pileUp) pure nothrow
     // dfmt on
 }
 
-auto gapTypes(in PileUp pileUp) pure
-{
-    assert(pileUp.isValid, "invalid pile up");
-
-    if (!pileUp.isGap)
-    {
-        throw new Exception("must be a gap");
-    }
-
-    // dfmt off
-    return pileUp
-        .filter!(readAlignment => readAlignment.isGap)
-        .front
-        .gapTypes;
-    // dfmt on
-}
-
 /// Returns a list of pointers to all involved alignment chains.
-AlignmentChain*[] getAlignmentChainRefs(PileUp pileUp) pure nothrow
+AlignmentChain*[] getAlignmentRefs(PileUp pileUp) pure nothrow
 {
     auto alignmentChainsAcc = appender!(AlignmentChain*[]);
-    alignmentChainsAcc.reserve(pileUp.map!"a.length".length);
+    alignmentChainsAcc.reserve(pileUp.map!"a.length".sum);
 
     foreach (ref readAlignment; pileUp)
     {
-        foreach (ref alignmentChain; readAlignment)
+        foreach (ref seededAlignment; readAlignment)
         {
-            alignmentChainsAcc ~= &alignmentChain;
+            alignmentChainsAcc ~= &(seededAlignment.alignment);
         }
     }
 
@@ -1977,7 +2419,7 @@ AlignmentChain*[] getAlignmentChainRefs(PileUp pileUp) pure nothrow
 unittest
 {
     auto pileUp = [
-        ReadAlignment(AlignmentChain(), AlignmentChain()), ReadAlignment(AlignmentChain())
+        ReadAlignment(SeededAlignment(), SeededAlignment()), ReadAlignment(SeededAlignment())
     ];
     auto allAlignmentChains = pileUp.getAlignmentChainRefs();
 

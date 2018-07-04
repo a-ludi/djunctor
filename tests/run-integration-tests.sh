@@ -451,6 +451,7 @@ function reference_to_result_alignments()
 
 function LAdump_csv()
 {
+    # readAId,readBId,complement,chainPart,readALength,readBLength,readABegin,readAEnd,readBBegin,readBEnd,numDiffs
     LAdump -c -d -l "$@" | \
         tail -n+3 | \
         tr ' \n' ',,' | \
@@ -516,7 +517,7 @@ function test_insertions_found()
 {
     expect_json \
         '. | has("pileUps")' \
-        '.[0].pileUps | map({ type: .type, contigIds: (.readAlignments | map(.[0].contigA.id) | unique | sort) }) == [
+        '.[0].pileUps | map({ type: .type, contigIds: (.readAlignments | map(.[0].alignment.contigA.id) | unique | sort) }) == [
             { type: "front", contigIds: [1] },
             { type: "gap",   contigIds: [1, 2] },
             { type: "gap",   contigIds: [2, 3] },
@@ -526,11 +527,17 @@ function test_insertions_found()
             { type: "gap",   contigIds: [6, 7] },
             { type: "back",  contigIds: [7] },
             { type: "front", contigIds: [8] },
-            { type: "gap",   contigIds: [8, 9] },
+            { type: "back",  contigIds: [8] },
+            { type: "front", contigIds: [9] },
             { type: "gap",   contigIds: [9, 10] },
-            { type: "gap",   contigIds: [10, 11] }
+            { type: "gap",   contigIds: [10, 11] },
+            { type: "back",  contigIds: [11] },
+            { type: "front", contigIds: [12] },
+            { type: "gap",   contigIds: [12, 14] },
+            { type: "gap",   contigIds: [13, 14] },
+            { type: "gap",   contigIds: [13, 15] }
         ]' \
-        '.[0].pileUps | map({ type: .type, contigIds: (.readAlignments | map(.[0].contigA.id) | unique | sort) })' \
+        '.[0].pileUps | map({ type: .type, contigIds: (.readAlignments | map(.[0].alignment.contigA.id) | unique | sort) })' \
         'pileUps'
 }
 
@@ -538,11 +545,17 @@ function test_pile_ups_contain_enough_valid_read()
 {
     local MIN_CORRECT_READS_RATIO="0.9"
     local COMPUTED_PILE_UPS="$(json_log 'pileUps' | \
-        jq -c 'select(has("pileUps")) | .pileUps | map({ type: .type, contigs: (.readAlignments | map(.[0].contigA.id) | unique | sort), reads: (.readAlignments | map(.[0].contigB.id) | unique | sort) })')"
+        jq -c 'select(has("pileUps")) |
+               .pileUps |
+               map({
+                   type: .type,
+                   contigs: (.readAlignments | map(.[0].alignment.contigA.id) | unique | sort),
+                   reads: (.readAlignments | map(.[0].alignment.contigB.id) | unique | sort),
+               })')"
     local TRUE_PILE_UPS="$(jq -c 'map({ contigs, reads: (.reads | map(.readId) | sort | unique) })' < "$WORKDIR/pile_ups.json")"
     local TEST_RESULT="$(jq '
-        def correctReadsRatio: (.correctReads | length) / (.computedReads | length);
-        def trueReadsFoundRatio: (.correctReads | length) / (.trueReads | length);
+        def correctReadsRatio: if (.computedReads | length) > 0 then (.correctReads | length) / (.computedReads | length) else 1 end;
+        def trueReadsFoundRatio: if (.trueReads | length) > 0 then (.correctReads | length) / (.trueReads | length) else 1 end;
         def minCorrectReadsRatio: '"$MIN_CORRECT_READS_RATIO"';
         def isGoodPileUp: correctReadsRatio >= minCorrectReadsRatio;
         def isBadPileUp: isGoodPileUp | not;
@@ -617,7 +630,7 @@ function test_pile_ups_contain_enough_valid_read()
 function test_result_contigs_properly_align_to_reference()
 {
     local NUM_RESULT_CONTIGS="$(json_log 'numReferenceContigs' | \
-        jq --raw-output 'select(has("numReferenceContigs")) | .contigSources | length')"
+        jq --raw-output 'select(has("numReferenceContigs")) | .numReferenceContigs')"
 
     for (( I = 1; I <= NUM_RESULT_CONTIGS; I++ ));
     do
