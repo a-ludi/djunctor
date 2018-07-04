@@ -382,36 +382,6 @@ function json_log()
 
 }
 
-function expect_insert_sequence_ends()
-{
-    local BEGIN_CONTIG="$1"
-    local END_CONTIG="$2"
-    local EXPECTED_HEAD="$3"
-    local EXPECTED_TAIL="$4"
-
-    local INSERTION_SEQUENCE="$(json_log | jq --raw-output 'select(has("insertSequence") and .contigIds == ['"$BEGIN_CONTIG"', '"$END_CONTIG"']) | .insertSequence')"
-    local INSERTION_HEAD="$(head -c${#EXPECTED_HEAD} <<<"$INSERTION_SEQUENCE")"
-    local INSERTION_TAIL="$(head -c-1 <<<"$INSERTION_SEQUENCE" | tail -c${#EXPECTED_TAIL})"
-
-    if [[ "$INSERTION_HEAD" != "$EXPECTED_HEAD" ]];
-    then
-        echo "insertion head mismatch:"
-        echo "  expected: $EXPECTED_HEAD"
-        echo "       got: $INSERTION_HEAD"
-
-        return 1
-    fi
-
-    if [[ "$INSERTION_TAIL" != "$EXPECTED_TAIL" ]];
-    then
-        echo "insertion tail mismatch:"
-        echo "  expected: $EXPECTED_TAIL"
-        echo "       got: $INSERTION_TAIL"
-
-        return 1
-    fi
-}
-
 function result_contig_properly_aligns_to_reference()
 {
     local RESULT_CONTIG="$1"
