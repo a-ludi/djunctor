@@ -488,11 +488,10 @@ EOF".outdent;
 }
 
 void attachTracePoints(Options)(AlignmentChain*[] alignmentChains, in string dbA,
-        in string dbB, in string[] dazzlerOptions, in Options options)
+        in string dbB, in string lasFile, in string[] dazzlerOptions, in Options options)
         if (hasOption!(Options, "workdir", isSomeString)
             && hasOption!(Options, "ladumpTraceOptions", isOptionsList))
 {
-    auto lasFile = getLasFile(dbA, dbB, options.workdir);
     // NOTE: dump only for matching A reads; better would be for matching
     //       B reads but that is not possible with `LAdump`.
     auto aReadIds = alignmentChains.map!"a.contigA.id".uniq.array;
@@ -1402,6 +1401,31 @@ bool lasFileGenerated(in string dbA, in string dbB, in string baseDirectory)
     return getLasFile(dbA, dbB, baseDirectory).exists;
 }
 
+size_t getNumBlocks(in string damFile)
+{
+    // see also in dazzler's DB.h:394
+    //     #define DB_NBLOCK "blocks = %9d\n"  //  number of blocks
+    immutable blockNumFormat = "blocks = %d";
+    immutable blockNumFormatStart = blockNumFormat[0 .. 6];
+    size_t numBlocks;
+    auto matchingLine = File(damFile.stripBlock).byLine.filter!(
+            line => line.startsWith(blockNumFormatStart)).front;
+
+    if (!matchingLine)
+    {
+        auto errorMessage = format!"could not read the block count in `%s`"(damFile.stripBlock);
+        throw new DazzlerCommandException(errorMessage);
+    }
+
+    if (formattedRead!blockNumFormat(matchingLine, numBlocks) != 1)
+    {
+        auto errorMessage = format!"could not read the block count in `%s`"(damFile.stripBlock);
+        throw new DazzlerCommandException(errorMessage);
+    }
+
+    return numBlocks;
+}
+
 size_t getNumContigs(Options)(in string damFile, in Options options)
         if (hasOption!(Options, "workdir", isSomeString))
 {
@@ -1410,20 +1434,20 @@ size_t getNumContigs(Options)(in string damFile, in Options options)
     size_t numContigs;
     size_t[] empty;
     // dfmt off
-    auto matchingLine = dbdump(damFile, empty, [], options.workdir)
+    auto matchingLine = dbdump(damFile.stripBlock, empty, [], options.workdir)
         .filter!(line => line.startsWith(contigNumFormatStart))
         .front;
     // dfmt on
 
     if (!matchingLine)
     {
-        auto errorMessage = format!"could not read the contig count in `%s`"(damFile);
+        auto errorMessage = format!"could not read the contig count in `%s`"(damFile.stripBlock);
         throw new DazzlerCommandException(errorMessage);
     }
 
     if (formattedRead!contigNumFormat(matchingLine, numContigs) != 1)
     {
-        auto errorMessage = format!"could not read the contig count in `%s`"(damFile);
+        auto errorMessage = format!"could not read the contig count in `%s`"(damFile.stripBlock);
         throw new DazzlerCommandException(errorMessage);
     }
 
@@ -2113,7 +2137,7 @@ private
             only("daccord"),
             only(esc(daccordOpts)),
             only(esc(lasFile.relativeToWorkdir(workdir))),
-            only(esc(dbFile.relativeToWorkdir(workdir))),
+            only(esc(dbFile.stripBlock.relativeToWorkdir(workdir))),
             only("|"),
             only("fasta2DAM", Fasta2DazzlerOptions.fromStdin),
             only(esc(daccordedDb.relativeToWorkdir(workdir))),
@@ -2131,7 +2155,7 @@ private
             only("daccord"),
             daccordOpts,
             only(lasFile.relativeToWorkdir(workdir)),
-            only(dbFile.relativeToWorkdir(workdir)),
+            only(dbFile.stripBlock.relativeToWorkdir(workdir)),
         ), workdir);
         // dfmt on
     }
@@ -2207,21 +2231,7 @@ private
     void dbsplit(in string dbFile, in string[] dbsplitOptions, in string workdir)
     {
         executeCommand(chain(only("DBsplit"), dbsplitOptions,
-                only(dbFile.relativeToWorkdir(workdir))), workdir);
-    }
-
-    void lasort(in string[] lasFiles, in string workdir)
-    {
-        import std.file : rename;
-        import std.path : setExtension;
-
-        alias sortedName = (lasFile) => lasFile.setExtension(".S.las");
-
-        executeCommand(chain(only("LAsort"), lasFiles), workdir);
-        foreach (lasFile; lasFiles)
-        {
-            rename(sortedName(lasFile), lasFile);
-        }
+                only(dbFile.stripBlock.relativeToWorkdir(workdir))), workdir);
     }
 
     string ladump(in string lasFile, in string dbA, in string dbB,
@@ -2238,8 +2248,8 @@ private
             only("LAdump"),
             ladumpOpts,
             only(
-                dbA.relativeToWorkdir(workdir),
-                dbB.relativeToWorkdir(workdir),
+                dbA.stripBlock.relativeToWorkdir(workdir),
+                dbB.stripBlock.relativeToWorkdir(workdir),
                 lasFile.relativeToWorkdir(workdir)
             ),
             readIds.map!(to!string),
@@ -2361,31 +2371,6 @@ private
                 only(dbFile.relativeToWorkdir(workdir))), workdir);
     }
 
-    size_t getNumBlocks(in string damFile)
-    {
-        // see also in dazzler's DB.h:394
-        //     #define DB_NBLOCK "blocks = %9d\n"  //  number of blocks
-        immutable blockNumFormat = "blocks = %d";
-        immutable blockNumFormatStart = blockNumFormat[0 .. 6];
-        size_t numBlocks;
-        auto matchingLine = File(damFile).byLine.filter!(
-                line => line.startsWith(blockNumFormatStart)).front;
-
-        if (!matchingLine)
-        {
-            auto errorMessage = format!"could not read the block count in `%s`"(damFile);
-            throw new DazzlerCommandException(errorMessage);
-        }
-
-        if (formattedRead!blockNumFormat(matchingLine, numBlocks) != 1)
-        {
-            auto errorMessage = format!"could not read the block count in `%s`"(damFile);
-            throw new DazzlerCommandException(errorMessage);
-        }
-
-        return numBlocks;
-    }
-
     string executeCommand(Range)(in Range command, in string workdir = null)
             if (isInputRange!(Unqual!Range) && isSomeString!(ElementType!(Unqual!Range)))
     {
@@ -2463,6 +2448,23 @@ private
     string buildScriptLine(in string[] command)
     {
         return escapeShellCommand(command) ~ " | sh -sve";
+    }
+
+    string stripBlock(in string fileName)
+    {
+        import std.regex : ctRegex, replaceFirst;
+
+        immutable blockNumRegex = ctRegex!(`\.[1-9][0-9]*\.(dam|db)$`);
+
+        return fileName.replaceFirst(blockNumRegex, `.$1`);
+    }
+
+    unittest
+    {
+        assert("foo_bar.1.dam".stripBlock == "foo_bar.dam");
+        assert("foo_bar.1024.db".stripBlock == "foo_bar.db");
+        assert("foo_bar.dam".stripBlock == "foo_bar.dam");
+        assert("foo_bar.db".stripBlock == "foo_bar.db");
     }
 
     string relativeToWorkdir(in string fileName, in string workdir)
