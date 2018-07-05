@@ -14,9 +14,8 @@ import djunctor.alignments : AlignmentChain, alignmentCoverage,
     makeJoin, PileUp, ReadAlignment, ReadAlignmentType, SeededAlignment;
 import djunctor.commandline : Options;
 import djunctor.dazzler : attachTracePoints, buildDamFile, ContigSegment,
-    DalignerOptions, DamapperOptions, GapSegment, getConsensus, getFastaEntries,
-    getLocalAlignments, getMappings, getNumContigs, getScaffoldStructure,
-    LAdumpOptions, readMask, ScaffoldSegment, writeMask;
+    GapSegment, getConsensus, getFastaEntries, getAlignments, getNumContigs,
+    getScaffoldStructure, readMask, ScaffoldSegment, writeMask;
 import djunctor.util.fasta : parseFastaRecord, parsePacBioHeader,
     reverseComplement;
 import djunctor.util.log;
@@ -573,6 +572,14 @@ auto getFastaRecord(in string sequenceDb, in size_t sequenceId, in Options optio
     return records.front;
 }
 
+private struct ConsensusOptions
+{
+    string[] daccordOptions;
+    string[] dalignerOptions;
+    string[] dbsplitOptions;
+    string workdir;
+}
+
 class DJunctor
 {
     /// Stop after maxLoops `mainLoop`s at the latest.
@@ -622,6 +629,14 @@ class DJunctor
     this(in ref Options options)
     {
         this.options = options;
+        // dfmt off
+        this.consensusOptions = const(ConsensusOptions)(
+            options.daccordOptions,
+            options.pileUpAlignmentOptions,
+            options.dbsplitOptions,
+            options.workdir,
+        );
+        // dfmt on
     }
 
     void run()
@@ -660,20 +675,6 @@ class DJunctor
 
     protected void init()
     {
-        static struct SelfAlignmentOptions
-        {
-            string[] dalignerOptions;
-            string[] ladumpOptions;
-            string workdir;
-        }
-
-        static struct ReadsToRefAlignmentOptions
-        {
-            string[] damapperOptions;
-            string[] ladumpOptions;
-            string workdir;
-        }
-
         logJsonDiagnostic("state", "enter", "function", "djunctor.init");
         numReferenceContigs = getNumContigs(options.refDb, options);
         numReads = getNumContigs(options.readsDb, options);
@@ -692,24 +693,10 @@ class DJunctor
                     options.inMask, options));
         }
 
-        // dfmt off
-        selfAlignment = getLocalAlignments(options.refDb, const(SelfAlignmentOptions)(
-            options.dalignerOptions ~ [
-                format!(DalignerOptions.minAlignmentLength ~ "%d")(options.minAnchorLength),
-                format!(DalignerOptions.averageCorrelationRate ~ "%f")((1 - options.referenceErrorRate)^^2),
-            ],
-            options.ladumpOptions[].filter!(o => o != LAdumpOptions.properOverlapsOnly).array,
-            options.workdir,
-        ));
-        readsAlignment = getMappings(options.refDb, options.readsDb, const(ReadsToRefAlignmentOptions)(
-            options.damapperOptions ~ [
-                format!(DamapperOptions.averageCorrelationRate ~ "%f")((1 - options.referenceErrorRate) * (1 - options.readsErrorRate)),
-            ],
-            options.ladumpOptions[].array,
-            options.workdir,
-        ));
-        // dfmt on
         catCandidates = readsAlignment.dup;
+        selfAlignment = getAlignments(options.refDb, options.selfAlignmentFile, options);
+        readsAlignment = getAlignments(options.refDb, options.readsDb,
+                options.refVsReadsAlignmentFile, options);
 
         // dfmt off
         catHits = initScaffold!(
@@ -1102,25 +1089,7 @@ class DJunctor
 
     protected string buildConsensus(string croppedDb, size_t referenceReadId)
     {
-        static struct ConsensusAlignmentOptions
-        {
-            string[] daccordOptions;
-            string[] dalignerOptions;
-            string[] dbsplitOptions;
-            string workdir;
-        }
-
-        // dfmt off
-        string consensusDb = getConsensus(croppedDb, referenceReadId, const(ConsensusAlignmentOptions)(
-            options.daccordOptions,
-            options.dalignerOptions ~ [
-                format!(DalignerOptions.minAlignmentLength ~ "%d")(options.minAnchorLength),
-                format!(DalignerOptions.averageCorrelationRate ~ "%f")((1 - options.readsErrorRate)^^2),
-            ],
-            options.dbsplitOptions,
-            options.workdir,
-        ));
-        // dfmt on
+        string consensusDb = getConsensus(croppedDb, referenceReadId, consensusOptions);
 
         debug logJsonDebug("consensusDb", consensusDb);
         assert(getNumContigs(consensusDb, options) == 1);
