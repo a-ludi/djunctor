@@ -105,7 +105,7 @@ Options processOptions(string[] args)
     }
 
     createWorkDir(options);
-    options.refDb = provideDamFileInWorkdir(options.refFile, options.provideMethod, options.workdir);
+    options.refDb = getRefDb(options);
     options.readsDb = getReadsDb(options);
     provideLasFileInWorkdir(options.selfAlignmentFile, options.provideMethod, options.workdir);
     provideLasFileInWorkdir(options.refVsReadsAlignmentFile, options.provideMethod, options.workdir);
@@ -170,6 +170,10 @@ struct Options
     @Option("generate-options")
     @Help("print recommended CLI options for the alignments (daligner/damapper) and exit")
     OptionFlag generateCLIOptions;
+
+    @Option("block")
+    @Help("if given only block <ulong> of the reference DB will be processed")
+    size_t refBlockNum;
 
     @Option("reads")
     @Help(q"{
@@ -432,31 +436,32 @@ private
 
     void verifyInputFiles(ref Options options)
     {
-        verifyDamFiles([options.refFile, options.readsFile]);
+        verifyDamFile(options.refFile);
+        verifyDamFile(options.readsFile);
         options.readsList = verifyReadsListFile(options.readsListFile);
         verifyInMask(options.refFile, options.inMask);
     }
 
-    void verifyDamFiles(in string[] damFiles)
+    void verifyDamFile(in string damFile, in size_t blockNum = 0)
     {
-        import djunctor.dazzler : getHiddenDbFiles;
+        import djunctor.dazzler : getHiddenDbFiles, getNumBlocks;
         import std.algorithm : endsWith;
         import std.exception : enforce;
         import std.file : exists;
         import std.format : format;
 
-        foreach (inputFile; damFiles)
-        {
-            enforce!Exception(inputFile.endsWith(".dam"),
-                    format!"expected .dam file, got `%s`"(inputFile));
-            enforce!Exception(inputFile.exists, format!"cannot open file `%s`"(inputFile));
+        enforce!Exception(damFile.endsWith(".dam"),
+                format!"expected .dam file, got `%s`"(damFile));
+        enforce!Exception(damFile.exists, format!"cannot open file `%s`"(damFile));
 
-            foreach (hiddenDbFile; getHiddenDbFiles(inputFile))
-            {
-                enforce!Exception(hiddenDbFile.exists,
-                        format!"cannot open hidden database file `%s`"(hiddenDbFile));
-            }
+        foreach (hiddenDbFile; getHiddenDbFiles(damFile))
+        {
+            enforce!Exception(hiddenDbFile.exists,
+                    format!"cannot open hidden database file `%s`"(hiddenDbFile));
         }
+
+        size_t numBlocks = getNumBlocks(damFile);
+        enforce!Exception(blockNum == 0 || blockNum <= numBlocks, format!"cannot select block %d; databse has only %d blocks"(blockNum, numBlocks));
     }
 
     size_t[] verifyReadsListFile(ref string readsListFile)
@@ -542,6 +547,21 @@ private
         {
             logWarn(to!string(e));
         }
+    }
+
+    string getRefDb(in Options options)
+    {
+        import std.path : extension, setExtension;
+
+        string dbFile = provideDamFileInWorkdir(options.refFile,
+                    options.provideMethod, options.workdir);
+
+        if (options.refBlockNum > 0)
+        {
+            dbFile = dbFile.setExtension(options.refBlockNum.to!string ~ dbFile.extension);
+        }
+
+        return dbFile;
     }
 
     string getReadsDb(in Options options)
