@@ -617,8 +617,7 @@ class DJunctor
     ReferenceMask repetitiveRegions;
     AlignmentChain[] readsAlignment;
     const Options options;
-    /// Set of "good" alignments to be considered in further processing.
-    AlignmentChain[] catCandidates;
+    const ConsensusOptions consensusOptions;
     /// A scaffold graph accumulating all planned insertions.
     ResultScaffold catHits;
     /// Scaffold structure of the reference.
@@ -693,7 +692,6 @@ class DJunctor
                     options.inMask, options));
         }
 
-        catCandidates = readsAlignment.dup;
         selfAlignment = getAlignments(options.refDb, options.selfAlignmentFile, options);
         readsAlignment = getAlignments(options.refDb, options.readsDb,
                 options.refVsReadsAlignmentFile, options);
@@ -815,7 +813,7 @@ class DJunctor
             new RedundantAlignmentChainsFilter(&unusedReads),
         );
         // dfmt on
-        AlignmentChain[] filterInput = catCandidates[];
+        AlignmentChain[] filterInput = readsAlignment[];
         // dfmt off
         logJsonDiagnostic(
             "filterStage", "Input",
@@ -847,7 +845,7 @@ class DJunctor
         }
         auto filterPipelineOutput = filterInput;
 
-        this.catCandidates = filterPipelineOutput;
+        this.readsAlignment = filterPipelineOutput;
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.filterReads");
     }
@@ -917,7 +915,7 @@ class DJunctor
         logJsonDiagnostic("state", "enter", "function", "djunctor.buildPileUps");
 
         // dfmt off
-        auto pileUps = buildPileUpsFromReadAlignments(numReferenceContigs, catCandidates)
+        auto pileUps = buildPileUpsFromReadAlignments(numReferenceContigs, readsAlignment)
             .filter!(pileUp => pileUp.length >= options.minReadsPerPileUp)
             .array;
         // dfmt on
