@@ -10,24 +10,19 @@ module djunctor.alignments;
 
 import djunctor.util.algorithm : cmpLexicographically, orderLexicographically;
 import djunctor.util.log;
-import djunctor.util.math : absdiff;
 import djunctor.util.scaffold : buildScaffold, concatenatePayloads, ContigNode,
-    ContigPart, discardAmbiguousJoins, Join, mergeExtensionsWithGaps,
-    removeNoneJoins, Scaffold;
+    ContigPart, discardAmbiguousJoins, Join, mergeExtensionsWithGaps;
 import core.exception : AssertError;
 import std.algorithm : all, any, canFind, chunkBy, equal, filter, isSorted,
-    joiner, map, max, mean, min, sort, sum, swap, SwapStrategy;
-import std.array : appender, Appender, array;
+    joiner, map, mean, min, sort, sum, swap, SwapStrategy;
+import std.array : appender, array;
 import std.conv : to;
 import std.exception : assertNotThrown, assertThrown;
 import std.format : format;
-import std.functional : binaryFun, unaryFun;
 import std.math : sgn;
-import std.meta : AliasSeq;
-import std.range : assumeSorted, chain, chunks, enumerate, InputRange,
-    inputRangeObject, iota, only, retro, slide, takeNone, tee, zip;
-import std.traits : isCallable;
-import std.typecons : Flag, No, tuple, Tuple, Yes;
+import std.range : assumeSorted, chain, chunks, InputRange, inputRangeObject,
+    iota, only, slide, takeNone, zip;
+import std.typecons : No;
 import vibe.data.json : toJson = serializeToJson;
 
 debug import std.stdio : writeln;
@@ -1717,7 +1712,6 @@ unittest
     //        .    .    .    :    .    :    .    .    :#21 |---->---->----|    .
     //        .    .    .    :    .    :    .    .    :    #22 |----->----|    .
     import std.algorithm : clamp;
-    import std.random : randomShuffle;
 
     with (AlignmentChain) with (LocalAlignment)
         {

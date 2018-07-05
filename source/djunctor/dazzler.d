@@ -14,24 +14,23 @@ import djunctor.util.fasta : parseFastaRecord;
 import djunctor.util.log;
 import djunctor.util.range : arrayChunks, takeExactly;
 import djunctor.util.tempfile : mkstemp;
-import std.algorithm : all, cache, canFind, endsWith, equal, filter, isSorted,
-    joiner, map, min, sort, splitter, startsWith, SwapStrategy, uniq;
+import std.algorithm : all, cache, canFind, endsWith, filter, isSorted, joiner,
+    map, min, sort, startsWith, SwapStrategy, uniq;
 import std.array : appender, Appender, array, uninitializedArray;
 import std.conv : to;
 import std.exception : enforce;
 import std.file : exists, remove;
 import std.format : format, formattedRead;
-import std.meta : Instantiate;
 import std.path : absolutePath, baseName, buildPath, dirName, relativePath,
     stripExtension, withExtension;
 import std.process : Config, escapeShellCommand, kill, pipeProcess,
     ProcessPipes, Redirect, wait;
-import std.range : chain, chunks, drop, only, take, slide;
+import std.range : chain, chunks, drop, only, slide;
 import std.range.primitives : ElementType, empty, isForwardRange, isInputRange;
-import std.stdio : File, writeln;
+import std.stdio : File;
 import std.string : lineSplitter, outdent;
-import std.traits : hasMember, isIntegral, isSomeChar, isSomeString, Unqual;
-import std.typecons : Flag, No, tuple, Tuple, Yes;
+import std.traits : isIntegral, isSomeString, Unqual;
+import std.typecons : No, tuple, Tuple;
 import std.variant : Algebraic;
 import vibe.data.json : Json, toJson = serializeToJson;
 
@@ -2162,7 +2161,6 @@ private
             if (isInputRange!(Unqual!Range) && isSomeString!(ElementType!(Unqual!Range)))
     {
         import std.algorithm : each, joiner;
-        import std.file : getcwd;
         import std.process : Config, pipeProcess, Redirect, wait;
         import std.range : chunks;
 
@@ -2311,8 +2309,6 @@ private
 
             void popFront()
             {
-                import std.string : stripRight;
-
                 assertInitialized();
                 currentLine = dbdump.stdout.readln();
 

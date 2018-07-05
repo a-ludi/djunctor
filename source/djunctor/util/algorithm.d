@@ -10,9 +10,6 @@ module djunctor.util.algorithm;
 
 import std.conv : to;
 import std.functional : unaryFun;
-import std.meta : AliasSeq;
-import std.range : ElementType, isInputRange;
-import std.typecons : tuple;
 
 /**
     Order `a` and `b` lexicographically by applying each `fun` to them. For

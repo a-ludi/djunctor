@@ -1,4 +1,4 @@
-.PHONY: build test format stylecheck clean todos
+.PHONY: build test format stylecheck unusedimports clean todos
 
 build:
 	dub build
@@ -10,7 +10,10 @@ format:
 	find source/ -name '*.d' -type f -exec dfmt -i {} \; -exec sed -i 's/\s\+$$//' {} \;
 
 stylecheck:
-	dub run dscanner -- --styleCheck | less
+	@dub run dscanner -- --styleCheck | less
+
+unusedimports:
+	@./.unused-imports.sh $$(find source/ -name '*.d' -type f)
 
 clean:
 	dub clean

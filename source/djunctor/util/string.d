@@ -11,7 +11,7 @@ module djunctor.util.string;
 import std.algorithm : joiner, map;
 import std.array : array;
 import std.conv : to;
-import std.range : chain, cycle, only, take;
+import std.range : chain, cycle, take;
 import std.string : lineSplitter;
 import std.traits : isSomeString;
 

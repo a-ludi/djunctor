@@ -23,8 +23,8 @@ import djunctor.util.math : ceil, floor, NaturalNumberSet;
 import djunctor.util.region : empty, min, Region, sup;
 import djunctor.util.scaffold : ContigNode, ContigPart, contigStarts,
     enforceJoinPolicy, getDefaultJoin, getUnkownJoin, initScaffold,
-    isAntiParallel, isDefault, isExtension, isFrontExtension, isGap, isUnkown,
-    isValid, linearWalk, normalizeUnkownJoins, removeExtensions, Scaffold;
+    isAntiParallel, isDefault, isExtension, isFrontExtension, isGap, isValid,
+    linearWalk, normalizeUnkownJoins, removeExtensions, Scaffold;
 import dstats.distrib : invPoissonCDF;
 import std.algorithm : all, canFind, chunkBy, each, equal, filter, find, fold,
     isSorted, joiner, map, max, maxIndex, min, setDifference, sort, sum, swap,

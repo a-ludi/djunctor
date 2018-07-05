@@ -8,8 +8,8 @@
 */
 module djunctor.commandline;
 
-import darg : ArgParseError, ArgParseHelp, Argument, Help, helpString, Option,
-    OptionFlag, parseArgs, usageString;
+import darg : ArgParseHelp, Argument, Help, helpString, Option, OptionFlag,
+    parseArgs, usageString;
 import djunctor.dazzler : provideDamFileInWorkdir, provideLasFileInWorkdir,
     ProvideMethod, DaccordOptions, DalignerOptions, DamapperOptions,
     LAdumpOptions;
@@ -321,7 +321,7 @@ struct Options
     /// Return a table that lists all `@Option`s in this struct.
     string toString() const
     {
-        import std.algorithm : joiner, map, maxElement, sort;
+        import std.algorithm : joiner, map, maxElement;
         import std.array : array;
         import std.format : format;
         import std.range : zip;
@@ -467,7 +467,6 @@ private
         import std.file : exists, readText;
         import std.format : format;
         import std.range : tee;
-        import std.typecons : Yes;
         import vibe.data.json : parseJsonString;
 
         if (readsListFile is null)
@@ -571,7 +570,6 @@ private
         import std.file : exists, FileException, remove;
         import std.format : format;
         import std.stdio : File;
-        import vibe.data.json : toJson = serializeToJson;
 
         auto deleteAfterwards = !fileName.exists;
 

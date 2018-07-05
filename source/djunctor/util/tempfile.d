@@ -78,7 +78,6 @@ version (Posix)
     */
     Tuple!(File, "file", string, "name") mkstemp(in string templateString) @trusted
     {
-        import core.sys.posix.unistd : write;
         import core.sys.posix.stdlib : mkstemp;
 
         char[255] dirnameBuffer;

@@ -157,8 +157,6 @@ void logError(T...)(string fmt, lazy T args) nothrow
 /// ditto
 void log(T...)(LogLevel level, string fmt, lazy T args) nothrow
 {
-    import std.range : chain;
-
     if (level < minLevel)
         return;
     string pref;

@@ -9,15 +9,12 @@
 */
 module djunctor.util.region;
 
-import std.algorithm : all, cache, chunkBy, cmp, filter, fold, map, max, min,
-    sort, sum;
+import std.algorithm : all, cmp, filter, map, max, min, sort, sum;
 import std.array : appender, array, join;
 import std.exception : assertThrown;
 import std.format : format;
-import std.range : assumeSorted, chunks, ElementType, InputRange,
-    inputRangeObject, isInputRange, only, retro;
+import std.range : assumeSorted, ElementType, isInputRange, only, retro;
 import std.traits : isNumeric, Unqual;
-import std.stdio : writeln;
 
 /// Returns the type of the property `tag` of `T`.
 template TagType(T)

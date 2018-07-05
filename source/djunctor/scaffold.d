@@ -10,18 +10,19 @@ module djunctor.util.scaffold;
 
 import djunctor.util.log;
 import djunctor.util.math : Graph, MissingNodeException, NaturalNumberSet;
-import std.algorithm : canFind, countUntil, equal, filter, fold, joiner, map,
-    minElement, setDifference, sort, sum, swap;
-import std.array : Appender, array;
-import std.exception : assertThrown;
+import std.algorithm : equal, filter, fold, joiner, map, minElement,
+    setDifference;
+import std.array : array;
 import std.functional : binaryFun;
-import std.range : assumeSorted, iota, only, refRange, retro, walkLength;
-import std.typecons : Flag, No, Tuple, tuple, Yes;
+import std.range : iota, only, refRange, retro, walkLength;
+import std.typecons : Flag, No, Tuple, Yes;
 import vibe.data.json : toJson = serializeToJson;
 
-debug import std.conv : to;
-
-debug import std.stdio : writeln;
+debug
+{
+    import std.conv : to;
+    import std.stdio : writeln;
+}
 
 ///
 unittest
