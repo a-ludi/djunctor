@@ -384,8 +384,23 @@ private
     {
         import std.path : absolutePath;
 
-        options.refFile = absolutePath(options.refFile);
-        options.readsFile = absolutePath(options.readsFile);
+        // dfmt off
+        immutable fileOptions = [
+            "refFile",
+            "readsFile",
+            "selfAlignmentFile",
+            "refVsReadsAlignmentFile",
+            "readsListFile",
+            "outMask",
+            "inMask",
+            "unusedReadsList",
+        ];
+        // dfmt on
+
+        static foreach (fileOption; fileOptions)
+        {
+            mixin("options." ~ fileOption ~ " = absolutePath(options." ~ fileOption ~ ");");
+        }
     }
 
     void addDefaultOptions(ref Options options)
