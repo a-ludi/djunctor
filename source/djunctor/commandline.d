@@ -450,8 +450,7 @@ private
         import std.file : exists;
         import std.format : format;
 
-        enforce!Exception(damFile.endsWith(".dam"),
-                format!"expected .dam file, got `%s`"(damFile));
+        enforce!Exception(damFile.endsWith(".dam"), format!"expected .dam file, got `%s`"(damFile));
         enforce!Exception(damFile.exists, format!"cannot open file `%s`"(damFile));
 
         foreach (hiddenDbFile; getHiddenDbFiles(damFile))
@@ -461,7 +460,8 @@ private
         }
 
         size_t numBlocks = getNumBlocks(damFile);
-        enforce!Exception(blockNum == 0 || blockNum <= numBlocks, format!"cannot select block %d; databse has only %d blocks"(blockNum, numBlocks));
+        enforce!Exception(blockNum == 0 || blockNum <= numBlocks,
+                format!"cannot select block %d; databse has only %d blocks"(blockNum, numBlocks));
     }
 
     size_t[] verifyReadsListFile(ref string readsListFile)
@@ -554,7 +554,7 @@ private
         import std.path : extension, setExtension;
 
         string dbFile = provideDamFileInWorkdir(options.refFile,
-                    options.provideMethod, options.workdir);
+                options.provideMethod, options.workdir);
 
         if (options.refBlockNum > 0)
         {
