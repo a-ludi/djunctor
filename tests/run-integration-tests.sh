@@ -51,6 +51,7 @@ ARGV=("$@")
 KEEP_TEMP=false
 RUN_DJUNCTOR=true
 RUN_GDB=false
+GENERATE_OPTIONS=false
 GDB="${GDB:-gdb}"
 if ! [[ -v GDBFLAGS ]]; then
     GDBFLAGS=()
@@ -80,7 +81,7 @@ function init_script()
 
 function parse_opts()
 {
-    while getopts "chDfgkuv" OPTION "${ARGV[@]}"; do
+    while getopts "chDfgkouv" OPTION "${ARGV[@]}"; do
         case "$OPTION" in
             c)
                 BUILD_OPTS+=('--build=cov')
@@ -102,6 +103,10 @@ function parse_opts()
             k)
                 KEEP_TEMP=true
                 DJUNCTOR_OPTS+=('-k')
+                ;;
+            o)
+                GENERATE_OPTIONS=true
+                DJUNCTOR_OPTS+=('--generate-options')
                 ;;
             u)
                 SHOW_UNCOVERED_LINES=true
@@ -340,6 +345,12 @@ function main()
         dub build "${BUILD_OPTS[@]}"
         provide_test_data
         run_djunctor
+
+        if $GENERATE_OPTIONS; then
+            cat "$RESULT_FILE"
+            return
+        fi
+
         prepare_tests
     else
         restore_results

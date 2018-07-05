@@ -11,7 +11,8 @@ module djunctor.commandline;
 import darg : ArgParseError, ArgParseHelp, Argument, Help, helpString, Option,
     OptionFlag, parseArgs, usageString;
 import djunctor.dazzler : provideDamFileInWorkdir, provideLasFileInWorkdir,
-    ProvideMethod, DaccordOptions, DamapperOptions, LAdumpOptions;
+    ProvideMethod, DaccordOptions, DalignerOptions, DamapperOptions,
+    LAdumpOptions;
 import djunctor.util.scaffold : JoinPolicy;
 import djunctor.util.log;
 import std.conv;
@@ -59,7 +60,7 @@ ReturnCode runDjunctorCommandline(string[] args)
 
     scope (exit)
     {
-        if (!finalOptions.keepTemp)
+        if (!(finalOptions.keepTemp || options.generateCLIOptions))
         {
             cleanWorkDir(finalOptions);
         }
@@ -67,9 +68,16 @@ ReturnCode runDjunctorCommandline(string[] args)
 
     try
     {
-        import djunctor.djunctor : runWithOptions;
+        if (options.generateCLIOptions)
+        {
+            printCLIOptionsForAlignment(finalOptions);
+        }
+        else
+        {
+            import djunctor.djunctor : runWithOptions;
 
-        runWithOptions(finalOptions);
+            runWithOptions(finalOptions);
+        }
 
         return ReturnCode.ok;
     }
@@ -89,6 +97,13 @@ Options processOptions(string[] args)
     normalizePaths(options);
     addDefaultOptions(options);
     verifyOptions(options);
+
+    if (options.generateCLIOptions)
+    {
+        // Do not do any "real" work.
+        return options;
+    }
+
     createWorkDir(options);
     options.refDb = provideDamFileInWorkdir(options.refFile, options.provideMethod, options.workdir);
     options.readsDb = getReadsDb(options);
@@ -96,6 +111,26 @@ Options processOptions(string[] args)
     provideLasFileInWorkdir(options.refVsReadsAlignmentFile, options.provideMethod, options.workdir);
 
     return options;
+}
+
+void printCLIOptionsForAlignment(in ref Options options)
+{
+    import std.string : join;
+
+    // dfmt off
+    writeln("# self alignment options (consider using `HPC.daligner`)");
+    writeln((
+        ["daligner"] ~
+        options.selfAlignmentOptions ~
+        [options.refFile, options.refFile]
+    ).join(" "));
+    writeln("# ref vs reads alignment options (consider using `HPC.damapper`)");
+    writeln((
+        ["damapper"] ~
+        options.refVsReadsAlignmentOptions ~
+        [options.refFile, options.readsFile]
+    ).join(" "));
+    // dfmt on
 }
 
 /**
@@ -131,6 +166,10 @@ struct Options
         file as produced by `damapper`
     }")
     string refVsReadsAlignmentFile;
+
+    @Option("generate-options")
+    @Help("print recommended CLI options for the alignments (daligner/damapper) and exit")
+    OptionFlag generateCLIOptions;
 
     @Option("reads")
     @Help(q"{
@@ -200,6 +239,8 @@ struct Options
     @Option("daligner-options")
     @Help("list of options to pass to `daligner`")
     string[] dalignerOptions = [];
+    string[] selfAlignmentOptions;
+    string[] pileUpAlignmentOptions;
 
     @Option("damapper-options")
     @Help("list of options to pass to `damapper`")
@@ -207,6 +248,7 @@ struct Options
     string[] damapperOptions = [
         DamapperOptions.bestMatches ~ ".7",
     ];
+    string[] refVsReadsAlignmentOptions;
     // dfmt on
 
     @Option("daccord-options")
@@ -346,8 +388,25 @@ private
         options.readsFile = absolutePath(options.readsFile);
     }
 
-    void addDefaultOptions(ref Options options) nothrow
+    void addDefaultOptions(ref Options options)
     {
+        import std.format : format;
+
+        // dfmt off
+        options.selfAlignmentOptions = options.dalignerOptions ~ [
+            format!(DalignerOptions.minAlignmentLength ~ "%d")(options.minAnchorLength),
+            format!(DalignerOptions.averageCorrelationRate ~ "%f")((1 - options.referenceErrorRate)^^2),
+        ];
+
+        options.pileUpAlignmentOptions = options.dalignerOptions ~ [
+            format!(DalignerOptions.minAlignmentLength ~ "%d")(options.minAnchorLength),
+            format!(DalignerOptions.averageCorrelationRate ~ "%f")((1 - options.readsErrorRate)^^2),
+        ];
+
+        options.refVsReadsAlignmentOptions = options.damapperOptions ~ [
+            format!(DamapperOptions.averageCorrelationRate ~ "%f")((1 - options.referenceErrorRate) * (1 - options.readsErrorRate)),
+        ];
+        // dfmt on
     }
 
     void verifyOptions(ref Options options)
