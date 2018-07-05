@@ -1131,7 +1131,8 @@ private auto readDbDump(S, Range)(S dbDump, Range recordNumbers, in size_t lineL
 
     return byRecordSplitter(dbDump).map!parseRecord
         .map!"a()"
-        .cache;
+        .cache
+        .filter!"a !is null";
 }
 
 unittest

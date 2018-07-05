@@ -2415,7 +2415,7 @@ unittest
     auto pileUp = [
         ReadAlignment(SeededAlignment(), SeededAlignment()), ReadAlignment(SeededAlignment())
     ];
-    auto allAlignmentChains = pileUp.getAlignmentChainRefs();
+    auto allAlignmentChains = pileUp.getAlignmentRefs();
 
     assert(allAlignmentChains.length == 3);
     assert(pileUp[0][0].id == 0);
