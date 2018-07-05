@@ -144,7 +144,7 @@ AlignmentChain[] getLocalAlignments(Options)(in string dbA, in Options options)
         dalign(dbA, options.dalignerOptions, options.workdir);
     }
 
-    return processGeneratedLasFile(dbA, null, options);
+    return getGeneratedAlignments(dbA, null, options);
 }
 
 AlignmentChain[] getLocalAlignments(Options)(in string dbA, in string dbB, in Options options)
@@ -156,7 +156,7 @@ AlignmentChain[] getLocalAlignments(Options)(in string dbA, in string dbB, in Op
         dalign(dbA, dbB, options.dalignerOptions, options.workdir);
     }
 
-    return processGeneratedLasFile(dbA, dbB, options);
+    return getGeneratedAlignments(dbA, dbB, options);
 }
 
 void computeLocalAlignments(Options)(in string[] dbList, in Options options)
@@ -175,7 +175,7 @@ AlignmentChain[] getMappings(Options)(in string dbA, in string dbB, in Options o
         damapper(dbA, dbB, options.damapperOptions, options.workdir);
     }
 
-    return processGeneratedLasFile(dbA, dbB, options);
+    return getGeneratedAlignments(dbA, dbB, options);
 }
 
 void computeMappings(Options)(in string[] dbList, in Options options)
@@ -185,27 +185,33 @@ void computeMappings(Options)(in string[] dbList, in Options options)
     damapper(dbList, options.damapperOptions, options.workdir);
 }
 
-private AlignmentChain[] processGeneratedLasFile(Options)(in string dbA,
+private AlignmentChain[] getGeneratedAlignments(Options)(in string dbA,
         in string dbB, in Options options)
         if (hasOption!(Options, "ladumpOptions", isOptionsList)
             && hasOption!(Options, "workdir", isSomeString))
 {
     auto lasFile = getLasFile(dbA, dbB, options.workdir);
 
-    return processLasFile(dbA, dbB, lasFile, options);
+    return getAlignments(dbA, dbB, lasFile, options);
 }
 
-private AlignmentChain[] processLasFile(Options)(in string dbA, in string dbB,
+AlignmentChain[] getAlignments(Options)(in string dbA, in string lasFile, in Options options)
+        if (hasOption!(Options, "ladumpOptions", isOptionsList)
+            && hasOption!(Options, "workdir", isSomeString))
+{
+    return getAlignments(dbA, null, lasFile, options);
+}
+
+AlignmentChain[] getAlignments(Options)(in string dbA, in string dbB,
         in string lasFile, in Options options)
         if (hasOption!(Options, "ladumpOptions", isOptionsList)
             && hasOption!(Options, "workdir", isSomeString))
 {
-    auto dbFiles = tuple(dbA, dbB);
-
     // dfmt off
     auto alignmentChains = readAlignmentList(ladump(
         lasFile,
-        dbFiles.expand,
+        dbA,
+        dbB,
         options.ladumpOptions,
         options.workdir,
     )).array;
