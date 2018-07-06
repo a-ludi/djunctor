@@ -413,17 +413,20 @@ private
 
         // dfmt off
         options.selfAlignmentOptions = options.dalignerOptions ~ [
+            DalignerOptions.identity,
             format!(DalignerOptions.minAlignmentLength ~ "%d")(options.minAnchorLength),
             format!(DalignerOptions.averageCorrelationRate ~ "%f")((1 - options.referenceErrorRate)^^2),
         ];
 
-        options.pileUpAlignmentOptions = options.dalignerOptions ~ [
-            format!(DalignerOptions.minAlignmentLength ~ "%d")(options.minAnchorLength),
-            format!(DalignerOptions.averageCorrelationRate ~ "%f")((1 - options.readsErrorRate)^^2),
+        options.refVsReadsAlignmentOptions = options.damapperOptions ~ [
+            DamapperOptions.symmetric,
+            format!(DamapperOptions.averageCorrelationRate ~ "%f")((1 - options.referenceErrorRate) * (1 - options.readsErrorRate)),
         ];
 
-        options.refVsReadsAlignmentOptions = options.damapperOptions ~ [
-            format!(DamapperOptions.averageCorrelationRate ~ "%f")((1 - options.referenceErrorRate) * (1 - options.readsErrorRate)),
+        options.pileUpAlignmentOptions = options.dalignerOptions ~ [
+            DalignerOptions.identity,
+            format!(DalignerOptions.minAlignmentLength ~ "%d")(options.minAnchorLength),
+            format!(DalignerOptions.averageCorrelationRate ~ "%f")((1 - options.readsErrorRate)^^2),
         ];
         // dfmt on
     }

@@ -470,7 +470,7 @@ ref PileUp fetchTracePoints(ref PileUp pileUp, in Options options)
     auto allAlignmentChains = pileUp.getAlignmentRefs();
     allAlignmentChains.sort!("*a < *b", SwapStrategy.stable);
     allAlignmentChains.attachTracePoints(options.refDb, options.readsDb,
-            options.refVsReadsAlignmentFile, options.damapperOptions, options);
+            options.refVsReadsAlignmentFile, options.selfAlignmentOptions, options);
 
     return pileUp;
 }
