@@ -240,14 +240,14 @@ struct Options
     @Help("if given extend contigs even if no spanning reads can be found")
     OptionFlag shouldExtendContigs;
 
-    @Option("daligner-options")
-    @Help("list of options to pass to `daligner`")
+    /// List of options to pass to `daligner`.
+    @Option()
     string[] dalignerOptions = [];
     string[] selfAlignmentOptions;
     string[] pileUpAlignmentOptions;
 
-    @Option("damapper-options")
-    @Help("list of options to pass to `damapper`")
+    /// List of options to pass to `damapper`.
+    @Option()
     // dfmt off
     string[] damapperOptions = [
         DamapperOptions.bestMatches ~ ".7",
@@ -255,16 +255,16 @@ struct Options
     string[] refVsReadsAlignmentOptions;
     // dfmt on
 
-    @Option("daccord-options")
-    @Help("list of options to pass to `daccord`")
+    /// List of options to pass to `daccord`.
+    @Option()
     // dfmt off
     string[] daccordOptions = [
         DaccordOptions.produceFullSequences,
     ];
     // dfmt on
 
-    @Option("dbsplit-options")
-    @Help("list of options to pass to `DBsplit`")
+    /// List of options to pass to `DBsplit`.
+    @Option()
     string[] dbsplitOptions = [];
 
     @Option("fasta-line-width", "w")
