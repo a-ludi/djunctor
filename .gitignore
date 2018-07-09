@@ -9,6 +9,13 @@ djunctor.dll
 djunctor.a
 djunctor.lib
 djunctor-test-*
+/testgen
+testgen.so
+testgen.dylib
+testgen.dll
+testgen.a
+testgen.lib
+testgen-test-*
 *.exe
 *.o
 *.obj

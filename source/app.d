@@ -8,21 +8,44 @@
 */
 module app;
 
-import djunctor.commandline;
 import std.conv;
 import std.stdio;
 
-/// Start `djunctor` with the given set of arguments.
-int main(string[] args)
+version (TestGenerator)
 {
-    version (Posix)
+    /// Start `testgen` with the given set of arguments.
+    int main(string[] args)
     {
-        return runDjunctorCommandline(args);
-    }
-    else
-    {
-        writeln("not compatible with non-POSIX systems.");
+        import testgen.commandline;
 
-        return 31;
+        version (Posix)
+        {
+            return runTestGenCommandline(args);
+        }
+        else
+        {
+            writeln("not compatible with non-POSIX systems.");
+
+            return 31;
+        }
+    }
+}
+else
+{
+    /// Start `djunctor` with the given set of arguments.
+    int main(string[] args)
+    {
+        import djunctor.commandline;
+
+        version (Posix)
+        {
+            return runDjunctorCommandline(args);
+        }
+        else
+        {
+            writeln("not compatible with non-POSIX systems.");
+
+            return 31;
+        }
     }
 }
