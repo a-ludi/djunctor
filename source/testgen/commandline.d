@@ -98,7 +98,7 @@ Options processOptions(string[] args)
     createWorkDir(options);
     options.assembly1Db = getDb(options.assembly1File, options);
     options.assembly2Db = getDb(options.assembly2File, options);
-    provideLasFileInWorkdir(options.alignmentFile, options.provideMethod, options.workdir);
+    options.alignmentFile = provideLasFileInWorkdir(options.alignmentFile, options.provideMethod, options.workdir);
 
     return options;
 }
