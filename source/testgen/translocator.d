@@ -20,6 +20,7 @@ import std.conv : to;
 import std.format : format;
 import std.range : assumeSorted, chain, chunks, enumerate, only, repeat, slide, takeExactly;
 import std.stdio : stdout;
+import std.typecons : No;
 import testgen.commandline : Options;
 import vibe.data.json : toJson = serializeToJson;
 
@@ -97,24 +98,13 @@ private struct Translocator
                     );
 
                     return contigMappedRegions
-                        .slide(2)
-                        .map!((keepRegions) => {
-                            auto numNs = keepRegions[0].end == 0
+                        .slide!(No.withPartial)(2)
+                        .map!((keepRegions) => chain(
+                            repeat(unknownBase).takeExactly(keepRegions[0].end == 0
                                 ? 0
-                                : keepRegions[1].begin - keepRegions[0].end;
-                            auto sequencePiece = chain(
-                                repeat(unknownBase).takeExactly(numNs),
-                                contigSequence[keepRegions[1].begin .. keepRegions[1].end],
-                            );
-                            debug logJsonDebug(
-                                "keepRegions", keepRegions.array.toJson,
-                                "numNs", numNs,
-                                "numBases", keepRegions[1].end - keepRegions[1].begin,
-                            );
-
-                            return sequencePiece;
-                        })
-                        .map!"a()"
+                                : keepRegions[1].begin - keepRegions[0].end),
+                            contigSequence[keepRegions[1].begin .. keepRegions[1].end],
+                        ))
                         .cache
                         .joiner
                         .chunks(options.fastaLineWidth)
