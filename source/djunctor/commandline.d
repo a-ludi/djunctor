@@ -107,8 +107,8 @@ Options processOptions(string[] args)
     createWorkDir(options);
     options.refDb = getRefDb(options);
     options.readsDb = getReadsDb(options);
-    provideLasFileInWorkdir(options.selfAlignmentFile, options.provideMethod, options.workdir);
-    provideLasFileInWorkdir(options.refVsReadsAlignmentFile, options.provideMethod, options.workdir);
+    options.selfAlignmentFile = provideLasFileInWorkdir(options.selfAlignmentInputFile, options.provideMethod, options.workdir);
+    options.refVsReadsAlignmentFile = provideLasFileInWorkdir(options.refVsReadsAlignmentInputFile, options.provideMethod, options.workdir);
 
     return options;
 }
@@ -158,6 +158,8 @@ struct Options
         local alignments of the reference against itself in form of a .las
         file as produced by `daligner`
     }")
+    string selfAlignmentInputFile;
+    @Option()
     string selfAlignmentFile;
 
     @Argument("REF-VS-READS-ALIGNMENT")
@@ -165,6 +167,8 @@ struct Options
         alignments chains of the reads against the reference in form of a .las
         file as produced by `damapper`
     }")
+    string refVsReadsAlignmentInputFile;
+    @Option()
     string refVsReadsAlignmentFile;
 
     @Option("generate-options")
@@ -295,7 +299,10 @@ struct Options
     double confidence = .95;
 
     @Option("input-provide-method", "p")
-    @Help("use this method to provide the input files in the working directory")
+    @Help(q"{
+        use <ProvideMethod> to provide the input files in the working directory;
+        either `symlink` or `copy` (default: `symlink`)
+    }")
     ProvideMethod provideMethod = ProvideMethod.symlink;
 
     @Option("keep-temp", "k")
