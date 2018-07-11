@@ -10,7 +10,7 @@ module djunctor.alignments;
 
 import djunctor.util.algorithm : cmpLexicographically, orderLexicographically;
 import djunctor.util.log;
-import djunctor.util.scaffold : buildScaffold, concatenatePayloads, ContigNode,
+import djunctor.scaffold : buildScaffold, concatenatePayloads, ContigNode,
     ContigPart, discardAmbiguousJoins, Join, mergeExtensionsWithGaps;
 import core.exception : AssertError;
 import std.algorithm : all, any, canFind, chunkBy, equal, filter, isSorted,

@@ -13,7 +13,7 @@ import darg : ArgParseHelp, Argument, Help, helpString, Option, OptionFlag,
 import djunctor.dazzler : provideDamFileInWorkdir, provideLasFileInWorkdir,
     ProvideMethod, DaccordOptions, DalignerOptions, DamapperOptions,
     LAdumpOptions;
-import djunctor.util.scaffold : JoinPolicy;
+import djunctor.scaffold : JoinPolicy;
 import djunctor.util.log;
 import std.conv;
 import std.stdio;

@@ -6,7 +6,7 @@
              included LICENSE file.
     Authors: Arne Ludwig <arne.ludwig@posteo.de>
 */
-module djunctor.util.scaffold;
+module djunctor.scaffold;
 
 import djunctor.util.log;
 import djunctor.util.math : Graph, MissingNodeException, NaturalNumberSet;

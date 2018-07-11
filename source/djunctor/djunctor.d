@@ -21,7 +21,7 @@ import djunctor.util.fasta : parseFastaRecord, parsePacBioHeader,
 import djunctor.util.log;
 import djunctor.util.math : ceil, floor, NaturalNumberSet;
 import djunctor.util.region : empty, min, Region, sup;
-import djunctor.util.scaffold : ContigNode, ContigPart, contigStarts,
+import djunctor.scaffold : ContigNode, ContigPart, contigStarts,
     enforceJoinPolicy, getDefaultJoin, getUnkownJoin, initScaffold,
     isAntiParallel, isDefault, isExtension, isFrontExtension, isGap, isValid,
     linearWalk, normalizeUnkownJoins, removeExtensions, Scaffold;
