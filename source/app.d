@@ -11,41 +11,32 @@ module app;
 import std.conv;
 import std.stdio;
 
-version (TestGenerator)
-{
-    /// Start `testgen` with the given set of arguments.
-    int main(string[] args)
-    {
-        import testgen.commandline;
 
-        version (Posix)
+version (Posix)
+{
+    version (TestGenerator)
+    {
+        /// Start `testgen` with the given set of arguments.
+        int main(string[] args)
         {
+            import testgen.commandline;
+
             return runTestGenCommandline(args);
         }
-        else
-        {
-            writeln("not compatible with non-POSIX systems.");
+    }
 
-            return 31;
+    version (Djunctor)
+    {
+        /// Start `djunctor` with the given set of arguments.
+        int main(string[] args)
+        {
+            import djunctor.commandline;
+
+            return runDjunctorCommandline(args);
         }
     }
 }
 else
 {
-    /// Start `djunctor` with the given set of arguments.
-    int main(string[] args)
-    {
-        import djunctor.commandline;
-
-        version (Posix)
-        {
-            return runDjunctorCommandline(args);
-        }
-        else
-        {
-            writeln("not compatible with non-POSIX systems.");
-
-            return 31;
-        }
-    }
+    static assert(0, "not compatible with non-POSIX systems.");
 }

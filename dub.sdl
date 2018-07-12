@@ -9,12 +9,15 @@ dependency  "dstats" version="~>1.0.5"
 dependency  "vibe-d:data" version="~>0.8.4-alpha.1"
 
 configuration "djunctor" {
-    targetName  "djunctor"
-    targetType  "executable"
+    versions       "Djunctor"
+    targetName     "djunctor"
+    targetType     "executable"
+    mainSourceFile "source/app.d"
 }
 
 configuration "testgen" {
-    versions    "TestGenerator"
-    targetName  "testgen"
-    targetType  "executable"
+    versions       "TestGenerator"
+    targetName     "testgen"
+    targetType     "executable"
+    mainSourceFile "source/app.d"
 }
