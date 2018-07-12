@@ -9,13 +9,13 @@
 module djunctor.dazzler;
 
 import djunctor.commandline : hasOption, isOptionsList;
-import djunctor.alignments : AlignmentChain;
+import djunctor.alignments : AlignmentChain, coord_t, diff_t, id_t, trace_point_t;
 import djunctor.util.fasta : parseFastaRecord;
 import djunctor.util.log;
 import djunctor.util.range : arrayChunks, takeExactly;
 import djunctor.util.tempfile : mkstemp;
 import std.algorithm : all, cache, canFind, endsWith, filter, isSorted, joiner,
-    map, min, sort, startsWith, SwapStrategy, uniq;
+    map, min, sort, splitter, startsWith, SwapStrategy, uniq;
 import std.array : appender, Appender, array, uninitializedArray;
 import std.conv : to;
 import std.exception : enforce;
@@ -25,14 +25,16 @@ import std.path : absolutePath, baseName, buildPath, dirName, relativePath,
     stripExtension, withExtension;
 import std.process : Config, escapeShellCommand, kill, pipeProcess,
     ProcessPipes, Redirect, wait;
-import std.range : chain, chunks, drop, only, slide;
+import std.range : chain, chunks, drop, enumerate, only, slide;
 import std.range.primitives : ElementType, empty, isForwardRange, isInputRange;
 import std.stdio : File;
 import std.string : lineSplitter, outdent;
-import std.traits : isIntegral, isSomeString, Unqual;
-import std.typecons : No, tuple, Tuple;
+import std.traits : isIntegral, isSomeString, ReturnType, Unqual;
+import std.typecons : Flag, No, tuple, Tuple, Yes;
 import std.variant : Algebraic;
 import vibe.data.json : Json, toJson = serializeToJson;
+
+debug import std.stdio : writeln;
 
 /// File suffixes of hidden DB files.
 private immutable hiddenDbFileSuffixes = [".bps", ".hdr", ".idx"];
@@ -207,7 +209,7 @@ AlignmentChain[] getAlignments(Options)(in string dbA, in string dbB,
             && hasOption!(Options, "workdir", isSomeString))
 {
     // dfmt off
-    auto alignmentChains = readAlignmentList(ladump(
+    auto alignmentChains = readLasDump(ladump(
         lasFile,
         dbA,
         dbB,
@@ -220,273 +222,6 @@ AlignmentChain[] getAlignments(Options)(in string dbA, in string dbB,
     return alignmentChains;
 }
 
-private enum ChainPartType
-{
-    start = '>',
-    continuation = '-',
-    alternateStart = '+',
-    noChainInFile = '.',
-}
-
-private auto readAlignmentList(S)(in S lasDump) if (isSomeString!S)
-{
-    import std.algorithm : chunkBy, count, filter;
-    import std.range : chunks, drop, enumerate;
-
-    immutable recordSeparator = ';';
-    immutable chainPartFormat = "P %d %d %c %c;L %d %d;C %d %d %d %d;D %d";
-    immutable numChainPartLines = chainPartFormat.count(recordSeparator) + 1;
-    // dfmt off
-    alias RawChainPart = Tuple!(
-        AlignmentChain.Contig, "contigA",
-        AlignmentChain.Contig, "contigB",
-        AlignmentChain.Complement, "complement",
-        ChainPartType, "chainPartType",
-        AlignmentChain.LocalAlignment, "localAlignment",
-    );
-    // dfmt on
-
-    /// Build chunks of numChainPartLines lines.
-    alias byChainPartSplitter = lasDump => lasDump.lineSplitter.drop(2).chunks(numChainPartLines);
-    /// Parse chunks of numChainPartLines lines into RawChainPart s.
-    alias parseChainPart = chainPartLines => {
-        AlignmentChain.Contig contigA, contigB;
-        char complement;
-        char chainPartType;
-        AlignmentChain.LocalAlignment localAlignment;
-
-        auto joinedLines = chainPartLines.joiner(only(recordSeparator));
-        // dfmt off
-        int numMatches = joinedLines
-            .array
-            .formattedRead!chainPartFormat(
-                contigA.id,
-                contigB.id,
-                complement,
-                chainPartType,
-                contigA.length,
-                contigB.length,
-                localAlignment.contigA.begin,
-                localAlignment.contigA.end,
-                localAlignment.contigB.begin,
-                localAlignment.contigB.end,
-                localAlignment.numDiffs,
-            );
-        // dfmt on
-        assert(numMatches == 11, format!"%d matches in chunk: `%s`"(numMatches, joinedLines.array));
-        AlignmentChain.Complement flagComplement = complement == 'c'
-            ? AlignmentChain.Complement.yes : AlignmentChain.Complement.no;
-
-        return RawChainPart(contigA, contigB, flagComplement,
-                chainPartType.to!ChainPartType, localAlignment);
-    };
-    // dfmt off
-    /// Returns true iff both parts have the same contigs.
-    alias sameContigsInvolved = (part1, part2) =>
-        part1.contigA.id == part2.contigA.id &&
-        part1.contigB.id == part2.contigB.id;
-    /// Returns true iff `part1` and `part2` belong to the same chain.
-    alias isChainContinuation = (part1, part2) =>
-        (
-            part1.chainPartType == ChainPartType.start &&
-            part2.chainPartType == ChainPartType.continuation
-        )
-        ||
-        (
-            part1.chainPartType == ChainPartType.alternateStart &&
-            part2.chainPartType == ChainPartType.continuation
-        )
-        ||
-        (
-            part1.chainPartType == ChainPartType.continuation &&
-            part2.chainPartType == ChainPartType.continuation
-        );
-    /// Make sure the complement flag is the same for all parts of a chain.
-    alias assertSameComplementValue = (chainPart1, chainPart2) => {
-        assert(chainPart1.complement == chainPart2.complement);
-
-        return true;
-    };
-    alias belongToSameChain = (chainPart1, chainPart2) pure =>
-        chainPart1() == chainPart2() || (
-            sameContigsInvolved(chainPart1(), chainPart2()) &&
-            isChainContinuation(chainPart1(), chainPart2()) &&
-            assertSameComplementValue(chainPart1(), chainPart2()));
-    /// Convert the chunk of chain parts into an AlignmentChain.
-    alias buildAlignmentChain = chainPartChunk => AlignmentChain(
-        chainPartChunk[0],
-        chainPartChunk[1].front()().contigA,
-        chainPartChunk[1].front()().contigB,
-        chainPartChunk[1].front()().complement,
-        chainPartChunk[1]
-            .map!(chainPart => chainPart().localAlignment)
-            .array);
-
-    return byChainPartSplitter(lasDump)
-        .map!parseChainPart
-        .chunkBy!belongToSameChain
-        .enumerate
-        .map!buildAlignmentChain;
-    // dfmt on
-}
-
-unittest
-{
-    immutable testLasDump = q"EOF
-        + P 9
-        % P 1337
-        P 1 2 n >
-        L 8 9
-        C 3 4 5 6
-        D 7
-        P 1 2 n -
-        L 17 18
-        C 12 13 14 15
-        D 16
-        P 19 20 c +
-        L 26 27
-        C 21 22 23 24
-        D 25
-        P 19 20 c -
-        L 35 36
-        C 30 31 32 33
-        D 34
-        P 37 38 n .
-        L 35 36
-        C 39 40 41 42
-        D 43
-        P 46 47 c .
-        L 53 54
-        C 48 49 50 51
-        D 52
-        P 46 47 n .
-        L 53 54
-        C 57 58 59 60
-        D 61
-        P 64 65 c >
-        L 71 72
-        C 66 67 68 69
-        D 70
-        P 55 56 c -
-        L 80 81
-        C 75 76 77 78
-        D 79
-EOF".outdent;
-
-    auto alignmentChains = readAlignmentList(testLasDump).array;
-    with (AlignmentChain) with (Complement) with (LocalAlignment)
-            {
-                // dfmt off
-                assert(alignmentChains ==
-                    [
-                        AlignmentChain(
-                            0,
-                            Contig(1, 8),
-                            Contig(2, 9),
-                            no,
-                            [
-                                LocalAlignment(
-                                    Locus(3, 4),
-                                    Locus(5, 6),
-                                    7
-                                ),
-                                LocalAlignment(
-                                    Locus(12, 13),
-                                    Locus(14, 15),
-                                    16
-                                )
-                            ]
-                        ),
-                        AlignmentChain(
-                            1,
-                            Contig(19, 26),
-                            Contig(20, 27),
-                            yes,
-                            [
-                                LocalAlignment(
-                                    Locus(21, 22),
-                                    Locus(23, 24),
-                                    25
-                                ),
-                                LocalAlignment(
-                                    Locus(30, 31),
-                                    Locus(32, 33),
-                                    34
-                                )
-                            ]
-                        ),
-                        AlignmentChain(
-                            2,
-                            Contig(37, 35),
-                            Contig(38, 36),
-                            no,
-                            [
-                                LocalAlignment(
-                                    Locus(39, 40),
-                                    Locus(41, 42),
-                                    43
-                                )
-                            ]
-                        ),
-                        AlignmentChain(
-                            3,
-                            Contig(46, 53),
-                            Contig(47, 54),
-                            yes,
-                            [
-                                LocalAlignment(
-                                    Locus(48, 49),
-                                    Locus(50, 51),
-                                    52
-                                ),
-                            ]
-                        ),
-                        AlignmentChain(
-                            4,
-                            Contig(46, 53),
-                            Contig(47, 54),
-                            no,
-                            [
-                                LocalAlignment(
-                                    Locus(57, 58),
-                                    Locus(59, 60),
-                                    61
-                                )
-                            ]
-                        ),
-                        AlignmentChain(
-                            5,
-                            Contig(64, 71),
-                            Contig(65, 72),
-                            yes,
-                            [
-                                LocalAlignment(
-                                    Locus(66, 67),
-                                    Locus(68, 69),
-                                    70
-                                )
-                            ]
-                        ),
-                        AlignmentChain(
-                            6,
-                            Contig(55, 80),
-                            Contig(56, 81),
-                            yes,
-                            [
-                                LocalAlignment(
-                                    Locus(75, 76),
-                                    Locus(77, 78),
-                                    79
-                                )
-                            ]
-                        )
-                    ],
-                    format!"error parsing test input; result was: %s"(alignmentChains)
-                );
-                // dfmt on
-            }
-}
-
 void attachTracePoints(Options)(AlignmentChain*[] alignmentChains, in string dbA,
         in string dbB, in string lasFile, in string[] dazzlerOptions, in Options options)
         if (hasOption!(Options, "workdir", isSomeString)
@@ -497,7 +232,7 @@ void attachTracePoints(Options)(AlignmentChain*[] alignmentChains, in string dbA
     auto aReadIds = alignmentChains.map!"a.contigA.id".uniq.array;
 
     // dfmt off
-    auto tracePointDumps = readTracePointList(ladump(
+    auto acsWithTracePoints = readLasDump(ladump(
         lasFile,
         dbA,
         dbB,
@@ -505,301 +240,22 @@ void attachTracePoints(Options)(AlignmentChain*[] alignmentChains, in string dbA
         options.ladumpTraceOptions, options.workdir,
     )).array;
     // dfmt on
-    tracePointDumps.sort!("a < b", SwapStrategy.stable);
+    acsWithTracePoints.sort!("a < b", SwapStrategy.stable);
     assert(isSorted!"*a < *b"(alignmentChains), "alignmentChains must be sorted");
 
-    auto numAttached = alignmentChains.attachTracePointDumps(tracePointDumps,
+    auto numAttached = alignmentChains.attachTracePoints(acsWithTracePoints,
             getTracePointDistance(dazzlerOptions));
     assert(numAttached == alignmentChains.length,
             "missing trace point lists for some alignment chains");
 
-    foreach (idx, alignmentChain; alignmentChains)
+    debug logJsonDebug("acsWithTracePoints", acsWithTracePoints.toJson);
+    version (assert)
     {
-        assert(alignmentChain.tracePointDistance > 0);
-
-        foreach (localAlignment; alignmentChain.localAlignments)
+        foreach (alignmentChain; alignmentChains)
         {
-            assert(localAlignment.tracePoints.length > 0);
+            // trigger invariant of AlignmentChain
+            cast(void) alignmentChain.first;
         }
-    }
-}
-
-// dfmt off
-private alias TracePointDump = Tuple!(
-    size_t, "contigAId",
-    size_t, "contigBId",
-    size_t, "contigABegin",
-    size_t, "contigBBegin",
-    size_t, "contigAEnd",
-    size_t, "contigBEnd",
-    AlignmentChain.LocalAlignment.TracePoint[][], "tracePointLists",
-);
-// dfmt on
-
-private TracePointDump[] readTracePointList(S)(in S lasDump) if (isSomeString!S)
-{
-    alias TracePoint = AlignmentChain.LocalAlignment.TracePoint;
-
-    debug auto nextLineTypes = "+%@";
-    size_t contigAId;
-    size_t contigBId;
-    size_t contigAFirstBegin;
-    size_t contigBFirstBegin;
-    size_t contigALastEnd;
-    size_t contigBLastEnd;
-    bool collectingChainParts = false;
-    bool chainContinuation = false;
-    bool collectingTracePoints = false;
-    Appender!(TracePoint[]) tracePointList;
-    Appender!(TracePoint[][]) tracePointLists;
-    auto tracePointDumps = appender!(TracePointDump[]);
-
-    void startTracePointList(size_t numTracePoints)
-    {
-        tracePointList = appender!(TracePoint[]);
-        tracePointList.reserve(numTracePoints);
-        collectingTracePoints = true;
-    }
-
-    void finishTracePointList()
-    {
-        if (collectingTracePoints)
-        {
-            tracePointLists ~= tracePointList.data;
-            collectingTracePoints = false;
-        }
-    }
-
-    void startChain()
-    {
-        tracePointLists = appender!(TracePoint[][]);
-        collectingChainParts = true;
-    }
-
-    void nextChainPart()
-    {
-        finishTracePointList();
-        chainContinuation = true;
-    }
-
-    void finishChain()
-    {
-        if (collectingChainParts)
-        {
-            finishTracePointList();
-            // dfmt off
-            tracePointDumps ~= TracePointDump(
-                contigAId,
-                contigBId,
-                contigAFirstBegin,
-                contigBFirstBegin,
-                contigALastEnd,
-                contigBLastEnd,
-                tracePointLists.data,
-            );
-            // dfmt on
-            collectingChainParts = false;
-        }
-        chainContinuation = false;
-    }
-
-    foreach (dumpLine; lasDump.lineSplitter)
-    {
-        if (dumpLine.length == 0)
-            continue;
-
-        debug assert(nextLineTypes.canFind(dumpLine[0 .. 1]));
-        switch (dumpLine[0])
-        {
-        case '+':
-            if (dumpLine[2] == 'T')
-            {
-                size_t numTotalTracePoints;
-
-                auto numMatches = dumpLine.formattedRead!"+ T %d"(numTotalTracePoints);
-                assert(numMatches == 1);
-
-                tracePointDumps.reserve(numTotalTracePoints);
-                debug nextLineTypes = "P+%@";
-            }
-            break;
-        case 'P':
-            size_t nextContigAId;
-            size_t nextContigBId;
-            char complement;
-            char chainPartType;
-
-            // dfmt off
-            auto numMatches = dumpLine.formattedRead!"P %d %d %c %c"(
-                nextContigAId,
-                nextContigBId,
-                complement,
-                chainPartType,
-            );
-            // dfmt on
-            assert(numMatches == 4);
-
-            final switch (chainPartType.to!ChainPartType)
-            {
-            case ChainPartType.start:
-            case ChainPartType.alternateStart:
-            case ChainPartType.noChainInFile:
-                finishChain();
-                contigAId = nextContigAId;
-                contigBId = nextContigBId;
-                startChain();
-                break;
-            case ChainPartType.continuation:
-                if (contigAId == nextContigAId
-                        && contigBId == nextContigBId)
-                {
-                    nextChainPart();
-                }
-                else
-                {
-                    debug logJsonDebug("info", "missing chain start");
-                    // NOTE: This is a work-around for a bug in LAdump: if the
-                    //       beginning of a chain is not a "proper overlap" but
-                    //       a continuation is then LAdump will print the
-                    //       continuation only. Thus, a part marked as
-                    //       continuation still may be a chain start.
-                    finishChain();
-                    contigAId = nextContigAId;
-                    contigBId = nextContigBId;
-                    startChain();
-                }
-                break;
-            }
-            debug nextLineTypes = "C";
-            break;
-        case 'C':
-            size_t contigABegin;
-            size_t contigBBegin;
-            size_t contigAEnd;
-            size_t contigBEnd;
-
-            // dfmt off
-                auto numMatches = dumpLine.formattedRead!"C %d %d %d %d"(
-                    contigABegin,
-                    contigAEnd,
-                    contigBBegin,
-                    contigBEnd,
-                );
-                // dfmt on
-            assert(numMatches == 4);
-
-            if (chainContinuation)
-            {
-                contigALastEnd = contigAEnd;
-                contigBLastEnd = contigBEnd;
-            }
-            else
-            {
-                contigAFirstBegin = contigABegin;
-                contigBFirstBegin = contigBBegin;
-                contigALastEnd = contigAEnd;
-                contigBLastEnd = contigBEnd;
-            }
-
-            debug nextLineTypes = "T";
-            break;
-        case 'T':
-            size_t numTracePoints;
-
-            auto numMatches = dumpLine.formattedRead!"T %d"(numTracePoints);
-            assert(numMatches == 1);
-
-            startTracePointList(numTracePoints);
-            debug nextLineTypes = " ";
-            break;
-        case ' ':
-            if (collectingTracePoints)
-            {
-                TracePoint tracePoint;
-
-                auto numMatches = dumpLine.formattedRead!"   %d %d"(tracePoint.numDiffs,
-                        tracePoint.numBasePairs);
-                assert(numMatches == 2);
-
-                tracePointList ~= tracePoint;
-            }
-            debug nextLineTypes = " P";
-            break;
-        default:
-            break; // ignore
-        }
-    }
-
-    finishChain();
-
-    return tracePointDumps.data;
-}
-
-unittest
-{
-    immutable testLasDump = q"EOF
-        + P 3
-        % P 42
-        + T 9
-        % T 42
-        @ T 42
-        P 1 1 n >
-        C 0 1337 0 42
-        T 3
-           2 102
-           3 101
-           4 104
-        P 1 1 c +
-        C 0 1338 0 43
-        T 3
-           3 101
-           4 104
-           2 102
-        P 1 2 n >
-        C 0 1339 0 44
-        T 4
-           6 105
-           1 101
-           2 100
-           3  97
-        P 1 2 n -
-        C 0 1340 0 45
-        T 2
-           0   2
-           2 102
-EOF".outdent;
-
-    with (AlignmentChain.LocalAlignment)
-    {
-        auto tracePointDumps = readTracePointList(testLasDump).array;
-        // dfmt off
-        auto expectedResult = [
-            TracePointDump(1, 1, 0, 0, 1337, 42, [[
-                TracePoint(2, 102),
-                TracePoint(3, 101),
-                TracePoint(4, 104),
-            ]]),
-            TracePointDump(1, 1, 0, 0, 1338, 43, [[
-                TracePoint(3, 101),
-                TracePoint(4, 104),
-                TracePoint(2, 102),
-            ]]),
-            TracePointDump(1, 2, 0, 0, 1340, 45, [
-                [
-                    TracePoint(6, 105),
-                    TracePoint(1, 101),
-                    TracePoint(2, 100),
-                    TracePoint(3, 97),
-                ],
-                [
-                    TracePoint(0, 2),
-                    TracePoint(2, 102),
-                ]
-            ]),
-        ];
-        // dfmt on
-
-        assert(tracePointDumps == expectedResult);
     }
 }
 
@@ -817,63 +273,48 @@ auto fingerprint(AlignmentChain* alignmentChain) pure nothrow
     // dfmt on
 }
 
-auto fingerprint(TracePointDump* tracePointDump) pure nothrow
-{
-    // dfmt off
-    return tuple(
-        tracePointDump.contigAId,
-        tracePointDump.contigBId,
-        tracePointDump.contigABegin,
-        tracePointDump.contigBBegin,
-        tracePointDump.contigAEnd,
-        tracePointDump.contigBEnd,
-    );
-    // dfmt on
-}
-
-private size_t attachTracePointDumps(AlignmentChain*[] alignmentChains,
-        TracePointDump[] tracePointDumps, in size_t tracePointDistance) pure
+private id_t attachTracePoints(AlignmentChain*[] alignmentChains,
+        ref AlignmentChain[] acsWithTracePoints, in trace_point_t tracePointDistance) pure
 {
     assert(tracePointDistance > 0);
-    assert(isSorted!"*a < *b"(alignmentChains));
 
-    size_t numAlignmentChainsAffected = 0;
-    size_t numLoops = 0;
-    size_t i = 0;
-    size_t j = 0;
+    id_t numAlignmentChainsAffected = 0;
+    id_t numLoops = 0;
+    id_t i = 0;
+    id_t j = 0;
 
-    while (i < alignmentChains.length && j < tracePointDumps.length
-            && numLoops < alignmentChains.length + tracePointDumps.length)
+    while (i < alignmentChains.length && j < acsWithTracePoints.length
+            && numLoops < alignmentChains.length + acsWithTracePoints.length)
     {
         auto alignmentChain = alignmentChains[i];
-        auto tracePointDump = &tracePointDumps[j];
+        auto acWithTracePoints = &acsWithTracePoints[j];
         auto acFingerprint = alignmentChain.fingerprint;
-        auto tpdFingerprint = tracePointDump.fingerprint;
+        auto tpFingerprint = acWithTracePoints.fingerprint;
 
         // dfmt off
         debug logJsonDebug(
             "acFingerprint", acFingerprint.toJson,
-            "tpdFingerprint", tpdFingerprint.toJson,
+            "tpFingerprint", tpFingerprint.toJson,
         );
         // dfmt on
 
-        if (acFingerprint == tpdFingerprint)
+        if (acFingerprint == tpFingerprint)
         {
             foreach (k, ref localAlignment; alignmentChain.localAlignments)
             {
-                localAlignment.tracePoints = tracePointDump.tracePointLists[k];
+                localAlignment.tracePoints = acWithTracePoints.localAlignments[k].tracePoints;
             }
             alignmentChain.tracePointDistance = tracePointDistance;
             numAlignmentChainsAffected = i + 1;
             ++i;
         }
-        else if (tpdFingerprint < acFingerprint)
+        else if (tpFingerprint < acFingerprint)
         {
             ++j;
         }
         else
         {
-            assert(tpdFingerprint > acFingerprint);
+            assert(tpFingerprint > acFingerprint);
             throw new Exception(
                     format!"missing trace point data for alignment chain: %s"(*alignmentChain));
         }
@@ -893,66 +334,40 @@ unittest
             new AlignmentChain(
                 1,
                 Contig(1, 1337),
-                Contig(1, 42),
+                Contig(1, 307),
                 Complement.no,
                 [
-                    LocalAlignment(Locus(0, 1337), Locus(0, 42), 0),
+                    LocalAlignment(Locus(0, 1337), Locus(0, 307), 1),
                 ],
             ),
             new AlignmentChain(
                 2,
                 Contig(1, 1338),
-                Contig(1, 43),
+                Contig(1, 309),
                 Complement.no,
                 [
-                    LocalAlignment(Locus(0, 1338), Locus(0, 43), 0),
+                    LocalAlignment(Locus(0, 1338), Locus(0, 309), 2),
                 ],
             ),
             new AlignmentChain(
                 3,
                 Contig(1, 1340),
-                Contig(3, 45),
+                Contig(3, 508),
                 Complement.no,
                 [
-                    LocalAlignment(Locus(0, 1339), Locus(0, 44), 0),
-                    LocalAlignment(Locus(0, 1340), Locus(0, 45), 0),
+                    LocalAlignment(Locus(0, 1339), Locus(0, 403), 3),
+                    LocalAlignment(Locus(0, 1340), Locus(404, 508), 4),
                 ],
             ),
         ];
-        auto tracePointDumps = [
-            TracePointDump(1, 1, 0, 0, 1337, 42, [[
-                TracePoint(1, 102),
-                TracePoint(2, 101),
-                TracePoint(3, 104),
-            ]]),
-            TracePointDump(1, 1, 0, 0, 1338, 43, [[
-                TracePoint(4, 101),
-                TracePoint(5, 104),
-                TracePoint(6, 102),
-            ]]),
-            TracePointDump(1, 2, 0, 0, 1, 2, [[]]),
-            TracePointDump(1, 2, 0, 0, 3, 4, [[]]),
-            TracePointDump(1, 3, 0, 0, 1340, 45, [
-                [
-                    TracePoint(7, 105),
-                    TracePoint(8, 101),
-                    TracePoint(9, 100),
-                    TracePoint(10, 97),
-                ],
-                [
-                    TracePoint(11, 2),
-                    TracePoint(12, 102),
-                ],
-            ]),
-        ];
-        auto expectedAlignmentChains = [
+        auto acsWithTracePoints = [
             AlignmentChain(
                 1,
                 Contig(1, 1337),
-                Contig(1, 42),
+                Contig(1, 307),
                 Complement.no,
                 [
-                    LocalAlignment(Locus(0, 1337), Locus(0, 42), 0, [
+                    LocalAlignment(Locus(0, 1337), Locus(0, 307), 0, [
                         TracePoint(1, 102),
                         TracePoint(2, 101),
                         TracePoint(3, 104),
@@ -963,11 +378,11 @@ unittest
             AlignmentChain(
                 2,
                 Contig(1, 1338),
-                Contig(1, 43),
+                Contig(1, 309),
                 Complement.no,
                 [
-                    LocalAlignment(Locus(0, 1338), Locus(0, 43), 0, [
-                        TracePoint(4, 101),
+                    LocalAlignment(Locus(0, 1338), Locus(0, 309), 0, [
+                        TracePoint(4, 103),
                         TracePoint(5, 104),
                         TracePoint(6, 102),
                     ]),
@@ -977,16 +392,65 @@ unittest
             AlignmentChain(
                 3,
                 Contig(1, 1340),
-                Contig(3, 45),
+                Contig(3, 508),
                 Complement.no,
                 [
-                    LocalAlignment(Locus(0, 1339), Locus(0, 44), 0, [
+                    LocalAlignment(Locus(0, 1339), Locus(0, 403), 0, [
                         TracePoint(7, 105),
                         TracePoint(8, 101),
                         TracePoint(9, 100),
                         TracePoint(10, 97),
                     ]),
-                    LocalAlignment(Locus(0, 1340), Locus(0, 45), 0, [
+                    LocalAlignment(Locus(0, 1340), Locus(404, 508), 0, [
+                        TracePoint(11, 2),
+                        TracePoint(12, 102),
+                    ]),
+                ],
+                101
+            ),
+        ];
+        auto expectedAlignmentChains = [
+            AlignmentChain(
+                1,
+                Contig(1, 1337),
+                Contig(1, 307),
+                Complement.no,
+                [
+                    LocalAlignment(Locus(0, 1337), Locus(0, 307), 1, [
+                        TracePoint(1, 102),
+                        TracePoint(2, 101),
+                        TracePoint(3, 104),
+                    ]),
+                ],
+                101
+            ),
+            AlignmentChain(
+                2,
+                Contig(1, 1338),
+                Contig(1, 309),
+                Complement.no,
+                [
+                    LocalAlignment(Locus(0, 1338), Locus(0, 309), 2, [
+                        TracePoint(4, 103),
+                        TracePoint(5, 104),
+                        TracePoint(6, 102),
+                    ]),
+                ],
+                101
+            ),
+            AlignmentChain(
+                3,
+                Contig(1, 1340),
+                Contig(3, 508),
+                Complement.no,
+                [
+                    LocalAlignment(Locus(0, 1339), Locus(0, 403), 3, [
+                        TracePoint(7, 105),
+                        TracePoint(8, 101),
+                        TracePoint(9, 100),
+                        TracePoint(10, 97),
+                    ]),
+                    LocalAlignment(Locus(0, 1340), Locus(404, 508), 4, [
                         TracePoint(11, 2),
                         TracePoint(12, 102),
                     ]),
@@ -996,12 +460,654 @@ unittest
         ];
         // dfmt on
 
-            assert(alignmentChains.attachTracePointDumps(tracePointDumps, 101) == 3);
+            assert(alignmentChains.attachTracePoints(acsWithTracePoints, 101) == 3);
             assert(alignmentChains.map!"*a".array == expectedAlignmentChains);
         }
 }
 
-size_t getTracePointDistance(in string[] dazzlerOptions) pure
+private struct LasDumpLineFormatTuple
+{
+    char indicator;
+    char subIndicator;
+    string format;
+}
+
+private enum LasDumpLineFormat
+{
+    totalChainPartsCount = LasDumpLineFormatTuple('+', 'P', "+ P %d"),
+    totalTracePointsCount = LasDumpLineFormatTuple('+', 'T', "+ T %d"),
+    maxChainPartsCountPerPile = LasDumpLineFormatTuple('%', 'P', "% P %d"),
+    maxTracePointsCountPerPile = LasDumpLineFormatTuple('%', 'T', "% T %d"),
+    maxTracePointCount = LasDumpLineFormatTuple('@', 'T', "@ T %d"),
+    chainPart = LasDumpLineFormatTuple('P', '\0', "P %d %d %c %c"),
+    lengths = LasDumpLineFormatTuple('L', '\0', "L %d %d"),
+    coordinates = LasDumpLineFormatTuple('C', '\0', "C %d %d %d %d"),
+    numDiffs = LasDumpLineFormatTuple('D', '\0', "D %d"),
+    tracePointBegin = LasDumpLineFormatTuple('T', '\0', "T %d"),
+    tracePoint = LasDumpLineFormatTuple(' ', '\0', " %d %d"),
+}
+
+private enum ChainPartType
+{
+    start = '>',
+    continuation = '-',
+    alternateStart = '+',
+    noChainInFile = '.',
+}
+
+private struct LasDumpReader(S) if (isInputRange!S && isSomeString!(ElementType!S))
+{
+    static alias dstring = immutable(dchar)[];
+    static alias LasDump = ReturnType!getDumpLines;
+    static alias LocalAlignment = AlignmentChain.LocalAlignment;
+    static alias TracePoint = LocalAlignment.TracePoint;
+
+private:
+    LasDump lasDump;
+    bool _empty;
+    AlignmentChain currentAC;
+    id_t currentACID;
+    Appender!(LocalAlignment[]) localAlignmentsAcc;
+    Appender!(TracePoint[]) tracePointsAcc;
+    dstring currentDumpLine;
+    size_t currentDumpLineNumber;
+    dchar currentLineType;
+    dchar currentLineSubType;
+    size_t maxTracePointCount;
+    debug dchar[] allowedLineTypes;
+
+public:
+    this(S lasDump)
+    {
+        this.lasDump = getDumpLines(lasDump);
+        debug with (LasDumpLineFormat)
+        {
+            // dfmt off
+            this.allowedLineTypes = [
+                totalChainPartsCount.indicator,
+                totalTracePointsCount.indicator,
+                maxChainPartsCountPerPile.indicator,
+                maxTracePointsCountPerPile.indicator,
+                maxTracePointCount.indicator,
+                chainPart.indicator,
+            ];
+            // dfmt on
+        }
+        this.popFront();
+    }
+
+    void popFront()
+    {
+        assert(!empty, "Attempting to popFront an empty LasDumpReader");
+
+        if (lasDump.empty)
+        {
+            return setEmpty();
+        }
+
+        readNextAlignmentChain();
+    }
+
+    @property bool empty() const pure nothrow
+    {
+        return _empty;
+    }
+
+    @property AlignmentChain front() pure nothrow
+    {
+        assert(!empty, "Attempting to fetch the front of an empty LasDumpReader");
+
+        return currentAC;
+    }
+
+private:
+
+    static auto getDumpLines(S lasDump)
+    {
+        return lasDump.enumerate(1).filter!"!a[1].empty";
+    }
+
+    void setEmpty() pure nothrow
+    {
+        _empty = true;
+    }
+
+    void readNextAlignmentChain()
+    {
+        currentAC = AlignmentChain.init;
+        localAlignmentsAcc.clear();
+        tracePointsAcc.clear();
+        peekDumpLine();
+
+        while (true)
+        {
+            debug _enforce(allowedLineTypes.canFind(currentLineType), format!"forbidden line type `%c`"(currentLineType));
+
+            with (LasDumpLineFormat)
+            {
+                switch (currentLineType)
+                {
+                case totalChainPartsCount.indicator: goto case;
+                case maxChainPartsCountPerPile.indicator:
+                    break; // ignore
+                case maxTracePointCount.indicator:
+                    _enforce(currentLineSubType == maxTracePointCount.subIndicator, "expected `@ T` line");
+                    readMaxTracePointCount();
+                    debug disallowCurrentLineType();
+                    break;
+                case chainPart.indicator:
+                    if (readChainPart() == No.wasDumpPartConsumed)
+                    {
+                        debug allowedLineTypes = [chainPart.indicator];
+
+                        return; // chain completed; stay on current dump line
+                    }
+                    else
+                    {
+                        // dfmt off
+                        debug allowedLineTypes = [
+                            chainPart.indicator,
+                            lengths.indicator,
+                            coordinates.indicator,
+                        ];
+                        // dfmt on
+                        break;
+                    }
+                case lengths.indicator:
+                    readLengths();
+                    debug disallowCurrentLineType();
+                    break;
+                case coordinates.indicator:
+                    readCoordinates();
+                    debug
+                    {
+                        disallowCurrentLineType();
+                        // dfmt off
+                        allowedLineTypes ~= [
+                            numDiffs.indicator,
+                            tracePointBegin.indicator,
+                        ];
+                        // dfmt on
+                    }
+                    break;
+                case numDiffs.indicator:
+                    readNumDiffs();
+                    debug disallowCurrentLineType();
+                    break;
+                case tracePointBegin.indicator:
+                    readTracePointBegin();
+                    debug allowedLineTypes = [tracePoint.indicator];
+                    break;
+                case tracePoint.indicator:
+                    readTracePoint();
+                    debug allowedLineTypes = [tracePoint.indicator, chainPart.indicator];
+                    break;
+                default:
+                    error(format!"unknown line type `%c`"(currentLineType));
+                }
+            }
+
+            if (popDumpLine() == Yes.empty)
+            {
+                finishCurrentAC();
+
+                return; // EOF reached
+            }
+        }
+    }
+
+    void peekDumpLine()
+    {
+        auto currentLine = lasDump.front;
+
+        currentDumpLineNumber = currentLine[0];
+        currentDumpLine = currentLine[1].array;
+        currentLineType = currentDumpLine[0];
+        currentLineSubType = currentDumpLine.length >= 3 ? currentDumpLine[2] : '\0';
+    }
+
+    Flag!"empty" popDumpLine()
+    {
+        if (lasDump.empty)
+        {
+            return Yes.empty;
+        }
+
+        lasDump.popFront();
+        ++currentDumpLineNumber;
+
+        if (lasDump.empty)
+        {
+            return Yes.empty;
+        }
+        else
+        {
+            peekDumpLine();
+
+            return No.empty;
+        }
+    }
+
+    void readMaxTracePointCount()
+    {
+        immutable maxTracePointCountFormat = LasDumpLineFormat.maxTracePointCount.format;
+
+        currentDumpLine[].formattedRead!maxTracePointCountFormat(maxTracePointCount);
+
+        tracePointsAcc.reserve(maxTracePointCount);
+    }
+
+    Flag!"wasDumpPartConsumed" readChainPart()
+    {
+        immutable chainPartFormat = LasDumpLineFormat.chainPart.format;
+        immutable yesComplement = AlignmentChain.Complement.yes;
+        immutable noComplement = AlignmentChain.Complement.no;
+        id_t contigAID;
+        id_t contigBID;
+        char rawComplement;
+        char rawChainPartType;
+
+        // dfmt off
+        currentDumpLine[].formattedRead!chainPartFormat(
+            contigAID,
+            contigBID,
+            rawComplement,
+            rawChainPartType,
+        );
+        // dfmt on
+
+        auto complement = rawComplement == 'c' ? yesComplement : noComplement;
+        auto chainPartType = rawChainPartType.to!ChainPartType;
+        auto startingNewChain = currentAC == AlignmentChain.init;
+
+        if (startingNewChain)
+        {
+            currentAC.contigA.id = contigAID;
+            currentAC.contigB.id = contigBID;
+            currentAC.complement = complement;
+
+            return Yes.wasDumpPartConsumed;
+        }
+        else if (isChainContinuation(contigAID, contigBID, chainPartType))
+        {
+            _enforce(currentAC.complement == complement, "matching both strands in one alignment chain");
+            finishCurrentLA();
+
+            return Yes.wasDumpPartConsumed;
+        }
+        else
+        {
+            finishCurrentAC();
+
+            return No.wasDumpPartConsumed;
+        }
+
+    }
+
+    bool isChainContinuation(in size_t contigAID, in size_t contigBID, in ChainPartType chainPartType)
+    {
+        // dfmt off
+        return currentAC.contigA.id == contigAID &&
+               currentAC.contigB.id == contigBID &&
+               chainPartType == ChainPartType.continuation;
+        // dfmt on
+    }
+
+    void finishCurrentLA()
+    {
+        assert(localAlignmentsAcc.data.length > 0);
+
+        localAlignmentsAcc.data[$ - 1].tracePoints = tracePointsAcc.data.dup;
+    }
+
+    void finishCurrentLAs()
+    {
+        if (localAlignmentsAcc.data.length > 0)
+        {
+            finishCurrentLA();
+        }
+
+        currentAC.localAlignments = localAlignmentsAcc.data.dup;
+    }
+
+    void finishCurrentAC()
+    {
+        finishCurrentLAs();
+        currentAC.id = currentACID++;
+    }
+
+    void readLengths()
+    {
+        immutable lengthsFormat = LasDumpLineFormat.lengths.format;
+
+        // dfmt off
+        currentDumpLine[].formattedRead!lengthsFormat(
+            currentAC.contigA.length,
+            currentAC.contigB.length,
+        );
+        // dfmt on
+    }
+    void readCoordinates()
+    {
+        immutable coordinatesFormat = LasDumpLineFormat.coordinates.format;
+        LocalAlignment currentLA;
+
+        // dfmt off
+        currentDumpLine[].formattedRead!coordinatesFormat(
+            currentLA.contigA.begin,
+            currentLA.contigA.end,
+            currentLA.contigB.begin,
+            currentLA.contigB.end,
+        );
+        // dfmt on
+
+        localAlignmentsAcc ~= currentLA;
+    }
+
+    void readNumDiffs()
+    {
+        immutable numDiffsFormat = LasDumpLineFormat.numDiffs.format;
+
+        // dfmt off
+        currentDumpLine[].formattedRead!numDiffsFormat(
+            localAlignmentsAcc.data[$ - 1].numDiffs,
+        );
+        // dfmt on
+    }
+
+    void readTracePointBegin()
+    {
+        immutable tracePointBeginFormat = LasDumpLineFormat.tracePointBegin.format;
+        size_t numTracePoints;
+
+        currentDumpLine[].formattedRead!tracePointBeginFormat(numTracePoints);
+
+        tracePointsAcc.clear();
+        tracePointsAcc.reserve(numTracePoints);
+    }
+
+    void readTracePoint()
+    {
+        immutable tracePointFormat = LasDumpLineFormat.tracePoint.format;
+        TracePoint currentTP;
+
+        // dfmt off
+        currentDumpLine[].formattedRead!tracePointFormat(
+            currentTP.numDiffs,
+            currentTP.numBasePairs,
+        );
+        // dfmt on
+
+        tracePointsAcc ~= currentTP;
+    }
+
+    debug {
+        void disallowCurrentLineType() {
+            // dfmt off
+            allowedLineTypes = allowedLineTypes
+                .filter!(type => type != currentLineType)
+                .array;
+            // dfmt on
+        }
+    }
+
+    void error(in string reason)
+    {
+        _enforce(false, reason);
+    }
+
+    void _enforce(bool condition, lazy string reason)
+    {
+        enforce!DazzlerCommandException(condition, format!"ill-formatted LAdump output: %s (line %d)"(reason, currentDumpLineNumber));
+    }
+}
+
+private auto readLasDump(S)(S lasDump)
+{
+    return LasDumpReader!S(lasDump);
+}
+
+unittest
+{
+    import std.algorithm : equal;
+
+    // dfmt off
+    immutable testLasDump = [
+        "+ P 9",
+        "% P 9",
+        "+ T 12",
+        "% T 12",
+        "@ T 4",
+        "P 1 2 n >",
+        "L 8 9",
+        "C 3 4 5 6",
+        "D 7",
+        "P 1 2 n -",
+        "L 8 9",
+        "C 12 13 14 15",
+        "D 16",
+        "P 19 20 c +",
+        "L 26 27",
+        "C 21 22 23 24",
+        "D 25",
+        "P 19 20 c -",
+        "L 26 27",
+        "C 30 31 32 33",
+        "D 34",
+        "T 1",
+        "   0 1",
+        "P 37 38 n .",
+        "L 35 36",
+        "C 39 40 41 42",
+        "D 43",
+        "P 46 47 c .",
+        "L 53 54",
+        "C 48 49 50 51",
+        "D 52",
+        "T 3",
+        "   2 102",
+        "   3 101",
+        "   4 104",
+        "P 46 47 n .",
+        "L 53 54",
+        "C 57 58 59 60",
+        "D 61",
+        "T 3",
+        "   3 101",
+        "   4 104",
+        "   2 102",
+        "P 64 65 c >",
+        "L 71 72",
+        "C 66 67 68 69",
+        "D 70",
+        "T 4",
+        "   6 105",
+        "   1 101",
+        "   2 100",
+        "   3  97",
+        "P 55 56 c -",
+        "L 80 81",
+        "C 75 76 77 78",
+        "D 79",
+        "T 2",
+        "   0   2",
+        "   2 102",
+        "P 1 3197 c >",
+        "C 0 71 12 86",
+        "T 1",
+        "   3  74",
+        "P 1 3197 c -",
+        "C 0 8300 0 318",
+        "T 3",
+        "   6 105",
+        "   9 108",
+        "   7 105",
+    ];
+    // dfmt on
+
+    with (AlignmentChain) with (Complement) with (LocalAlignment)
+    {
+        auto alignmentChains = readLasDump(testLasDump).array;
+        // dfmt off
+        auto expectedResult = [
+            AlignmentChain(
+                0,
+                Contig(1, 8),
+                Contig(2, 9),
+                no,
+                [
+                    LocalAlignment(
+                        Locus(3, 4),
+                        Locus(5, 6),
+                        7,
+                    ),
+                    LocalAlignment(
+                        Locus(12, 13),
+                        Locus(14, 15),
+                        16,
+                    ),
+                ],
+            ),
+            AlignmentChain(
+                1,
+                Contig(19, 26),
+                Contig(20, 27),
+                yes,
+                [
+                    LocalAlignment(
+                        Locus(21, 22),
+                        Locus(23, 24),
+                        25,
+                    ),
+                    LocalAlignment(
+                        Locus(30, 31),
+                        Locus(32, 33),
+                        34,
+                        [
+                            TracePoint(0, 1),
+                        ]
+                    ),
+                ],
+            ),
+            AlignmentChain(
+                2,
+                Contig(37, 35),
+                Contig(38, 36),
+                no,
+                [
+                    LocalAlignment(
+                        Locus(39, 40),
+                        Locus(41, 42),
+                        43,
+                    ),
+                ],
+            ),
+            AlignmentChain(
+                3,
+                Contig(46, 53),
+                Contig(47, 54),
+                yes,
+                [
+                    LocalAlignment(
+                        Locus(48, 49),
+                        Locus(50, 51),
+                        52,
+                        [
+                            TracePoint(2, 102),
+                            TracePoint(3, 101),
+                            TracePoint(4, 104),
+                        ],
+                    ),
+                ],
+            ),
+            AlignmentChain(
+                4,
+                Contig(46, 53),
+                Contig(47, 54),
+                no,
+                [
+                    LocalAlignment(
+                        Locus(57, 58),
+                        Locus(59, 60),
+                        61,
+                        [
+                            TracePoint(3, 101),
+                            TracePoint(4, 104),
+                            TracePoint(2, 102),
+                        ],
+                    ),
+                ],
+            ),
+            AlignmentChain(
+                5,
+                Contig(64, 71),
+                Contig(65, 72),
+                yes,
+                [
+                    LocalAlignment(
+                        Locus(66, 67),
+                        Locus(68, 69),
+                        70,
+                        [
+                            TracePoint(6, 105),
+                            TracePoint(1, 101),
+                            TracePoint(2, 100),
+                            TracePoint(3, 97),
+                        ],
+                    ),
+                ],
+            ),
+            AlignmentChain(
+                6,
+                Contig(55, 80),
+                Contig(56, 81),
+                yes,
+                [
+                    LocalAlignment(
+                        Locus(75, 76),
+                        Locus(77, 78),
+                        79,
+                        [
+                            TracePoint(0, 2),
+                            TracePoint(2, 102),
+                        ],
+                    ),
+                ],
+            ),
+            AlignmentChain(
+                7,
+                Contig(1, 0),
+                Contig(3197, 0),
+                yes,
+                [
+                    LocalAlignment(
+                        Locus(0, 71),
+                        Locus(12, 86),
+                        0,
+                        [
+                            TracePoint(3, 74),
+                        ],
+                    ),
+                    LocalAlignment(
+                        Locus(0, 8300),
+                        Locus(0, 318),
+                        0,
+                        [
+                            TracePoint(6, 105),
+                            TracePoint(9, 108),
+                            TracePoint(7, 105),
+                        ],
+                    ),
+                ],
+            ),
+        ];
+        // dfmt on
+
+        assert(alignmentChains == expectedResult);
+    }
+}
+
+trace_point_t getTracePointDistance(in string[] dazzlerOptions) pure
 {
     immutable defaultTracePointDistance = 100;
 
@@ -1009,7 +1115,7 @@ size_t getTracePointDistance(in string[] dazzlerOptions) pure
     {
         if (option.startsWith(cast(const(string)) DalignerOptions.tracePointDistance))
         {
-            return option[2 .. $].to!size_t;
+            return option[2 .. $].to!trace_point_t;
         }
     }
 
@@ -2083,9 +2189,15 @@ private
     bool lasEmpty(in string lasFile, in string dbA, in string dbB, in string workdir)
     {
         auto dumpHeader = ladump(lasFile, dbA, dbB, [], workdir);
+
+        if (dumpHeader.empty)
+        {
+            return true;
+        }
+
         size_t numParts;
 
-        dumpHeader.formattedRead!"+ P %d"(numParts);
+        dumpHeader.front.formattedRead!"+ P %d"(numParts);
 
         return numParts == 0;
     }
@@ -2234,17 +2346,17 @@ private
                 only(dbFile.stripBlock.relativeToWorkdir(workdir))), workdir);
     }
 
-    string ladump(in string lasFile, in string dbA, in string dbB,
+    auto ladump(in string lasFile, in string dbA, in string dbB,
             in string[] ladumpOpts, in string workdir)
     {
         return ladump(lasFile, dbA, dbB, [], ladumpOpts, workdir);
     }
 
-    string ladump(in string lasFile, in string dbA, in string dbB, in size_t[] readIds,
+    auto ladump(in string lasFile, in string dbA, in string dbB, in id_t[] readIds,
             in string[] ladumpOpts, in string workdir)
     {
         // dfmt off
-        return executeCommand(chain(
+        return executePipe(chain(
             only("LAdump"),
             ladumpOpts,
             only(
@@ -2261,67 +2373,89 @@ private
             in string[] dbdumpOptions, in string workdir)
             if (isForwardRange!Range && is(ElementType!Range : size_t))
     {
-        static struct DBDump
+        // dfmt off
+        return executePipe(chain(
+            only("DBdump"),
+            dbdumpOptions,
+            only(dbFile.relativeToWorkdir(workdir)),
+            recordNumbers.map!(to!string)
+        ), workdir);
+        // dfmt on
+    }
+
+    string dbshow(in string dbFile, in string contigId, in string workdir)
+    {
+        return executeCommand(only("DBshow", dbFile.relativeToWorkdir(workdir), contigId), workdir);
+    }
+
+    string dbshow(in string dbFile, in string[] dbshowOptions, in string workdir)
+    {
+        return executeCommand(chain(only("DBshow"), dbshowOptions,
+                only(dbFile.relativeToWorkdir(workdir))), workdir);
+    }
+
+    auto executePipe(Range)(Range command, in string workdir = null)
+            if (isInputRange!Range && isSomeString!(ElementType!Range))
+    {
+        static struct LinesPipe
         {
             static immutable lineTerminator = "\n";
 
-            const string dbFile;
-            const Range recordNumbers;
-            const string[] dbdumpOptions;
-            const string workdir;
-            ProcessPipes dbdump;
-            string currentLine;
+            private const string[] command;
+            private const string workdir;
+            private ProcessPipes process;
+            private string currentLine;
 
             ~this()
             {
-                if (!(dbdump.pid is null))
+                if (!(process.pid is null))
                     releaseProcess();
             }
 
             void releaseProcess()
             {
-                if (!dbdump.stdout.isOpen)
+                if (!process.stdout.isOpen)
                     return;
 
-                dbdump.stdout.close();
+                process.stdout.close();
 
                 version (Posix)
                 {
                     import core.sys.posix.signal : SIGKILL;
 
-                    dbdump.pid.kill(SIGKILL);
+                    process.pid.kill(SIGKILL);
                 }
                 else
                 {
                     static assert(0, "Only intended for use on POSIX compliant OS.");
                 }
-                dbdump.pid.wait();
+                process.pid.wait();
             }
 
-            private void assertInitialized()
+            private void ensureInitialized()
             {
-                if (!(dbdump.pid is null))
+                if (!(process.pid is null))
                     return;
 
-                auto command = chain(only("DBdump"), dbdumpOptions,
-                        only(dbFile.relativeToWorkdir(workdir)), recordNumbers.map!(to!string));
                 // dfmt off
                 logJsonDebug(
                     "action", "execute",
                     "type", "pipe",
-                    "command", command.map!Json.array,
+                    "command", command.toJson,
                     "state", "pre",
                 );
                 // dfmt on
-                dbdump = pipeProcess(command.array, Redirect.stdout, null, Config.none, workdir);
+                process = pipeProcess(command, Redirect.stdout, null, Config.none, workdir);
 
-                popFront();
+                if (!empty)
+                    popFront();
             }
 
             void popFront()
             {
-                assertInitialized();
-                currentLine = dbdump.stdout.readln();
+                ensureInitialized();
+                assert(!empty, "Attempting to popFront an empty LinesPipe");
+                currentLine = process.stdout.readln();
 
                 if (currentLine.empty)
                 {
@@ -2335,16 +2469,17 @@ private
 
             @property string front()
             {
-                assertInitialized();
+                ensureInitialized();
+                assert(!empty, "Attempting to fetch the front of an empty LinesPipe");
 
                 return currentLine;
             }
 
             @property bool empty()
             {
-                assertInitialized();
+                ensureInitialized();
 
-                if (currentLine is null)
+                if (!process.stdout.isOpen || process.stdout.eof)
                 {
                     releaseProcess();
 
@@ -2357,18 +2492,29 @@ private
             }
         }
 
-        return new DBDump(dbFile, recordNumbers, dbdumpOptions, workdir);
+        auto sanitizedCommand = command.filter!"a != null".array;
+
+        return new LinesPipe(sanitizedCommand, workdir);
     }
 
-    string dbshow(in string dbFile, in string contigId, in string workdir)
+    unittest
     {
-        return executeCommand(only("DBshow", dbFile.relativeToWorkdir(workdir), contigId), workdir);
-    }
+        import std.algorithm : equal;
+        import std.range : take;
 
-    string dbshow(in string dbFile, in string[] dbshowOptions, in string workdir)
-    {
-        return executeCommand(chain(only("DBshow"), dbshowOptions,
-                only(dbFile.relativeToWorkdir(workdir))), workdir);
+        auto cheers = executePipe(only("yes", "Cheers!"), ".");
+        // dfmt off
+        assert(cheers.take(5).equal([
+            "Cheers!",
+            "Cheers!",
+            "Cheers!",
+            "Cheers!",
+            "Cheers!",
+        ]));
+        // dfmt on
+
+        auto helloWorld = executePipe(only("echo", "Hello World!"), ".");
+        assert(helloWorld.equal(["Hello World!"]));
     }
 
     string executeCommand(Range)(in Range command, in string workdir = null)
