@@ -1,3 +1,7 @@
+PREFIX=/usr/local
+BINDIR=$(PREFIX)/bin
+BINARIES=djunctor testgen
+
 .PHONY: build test format stylecheck unusedimports clean todos
 
 build:
@@ -5,6 +9,9 @@ build:
 
 test:
 	dub test
+
+install:
+	for BINARY in $(BINARIES); do if [[ -f $$BINARY ]]; then install -v -C -t $(BINDIR) $$BINARY; fi; done
 
 format:
 	find source/ -name '*.d' -type f -exec dfmt -i {} \; -exec sed -i 's/\s\+$$//' {} \;
