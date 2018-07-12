@@ -8,10 +8,7 @@
 */
 module djunctor.djunctor;
 
-import djunctor.alignments : AlignmentChain, alignmentCoverage,
-    AlignmentLocationSeed, buildPileUpsFromReadAlignments = buildPileUps,
-    getAlignmentRefs, getType, haveEqualIds, isExtension, isGap, isValid,
-    makeJoin, PileUp, ReadAlignment, ReadAlignmentType, SeededAlignment;
+import djunctor.alignments : AlignmentChain, alignmentCoverage, AlignmentLocationSeed, buildPileUpsFromReadAlignments = buildPileUps, coord_t, diff_t, getAlignmentRefs, getType, haveEqualIds, id_t, isExtension, isGap, isValid, makeJoin, PileUp, ReadAlignment, ReadAlignmentType, SeededAlignment, trace_point_t;
 import djunctor.commandline : Options;
 import djunctor.dazzler : attachTracePoints, buildDamFile, ContigSegment,
     GapSegment, getConsensus, getFastaEntries, getAlignments, getNumContigs,
@@ -186,8 +183,8 @@ unittest
 {
     immutable tracePointDistance = 5UL;
 
-    size_t readId = 0;
-    SeededAlignment getDummyRead(size_t begin, size_t end)
+    id_t readId = 0;
+    SeededAlignment getDummyRead(coord_t begin, coord_t end)
     {
         immutable referenceLength = 25;
         immutable extensionLength = 5;
@@ -409,7 +406,7 @@ private struct PileUpCropper
 
     private auto pileUpWithSequence()
     {
-        size_t[] readIds = pileUp.map!"a[0].contigB.id + 0".array;
+        auto readIds = pileUp.map!"a[0].contigB.id + 0".array;
 
         // dfmt off
         return zip(
@@ -1537,10 +1534,10 @@ class BadAlignmentCoverageAssessor : RepeatAssessor
         {
             with (AlignmentChain) with (LocalAlignment)
                 {
-                    size_t alignmentChainId = 0;
-                    size_t contReadId = 0;
-                    AlignmentChain getDummyAlignment(size_t contigId,
-                            size_t contigLength, size_t beginIdx, size_t endIdx)
+                    id_t alignmentChainId = 0;
+                    id_t contReadId = 0;
+                    AlignmentChain getDummyAlignment(id_t contigId,
+                            coord_t contigLength, coord_t beginIdx, coord_t endIdx)
                     {
                         // dfmt off
                         return AlignmentChain(

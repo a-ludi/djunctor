@@ -27,6 +27,12 @@ import vibe.data.json : toJson = serializeToJson;
 
 debug import std.stdio : writeln;
 
+alias arithmetic_t = int;
+alias coord_t = uint;
+alias diff_t = uint;
+alias id_t = uint;
+alias trace_point_t = ushort;
+
 /**
     Holds a chain of local alignments that form a compound alignment. An AlignmentChain should
     contain at least one element.
@@ -37,26 +43,26 @@ struct AlignmentChain
     {
         static struct Locus
         {
-            size_t begin;
-            size_t end;
+            coord_t begin;
+            coord_t end;
         }
 
         static struct TracePoint
         {
-            size_t numDiffs;
-            size_t numBasePairs;
+            trace_point_t numDiffs;
+            trace_point_t numBasePairs;
         }
 
         Locus contigA;
         Locus contigB;
-        size_t numDiffs;
+        diff_t numDiffs;
         TracePoint[] tracePoints;
     }
 
     static struct Contig
     {
-        size_t id;
-        size_t length;
+        id_t id;
+        coord_t length;
     }
 
     static enum Complement
@@ -67,12 +73,12 @@ struct AlignmentChain
 
     static immutable maxScore = 2 ^^ 16;
 
-    size_t id;
+    id_t id;
     Contig contigA;
     Contig contigB;
     Complement complement;
     LocalAlignment[] localAlignments;
-    size_t tracePointDistance;
+    trace_point_t tracePointDistance;
 
     invariant
     {
@@ -80,15 +86,15 @@ struct AlignmentChain
         foreach (la; localAlignments)
         {
             assert(0 <= la.contigA.begin && la.contigA.begin < la.contigA.end
-                    && la.contigA.end <= contigA.length, "non-sense alignment of contigA");
+                    && (contigA.length == 0 || la.contigA.end <= contigA.length), "non-sense alignment of contigA");
             assert(0 <= la.contigB.begin && la.contigB.begin < la.contigB.end
-                    && la.contigB.end <= contigB.length, "non-sense alignment of contigB");
+                    && (contigB.length == 0 || la.contigB.end <= contigB.length), "non-sense alignment of contigB");
 
             assert(tracePointDistance == 0 || la.tracePoints.length > 0, "missing trace points");
             if (tracePointDistance > 0)
             {
-                size_t traceLength = la.tracePoints.map!"a.numBasePairs".sum;
-                size_t traceDiffs = la.tracePoints.map!"a.numDiffs".sum;
+                coord_t traceLength = la.tracePoints.map!(tp => tp.numBasePairs.to!coord_t).sum;
+                coord_t traceDiffs = la.tracePoints.map!(tp => tp.numDiffs.to!coord_t).sum;
 
                 // TODO remove logging if fixed in LAdump (issue #23)
                 if (la.numDiffs != traceDiffs)
@@ -366,15 +372,13 @@ struct AlignmentChain
 
     int compareIds(ref const AlignmentChain other) const pure nothrow
     {
-        long idCompare = this.contigA.id - other.contigA.id;
-        if (idCompare != 0)
-            return cast(int) sgn(idCompare);
-
-        idCompare = this.contigB.id - other.contigB.id;
-        if (idCompare != 0)
-            return cast(int) sgn(idCompare);
-
-        return 0;
+        // dfmt off
+        return cmpLexicographically!(
+            typeof(this),
+            ac => ac.contigA.id,
+            ac => ac.contigB.id,
+        )(this, other);
+        // dfmt on
     }
 
     unittest
@@ -394,7 +398,7 @@ struct AlignmentChain
                 foreach (i; 0 .. acs.length)
                     foreach (j; 0 .. acs.length)
                     {
-                        auto compareValue = acs[i].opCmp(acs[j]);
+                        auto compareValue = acs[i].compareIds(acs[j]);
                         alias errorMessage = (cmp) => format!"expected %s and %s to compare %s 0 but got %d"(
                                 acs[i], acs[j], cmp, compareValue);
 
@@ -410,27 +414,17 @@ struct AlignmentChain
 
     int opCmp(ref const AlignmentChain other) const pure nothrow
     {
-        const int idCompare = this.compareIds(other);
-        if (idCompare != 0)
-            return idCompare;
-
-        long locusCompare = this.first.contigA.begin - other.first.contigA.begin;
-        if (locusCompare != 0)
-            return cast(int) sgn(locusCompare);
-
-        locusCompare = this.first.contigB.begin - other.first.contigB.begin;
-        if (locusCompare != 0)
-            return cast(int) sgn(locusCompare);
-
-        locusCompare = this.last.contigA.end - other.last.contigA.end;
-        if (locusCompare != 0)
-            return cast(int) sgn(locusCompare);
-
-        locusCompare = this.last.contigB.end - other.last.contigB.end;
-        if (locusCompare != 0)
-            return cast(int) sgn(locusCompare);
-
-        return 0;
+        // dfmt off
+        return cmpLexicographically!(
+            typeof(this),
+            ac => ac.contigA.id,
+            ac => ac.contigB.id,
+            ac => ac.first.contigA.begin,
+            ac => ac.first.contigB.begin,
+            ac => ac.last.contigA.end,
+            ac => ac.last.contigB.end,
+        )(this, other);
+        // dfmt on
     }
 
     unittest
@@ -592,7 +586,7 @@ unittest
             }
 }
 
-auto equalIdsRange(in AlignmentChain[] acList, in size_t contigAID, in size_t contigBID) pure
+auto equalIdsRange(in AlignmentChain[] acList, in id_t contigAID, in id_t contigBID) pure
 {
     assert(isSorted!idsPred(acList));
     // dfmt off
@@ -1715,10 +1709,10 @@ unittest
 
     with (AlignmentChain) with (LocalAlignment)
         {
-            size_t alignmentChainId = 0;
-            size_t contReadId = 0;
-            ReadAlignment getDummyRead(size_t beginContigId, long beginIdx,
-                    size_t endContigId, long endIdx, Complement complement)
+            id_t alignmentChainId = 0;
+            id_t contReadId = 0;
+            ReadAlignment getDummyRead(id_t beginContigId, arithmetic_t beginIdx,
+                    id_t endContigId, arithmetic_t endIdx, Complement complement)
             {
                 static immutable contigLength = 16;
                 static immutable gapLength = 9;
@@ -1731,8 +1725,8 @@ unittest
                     ? endIdx - beginIdx
                     : contigLength - beginIdx + gapLength + endIdx;
                 // dfmt on
-                size_t firstReadBeginIdx;
-                size_t firstReadEndIdx;
+                coord_t firstReadBeginIdx;
+                coord_t firstReadEndIdx;
 
                 if (beginIdx < 0)
                 {
@@ -1819,9 +1813,9 @@ unittest
                 }
             }
 
-            size_t c1 = 1;
-            size_t c2 = 2;
-            size_t c3 = 3;
+            id_t c1 = 1;
+            id_t c2 = 2;
+            id_t c3 = 3;
             // dfmt off
             auto pileUps = [
                 [
