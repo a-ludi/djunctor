@@ -102,16 +102,17 @@ string provideLasFileInWorkdir(in string lasFile, ProvideMethod provideMethod, i
 private string provideFileInWorkdir(in string file, ProvideMethod provideMethod, in string workdir)
 {
     import std.file : copy, symlink;
+    import std.path : absolutePath;
 
     auto fileInWorkdir = buildPath(workdir, file.baseName);
 
     final switch (provideMethod)
     {
     case ProvideMethod.copy:
-        copy(file, fileInWorkdir);
+        copy(file.absolutePath, fileInWorkdir);
         break;
     case ProvideMethod.symlink:
-        symlink(file, fileInWorkdir);
+        symlink(file.absolutePath, fileInWorkdir);
         break;
     }
 
