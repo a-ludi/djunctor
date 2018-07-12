@@ -675,7 +675,6 @@ class DJunctor
         numReferenceContigs = getNumContigs(options.refDb, options);
         numReads = getNumContigs(options.readsDb, options);
         scaffoldStructure = getScaffoldStructure(options.refDb, options).array;
-        auto contigLengths = getContigLengths();
         // dfmt off
         logJsonDiagnostic(
             "numReferenceContigs", numReferenceContigs,
@@ -693,6 +692,20 @@ class DJunctor
         readsAlignment = getAlignments(options.refDb, options.readsDb,
                 options.refVsReadsAlignmentFile, options);
 
+        enforce!Exception(selfAlignment.length > 0, "empty self-alignment");
+        enforce!Exception(readsAlignment.length > 0, "empty ref vs. reads alignment");
+
+        initResultScaffold();
+        initUnusedReads();
+
+        logJsonDiagnostic("state", "exit", "function", "djunctor.init");
+    }
+
+    protected void initResultScaffold()
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.initResultScaffold");
+
+        auto contigLengths = getContigLengths();
         // dfmt off
         catHits = initScaffold!(
             (contigId) => InsertionInfo(options.refDb, contigLengths[contigId - 1], []),
@@ -701,12 +714,7 @@ class DJunctor
         // dfmt on
         insertUnkownJoins();
 
-        unusedReads.reserveFor(numReads);
-        foreach (readId; iota(1, numReads + 1))
-        {
-            unusedReads.add(readId);
-        }
-        logJsonDiagnostic("state", "exit", "function", "djunctor.init");
+        logJsonDiagnostic("state", "exit", "function", "djunctor.initResultScaffold");
     }
 
     protected size_t[] getContigLengths()
@@ -718,6 +726,19 @@ class DJunctor
             .map!(contigPart => contigPart.end - contigPart.begin + 0)
             .array;
         // dfmt on
+    }
+
+    protected void initUnusedReads()
+    {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.initUnusedReads");
+
+        unusedReads.reserveFor(numReads);
+        foreach (readId; iota(1, numReads + 1))
+        {
+            unusedReads.add(readId);
+        }
+
+        logJsonDiagnostic("state", "exit", "function", "djunctor.initUnusedReads");
     }
 
     protected void assessRepeatStructure()

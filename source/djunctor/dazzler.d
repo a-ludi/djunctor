@@ -209,6 +209,7 @@ AlignmentChain[] getAlignments(Options)(in string dbA, in string dbB,
         if (hasOption!(Options, "ladumpOptions", isOptionsList)
             && hasOption!(Options, "workdir", isSomeString))
 {
+    logJsonDiagnostic("state", "enter", "function", "dazzler.getAlignments");
     // dfmt off
     auto alignmentChains = readLasDump(ladump(
         lasFile,
@@ -219,6 +220,7 @@ AlignmentChain[] getAlignments(Options)(in string dbA, in string dbB,
     )).array;
     // dfmt on
     alignmentChains.sort!("a < b", SwapStrategy.stable);
+    logJsonDiagnostic("state", "exit", "function", "dazzler.getAlignments");
 
     return alignmentChains;
 }
