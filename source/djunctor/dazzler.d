@@ -1541,20 +1541,20 @@ size_t getNumContigs(Options)(in string damFile, in Options options)
     size_t numContigs;
     size_t[] empty;
     // dfmt off
-    auto matchingLine = dbdump(damFile.stripBlock, empty, [], options.workdir)
+    auto matchingLine = dbdump(damFile, empty, [], options.workdir)
         .filter!(line => line.startsWith(contigNumFormatStart))
         .front;
     // dfmt on
 
     if (!matchingLine)
     {
-        auto errorMessage = format!"could not read the contig count in `%s`"(damFile.stripBlock);
+        auto errorMessage = format!"could not read the contig count in `%s`"(damFile);
         throw new DazzlerCommandException(errorMessage);
     }
 
     if (formattedRead!contigNumFormat(matchingLine, numContigs) != 1)
     {
-        auto errorMessage = format!"could not read the contig count in `%s`"(damFile.stripBlock);
+        auto errorMessage = format!"could not read the contig count in `%s`"(damFile);
         throw new DazzlerCommandException(errorMessage);
     }
 
