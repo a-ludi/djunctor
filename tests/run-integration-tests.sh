@@ -413,7 +413,7 @@ function result_contig_properly_aligns_to_reference()
             }
         }' | \
         wc -l)
-    if ! (( NUM_MATCHING_ALIGNMENTS == 1 )); then
+    if ! (( NUM_MATCHING_ALIGNMENTS >= 1 )); then
         echo "expected to find proper alignment for contig $RESULT_CONTIG ($NUM_MATCHING_ALIGNMENTS)"
 
         if $VERBOSE;
@@ -529,7 +529,8 @@ function test_insertions_found()
             { type: "front", contigIds: [12] },
             { type: "gap",   contigIds: [12, 14] },
             { type: "gap",   contigIds: [13, 14] },
-            { type: "gap",   contigIds: [13, 15] }
+            { type: "gap",   contigIds: [13, 15] },
+            { type: "gap",   contigIds: [15, 17] }
         ]' \
         '.[0].pileUps | map({ type: .type, contigIds: (.readAlignments | map(.[0].alignment.contigA.id) | unique | sort) })' \
         'pileUps'
