@@ -466,6 +466,13 @@ struct Graph(Node, Weight = void, Flag!"isDirected" isDirected = No.isDirected, 
         _nodes = _nodes.dup;
     }
 
+    /// Add a set of edges to this graph without any checks.
+    void bulkAdd(Edge[] edges)
+    {
+        this._edges ~= edges;
+        _edges.data.sort;
+    }
+
     /// Add an edge to this graph and handle existing edges with `handleConflict`.
     /// The handler must have this signature `Edge handleConflict(Edge, Edge)`.
     Edge add(alias handleConflict = ConflictStrategy.error)(Edge edge)

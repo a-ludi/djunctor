@@ -250,17 +250,16 @@ Scaffold!T initScaffold(alias getPayload, T)(in size_t numReferenceContigs)
     // dfmt on
     auto initialScaffold = Scaffold!T(contigNodes);
 
-    foreach (contigId; contigIds)
+    static if (__traits(compiles, getPayload is null) && (getPayload is null))
     {
-        static if (__traits(compiles, getPayload is null) && (getPayload is null))
-        {
-            initialScaffold ~= getDefaultJoin!T(contigId);
-        }
-        else
-        {
-            initialScaffold ~= getDefaultJoin!(getPayload, T)(contigId);
-        }
+        alias createDefaultJoin = getDefaultJoin!T;
     }
+    else
+    {
+        alias createDefaultJoin = getDefaultJoin!(getPayload, T);
+    }
+
+    initialScaffold.bulkAdd(contigIds.map!createDefaultJoin.array);
 
     return initialScaffold;
 }

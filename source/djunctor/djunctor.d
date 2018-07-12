@@ -882,7 +882,7 @@ class DJunctor
     protected void insertUnkownJoins()
     {
         // dfmt off
-        scaffoldStructure[]
+        auto unkownJoins = scaffoldStructure[]
             .filter!(part => part.peek!GapSegment !is null)
             .map!(gapPart => gapPart.get!GapSegment)
             .map!(gapPart => getUnkownJoin(
@@ -903,8 +903,9 @@ class DJunctor
                     ]
                 ),
             ))
-            .each!(unkownJoin => catHits.add(unkownJoin));
+            .array;
         // dfmt on
+        catHits.bulkAdd(unkownJoins);
     }
 
     protected PileUp[] buildPileUps()
