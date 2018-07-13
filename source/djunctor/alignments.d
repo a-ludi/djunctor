@@ -880,7 +880,7 @@ struct ReadAlignment
         else
         {
             // dfmt off
-            logJsonDiagnostic(
+            logJsonDebug(
                 "info", format!"creating invalid read alignment with %d local alignments"(alignments.length),
                 "alignments", alignments.toJson,
             );

@@ -833,7 +833,7 @@ class DJunctor
         // dfmt on
         AlignmentChain[] filterInput = readsAlignment[];
         // dfmt off
-        logJsonDiagnostic(
+        logJsonDebug(
             "filterStage", "Input",
             "discardedAlignmentChains", Json.emptyArray,
             "keptAlignmentChains", filterInput.toJson,
@@ -851,7 +851,7 @@ class DJunctor
                     filterInput,
                     filterOutput,
                 ).array;
-                logJsonDiagnostic(
+                logJsonDebug(
                     "filterStage", typeof(filter).stringof,
                     "discardedAlignmentChains", discardedAlignmentChains.toJson,
                     "keptAlignmentChains", filterOutput.toJson,
@@ -1345,7 +1345,7 @@ class DJunctor
         catch (ErrnoException e)
         {
             // dfmt off
-            logJsonError(
+            logJsonWarn(
                 "info", "cannot write unused reads list",
                 "error", e.to!string,
                 "file", options.unusedReadsList,

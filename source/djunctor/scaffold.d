@@ -322,7 +322,7 @@ Scaffold!T discardAmbiguousJoins(T)(Scaffold!T scaffold)
             if (incidentGapJoins.length > 1)
             {
                 // dfmt off
-                logJsonDiagnostic(
+                logJsonDebug(
                     "info", "skipping ambiguous gap joins",
                     "sourceContigNode", contigNode.toJson,
                     "joins", incidentGapJoins.toJson,
@@ -694,7 +694,7 @@ Scaffold!T enforceJoinPolicy(T)(Scaffold!T scaffold, in JoinPolicy joinPolicy)
     }
 
     // dfmt off
-    logJsonInfo("forbiddenJoins", forbiddenJoins
+    logJsonDebug("forbiddenJoins", forbiddenJoins
         .filter!(gapJoin => scaffold.degree(gapJoin.start) == 1 && scaffold.degree(gapJoin.end) == 1)
         .map!(join => [
             "start": join.start.toJson,
