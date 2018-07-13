@@ -10,9 +10,9 @@ module djunctor.commandline;
 
 import darg : ArgParseHelp, Argument, Help, helpString, Option, OptionFlag,
     parseArgs, usageString;
-import djunctor.dazzler : provideDamFileInWorkdir, provideLasFileInWorkdir,
-    ProvideMethod, DaccordOptions, DalignerOptions, DamapperOptions,
-    LAdumpOptions;
+import djunctor.dazzler : DaccordOptions, DalignerOptions, DamapperOptions,
+    LAdumpOptions, lasEmpty, provideDamFileInWorkdir, provideLasFileInWorkdir,
+    ProvideMethod;
 import djunctor.scaffold : JoinPolicy;
 import djunctor.util.log;
 import std.conv;
@@ -399,7 +399,9 @@ private
         immutable fileOptions = [
             "refFile",
             "readsFile",
+            "selfAlignmentInputFile",
             "selfAlignmentFile",
+            "refVsReadsAlignmentInputFile",
             "refVsReadsAlignmentFile",
             "readsListFile",
             "outMask",
@@ -448,6 +450,8 @@ private
     {
         verifyDamFile(options.refFile);
         verifyDamFile(options.readsFile);
+        verifyLasFile(options.selfAlignmentInputFile, options.refFile);
+        verifyLasFile(options.refVsReadsAlignmentInputFile, options.refFile, options.readsFile);
         options.readsList = verifyReadsListFile(options.readsListFile);
         verifyInMask(options.refFile, options.inMask);
     }
@@ -472,6 +476,19 @@ private
         size_t numBlocks = getNumBlocks(damFile);
         enforce!Exception(blockNum == 0 || blockNum <= numBlocks,
                 format!"cannot select block %d; databse has only %d blocks"(blockNum, numBlocks));
+    }
+
+    void verifyLasFile(in string lasFile, in string dbA, in string dbB=null)
+    {
+        import djunctor.dazzler : getHiddenDbFiles, getNumBlocks;
+        import std.algorithm : endsWith;
+        import std.exception : enforce;
+        import std.file : exists;
+        import std.format : format;
+
+        enforce!Exception(lasFile.endsWith(".las"), format!"expected .las file, got `%s`"(lasFile));
+        enforce!Exception(lasFile.exists, format!"cannot open file `%s`"(lasFile));
+        enforce!Exception(!lasEmpty(lasFile, dbA, dbB, "."), format!"cannot open file `%s`"(lasFile));
     }
 
     size_t[] verifyReadsListFile(ref string readsListFile)

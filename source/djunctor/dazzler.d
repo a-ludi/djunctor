@@ -119,6 +119,29 @@ private string provideFileInWorkdir(in string file, ProvideMethod provideMethod,
     return fileInWorkdir;
 }
 
+/// Returns true iff lasFile contains zero parts.
+bool lasEmpty(in string lasFile, in string dbA, in string workdir)
+{
+    return lasEmpty(lasFile, dbA, null, workdir);
+}
+
+/// ditto
+bool lasEmpty(in string lasFile, in string dbA, in string dbB, in string workdir)
+{
+    auto dumpHeader = ladump(lasFile, dbA, dbB, [], workdir);
+
+    if (dumpHeader.empty)
+    {
+        return true;
+    }
+
+    size_t numParts;
+
+    dumpHeader.front.formattedRead!"+ P %d"(numParts);
+
+    return numParts == 0;
+}
+
 /// Build a new .dam file by using the given subset of reads in inDbFile.
 string dbSubset(Options, R)(in string inDbFile, R readIds, in Options options)
         if (hasOption!(Options, "workdir", isSomeString)
@@ -2189,21 +2212,6 @@ enum LAdumpOptions
 
 private
 {
-    bool lasEmpty(in string lasFile, in string dbA, in string dbB, in string workdir)
-    {
-        auto dumpHeader = ladump(lasFile, dbA, dbB, [], workdir);
-
-        if (dumpHeader.empty)
-        {
-            return true;
-        }
-
-        size_t numParts;
-
-        dumpHeader.front.formattedRead!"+ P %d"(numParts);
-
-        return numParts == 0;
-    }
 
     void dalign(in string refDam, in string[] dalignerOpts, in string workdir)
     {
