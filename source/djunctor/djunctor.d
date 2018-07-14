@@ -794,7 +794,7 @@ class DJunctor
             );
             // dfmt on
 
-            if (shouldLog(LogLevel.diagnostic) && options.outMask != null)
+            if (shouldLog(LogLevel.debug_) && options.outMask != null)
             {
                 auto maskName = format!"%s-%s"(options.outMask, stage.name);
 
