@@ -483,12 +483,15 @@ private
         import djunctor.dazzler : getHiddenDbFiles, getNumBlocks;
         import std.algorithm : endsWith;
         import std.exception : enforce;
-        import std.file : exists;
+        import std.file : exists, getcwd;
         import std.format : format;
+        import std.path : absolutePath;
+
+        auto cwd = getcwd.absolutePath;
 
         enforce!Exception(lasFile.endsWith(".las"), format!"expected .las file, got `%s`"(lasFile));
         enforce!Exception(lasFile.exists, format!"cannot open file `%s`"(lasFile));
-        enforce!Exception(!lasEmpty(lasFile, dbA, dbB, "."), format!"cannot open file `%s`"(lasFile));
+        enforce!Exception(!lasEmpty(lasFile, dbA, dbB, cwd), format!"cannot open file `%s`"(lasFile));
     }
 
     size_t[] verifyReadsListFile(ref string readsListFile)
