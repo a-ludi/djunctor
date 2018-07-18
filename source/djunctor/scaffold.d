@@ -694,7 +694,7 @@ Scaffold!T enforceJoinPolicy(T)(Scaffold!T scaffold, in JoinPolicy joinPolicy)
     }
 
     // dfmt off
-    logJsonDebug("forbiddenJoins", forbiddenJoins
+    logJsonInfo("forbiddenJoins", forbiddenJoins
         .filter!(gapJoin => scaffold.degree(gapJoin.start) == 1 && scaffold.degree(gapJoin.end) == 1)
         .map!(join => [
             "start": join.start.toJson,

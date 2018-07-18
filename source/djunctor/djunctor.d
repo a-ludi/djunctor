@@ -844,7 +844,7 @@ class DJunctor
             auto filterOutput = filter(filterInput[]);
 
             assert(isSorted(filterOutput));
-            if (shouldLog(LogLevel.diagnostic))
+            if (shouldLog(LogLevel.debug_))
             {
                 // dfmt off
                 auto discardedAlignmentChains = setDifference(
