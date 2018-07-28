@@ -1024,6 +1024,11 @@ struct NaturalNumberSet
         }
     }
 
+    @property size_t capacity() pure const nothrow
+    {
+        return nMax;
+    }
+
     private size_t partIdx(in size_t n) const pure nothrow
     {
         return n / partSize;
