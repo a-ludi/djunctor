@@ -1370,26 +1370,21 @@ abstract class ReadFilter : AlignmentChainFilter
 
     override AlignmentChain[] opCall(AlignmentChain[] alignmentChains)
     {
-        // dfmt off
-        auto discardedReadIds = getDiscardedReadIds(alignmentChains)
-            .map!(ac => ac.contigB.id)
-            .array
-            .sort
-            .uniq
-            .array
-            .assumeSorted;
-        // dfmt on
-        markReadsAsUsed(discardedReadIds);
+        NaturalNumberSet discardedReadIds;
+        discardedReadIds.reserveFor(unusedReads.capacity);
 
-        return alignmentChains.filter!(ac => !discardedReadIds.contains(ac.contigB.id)).array;
-    }
-
-    private void markReadsAsUsed(ReadIds)(ref ReadIds discardedReadIds)
-    {
-        foreach (discardedReadId; discardedReadIds)
+        foreach (discardedAlignment; getDiscardedReadIds(alignmentChains))
         {
+            auto discardedReadId = discardedAlignment.contigB.id;
+
+            discardedReadIds.add(discardedReadId);
             unusedReads.remove(discardedReadId);
         }
+        // dfmt off
+        return alignmentChains
+            .filter!(ac => !discardedReadIds.has(ac.contigB.id))
+            .array;
+        // dfmt on
     }
 
     InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains);
