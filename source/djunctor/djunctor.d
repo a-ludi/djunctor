@@ -24,7 +24,7 @@ import djunctor.scaffold : ContigNode, ContigPart, contigStarts,
     isAntiParallel, isDefault, isExtension, isFrontExtension, isGap, isValid,
     linearWalk, normalizeUnkownJoins, removeExtensions, Scaffold;
 import dstats.distrib : invPoissonCDF;
-import std.algorithm : all, canFind, chunkBy, each, equal, filter, find, fold,
+import std.algorithm : all, canFind, chunkBy, copy, each, equal, filter, find, fold,
     isSorted, joiner, map, max, maxIndex, min, setDifference, sort, sum, swap,
     SwapStrategy, uniq;
 import std.array : appender, array, join, minimallyInitializedArray;
@@ -786,9 +786,12 @@ class DJunctor
             auto repetitiveRegions = stage.assessor(stage.input);
 
             // dfmt off
-            logJsonDebug(
+            logJsonDiagnostic(
                 "assessor", stage.name,
-                "repetitiveRegions", repetitiveRegions.intervals.toJson,
+                "repetitiveRegions", shouldLog(LogLevel.debug_)
+                    ? repetitiveRegions.intervals.toJson
+                    : Json(null),
+                "numRepetitiveRegions", repetitiveRegions.intervals.toJson,
             );
             // dfmt on
 
@@ -803,9 +806,12 @@ class DJunctor
         }
 
         // dfmt off
-        logJsonDebug(
+        logJsonDiagnostic(
             "assessor", "finalResult",
-            "repetitiveRegions", this.repetitiveRegions.intervals.toJson,
+            "repetitiveRegions", shouldLog(LogLevel.debug_)
+                ? this.repetitiveRegions.intervals.toJson
+                : Json(null),
+            "numRepetitiveRegions", this.repetitiveRegions.intervals.toJson,
         );
         // dfmt on
 
@@ -828,40 +834,29 @@ class DJunctor
             new AmbiguousAlignmentChainsFilter(&unusedReads),
             new RedundantAlignmentChainsFilter(&unusedReads),
         );
-        // dfmt on
-        AlignmentChain[] filterInput = readsAlignment[];
-        // dfmt off
-        logJsonDebug(
+        logJsonDiagnostic(
             "filterStage", "Input",
-            "discardedAlignmentChains", Json.emptyArray,
-            "keptAlignmentChains", filterInput.toJson,
+            "readsAlignment", shouldLog(LogLevel.debug_)
+                ? readsAlignment.toJson
+                : Json(null),
+            "numAlignmentChains", readsAlignment.length,
         );
         // dfmt on
         foreach (i, filter; filters)
         {
-            auto filterOutput = filter(filterInput[]);
+            readsAlignment = filter(readsAlignment);
 
-            assert(isSorted(filterOutput));
-            if (shouldLog(LogLevel.debug_))
-            {
-                // dfmt off
-                auto discardedAlignmentChains = setDifference(
-                    filterInput,
-                    filterOutput,
-                ).array;
-                logJsonDebug(
-                    "filterStage", typeof(filter).stringof,
-                    "discardedAlignmentChains", discardedAlignmentChains.toJson,
-                    "keptAlignmentChains", filterOutput.toJson,
-                );
-                // dfmt on
-            }
-
-            filterInput = filterOutput;
+            assert(isSorted(readsAlignment));
+            // dfmt off
+            logJsonDiagnostic(
+                "filterStage", typeof(filter).stringof,
+                "readsAlignment", shouldLog(LogLevel.debug_)
+                    ? readsAlignment.toJson
+                    : Json(null),
+                "numAlignmentChains", readsAlignment.length,
+            );
+            // dfmt on
         }
-        auto filterPipelineOutput = filterInput;
-
-        this.readsAlignment = filterPipelineOutput;
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.filterReads");
     }
@@ -931,11 +926,13 @@ class DJunctor
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.buildPileUps");
 
+        auto pileUps = buildPileUpsFromReadAlignments(numReferenceContigs, readsAlignment);
         // dfmt off
-        auto pileUps = buildPileUpsFromReadAlignments(numReferenceContigs, readsAlignment)
+        auto bufferRest = pileUps
             .filter!(pileUp => pileUp.length >= options.minReadsPerPileUp)
-            .array;
+            .copy(pileUps);
         // dfmt on
+        pileUps = pileUps[0 .. $ - bufferRest.length];
 
         // dfmt off
         logJsonDebug("pileUps", pileUps
@@ -1381,10 +1378,12 @@ abstract class ReadFilter : AlignmentChainFilter
             unusedReads.remove(discardedReadId);
         }
         // dfmt off
-        return alignmentChains
+        auto bufferRest = alignmentChains
             .filter!(ac => !discardedReadIds.has(ac.contigB.id))
-            .array;
+            .copy(alignmentChains);
         // dfmt on
+
+        return alignmentChains[0 .. $ - bufferRest.length];
     }
 
     InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains);
@@ -1395,7 +1394,9 @@ class ImproperAlignmentChainsFilter : AlignmentChainFilter
 {
     override AlignmentChain[] opCall(AlignmentChain[] alignmentChains)
     {
-        return alignmentChains.filter!"a.isProper".array;
+        auto bufferRest = alignmentChains.filter!"a.isProper".copy(alignmentChains);
+
+        return alignmentChains[0 .. $ - bufferRest.length];
     }
 }
 
@@ -1468,21 +1469,23 @@ class WeaklyAnchoredAlignmentChainsFilter : AlignmentChainFilter
 
     AlignmentChain[] opCall(AlignmentChain[] alignmentChains)
     {
-        bool isStronglyAnchored(AlignmentChain alignment)
-        {
-            // Mark reads as weakly anchored if they are mostly anchored in a
-            // repetitive region
-            auto uniqueAlignmentRegion = getRegion(alignment) - repetitiveRegions;
-            bool isWeaklyAnchored = uniqueAlignmentRegion.size <= minAnchorLength;
-
-            return !isWeaklyAnchored;
-        }
-
         // dfmt off
-        return alignmentChains
-            .filter!isStronglyAnchored
-            .array;
+        auto bufferRest = alignmentChains
+            .filter!(ac => isStronglyAnchored(ac))
+            .copy(alignmentChains);
         // dfmt on
+
+        return alignmentChains[0 .. $ - bufferRest.length];
+    }
+
+    bool isStronglyAnchored(AlignmentChain alignment)
+    {
+        // Mark reads as weakly anchored if they are mostly anchored in a
+        // repetitive region
+        auto uniqueAlignmentRegion = getRegion(alignment) - repetitiveRegions;
+        bool isWeaklyAnchored = uniqueAlignmentRegion.size <= minAnchorLength;
+
+        return !isWeaklyAnchored;
     }
 }
 
