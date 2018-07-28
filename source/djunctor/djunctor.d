@@ -15,6 +15,7 @@ import djunctor.dazzler : attachTracePoints, buildDamFile, ContigSegment,
     getScaffoldStructure, readMask, ScaffoldSegment, writeMask;
 import djunctor.util.fasta : parseFastaRecord, parsePacBioHeader,
     reverseComplement;
+import djunctor.util.algorithm : sliceBy;
 import djunctor.util.log;
 import djunctor.util.math : ceil, floor, NaturalNumberSet;
 import djunctor.util.region : empty, min, Region, sup;
@@ -113,16 +114,12 @@ private SeededAlignment[][] splitAlignmentsByContigA(PileUp pileUp)
         .map!"a[]"
         .joiner
         .array
-        .sort;
+        .sort
+        .release;
     // dfmt on
-    auto alignmentsByContig = orderedAlignments.chunkBy!"a.contigA.id == b.contigA.id";
+    auto alignmentsByContig = orderedAlignments.sliceBy!"a.contigA.id == b.contigA.id";
 
-    // dfmt off
-    return alignmentsByContig
-        .filter!"!a.empty"
-        .map!array
-        .array;
-    // dfmt on
+    return array(alignmentsByContig);
 }
 
 /// Returns a common trace points wrt. contigA that is not in mask and is on
@@ -142,6 +139,7 @@ private long getCommonTracePoint(in SeededAlignment[] alignments,
     // dfmt off
     auto commonAlignmentRegion = alignments
         .map!getRegion
+        // FIXME improve performance by "bulk intersection"
         .fold!"a & b";
     auto relevantContigHalf = locationSeed == AlignmentLocationSeed.front
         ? ReferenceMask(contigA.id, 0, contigA.length / 2)
