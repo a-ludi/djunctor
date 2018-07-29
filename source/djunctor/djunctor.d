@@ -791,7 +791,7 @@ class DJunctor
                 "repetitiveRegions", shouldLog(LogLevel.debug_)
                     ? repetitiveRegions.intervals.toJson
                     : Json(null),
-                "numRepetitiveRegions", repetitiveRegions.intervals.toJson,
+                "numRepetitiveRegions", repetitiveRegions.intervals.length,
             );
             // dfmt on
 
