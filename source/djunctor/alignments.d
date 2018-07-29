@@ -22,7 +22,8 @@ import std.format : format;
 import std.math : sgn;
 import std.range : assumeSorted, chain, chunks, InputRange, inputRangeObject,
     iota, only, slide, takeNone, zip;
-import std.typecons : No;
+import std.string : capitalize;
+import std.typecons : BitFlags, PhobosFlag = Flag, No;
 import vibe.data.json : toJson = serializeToJson;
 
 debug import std.stdio : writeln;
@@ -39,6 +40,14 @@ alias trace_point_t = ushort;
 */
 struct AlignmentChain
 {
+    static enum Flag : ubyte
+    {
+        complement = 1 << 0,
+        disabled = 1 << 1,
+    }
+
+    static alias Flags = BitFlags!Flag;
+
     static struct LocalAlignment
     {
         static struct Locus
@@ -65,20 +74,32 @@ struct AlignmentChain
         coord_t length;
     }
 
-    static enum Complement
-    {
-        no = false,
-        yes = true,
-    }
-
     static immutable maxScore = 2 ^^ 16;
+    static immutable Flags emptyFlags;
 
     id_t id;
     Contig contigA;
     Contig contigB;
-    Complement complement;
+    Flags flags;
     LocalAlignment[] localAlignments;
     trace_point_t tracePointDistance;
+
+    static foreach(flagName; __traits(allMembers, Flag))
+    {
+        mixin(format!(q"<
+            static alias %1$s = PhobosFlag!"%2$s";
+
+            @property PhobosFlag!"%2$s" %2$s() pure const nothrow @trusted
+            {
+                return cast(PhobosFlag!"%2$s") flags.%2$s;
+            }
+
+            @property void %2$s(PhobosFlag!"%2$s" %2$s) pure nothrow
+            {
+                flags.%2$s = %2$s;
+            }
+        >")(flagName.capitalize, flagName));
+    }
 
     invariant
     {
@@ -118,19 +139,19 @@ struct AlignmentChain
 
     unittest
     {
-        with (Complement) with (LocalAlignment)
+        with (LocalAlignment)
             {
-                auto acZeroLength = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, []);
-                auto ac1 = AlignmentChain(1, Contig(1, 10), Contig(1, 10), no,
+                auto acZeroLength = AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, []);
+                auto ac1 = AlignmentChain(1, Contig(1, 10), Contig(1, 10), emptyFlags,
                         [LocalAlignment(Locus(1, 1), Locus(1, 9), 0)]);
-                auto ac2 = AlignmentChain(2, Contig(1, 10), Contig(1, 10), no,
+                auto ac2 = AlignmentChain(2, Contig(1, 10), Contig(1, 10), emptyFlags,
                         [LocalAlignment(Locus(1, 11), Locus(1, 9), 0)]);
-                auto ac3 = AlignmentChain(3, Contig(1, 10), Contig(1, 10), no,
+                auto ac3 = AlignmentChain(3, Contig(1, 10), Contig(1, 10), emptyFlags,
                         [LocalAlignment(Locus(1, 9), Locus(1, 1), 0)]);
-                auto ac4 = AlignmentChain(4, Contig(1, 10), Contig(1, 10), no,
+                auto ac4 = AlignmentChain(4, Contig(1, 10), Contig(1, 10), emptyFlags,
                         [LocalAlignment(Locus(1, 9), Locus(1, 11), 0)]);
                 auto acFine = AlignmentChain(5, Contig(1, 10), Contig(1, 10),
-                        no, [LocalAlignment(Locus(1, 9), Locus(1, 9), 0)]);
+                        emptyFlags, [LocalAlignment(Locus(1, 9), Locus(1, 9), 0)]);
 
                 assertThrown!AssertError(acZeroLength.totalLength);
                 assertThrown!AssertError(ac1.totalLength);
@@ -152,7 +173,7 @@ struct AlignmentChain
             {
                 auto firstLA = LocalAlignment(Locus(1, 9), Locus(1, 9), 0);
                 auto otherLA = LocalAlignment(Locus(9, 10), Locus(9, 10), 0);
-                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [firstLA, otherLA]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [firstLA, otherLA]);
 
                 assert(ac.first == firstLA);
             }
@@ -169,7 +190,7 @@ struct AlignmentChain
             {
                 auto lastLA = LocalAlignment(Locus(1, 9), Locus(1, 9), 0);
                 auto otherLA = LocalAlignment(Locus(9, 10), Locus(9, 10), 0);
-                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [otherLA, lastLA]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [otherLA, lastLA]);
 
                 assert(ac.last == lastLA);
             }
@@ -230,7 +251,7 @@ struct AlignmentChain
         with (Complement) with (LocalAlignment)
             {
                 auto la = LocalAlignment(Locus(30, 35), Locus(5, 10), 1);
-                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), no, [la]);
+                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), emptyFlags, [la]);
 
                 // read with extension align an contigA from 25 to 40
                 assert(ac.isFullyContained);
@@ -240,7 +261,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(10, 20), Locus(5, 10), 1);
                 auto la2 = LocalAlignment(Locus(30, 40), Locus(5, 10), 1);
-                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), emptyFlags, [la1, la2]);
 
                 // read with extension align an contigA from 5 to 45
                 assert(ac.isFullyContained);
@@ -249,7 +270,7 @@ struct AlignmentChain
         with (Complement) with (LocalAlignment)
             {
                 auto la = LocalAlignment(Locus(0, 10), Locus(5, 10), 1);
-                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), no, [la]);
+                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), emptyFlags, [la]);
 
                 // read with extension align an contigA from -5 to 15
                 assert(!ac.isFullyContained);
@@ -258,7 +279,7 @@ struct AlignmentChain
         with (Complement) with (LocalAlignment)
             {
                 auto la = LocalAlignment(Locus(40, 50), Locus(5, 10), 1);
-                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), no, [la]);
+                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), emptyFlags, [la]);
 
                 // read with extension align an contigA from 35 to 55
                 assert(!ac.isFullyContained);
@@ -268,7 +289,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(0, 20), Locus(5, 10), 1);
                 auto la2 = LocalAlignment(Locus(30, 50), Locus(5, 10), 1);
-                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 50), Contig(1, 15), emptyFlags, [la1, la2]);
 
                 // read with extension align an contigA from -5 to 55
                 assert(!ac.isFullyContained);
@@ -291,7 +312,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(1, 3), Locus(1, 3), 1);
                 auto la2 = LocalAlignment(Locus(5, 10), Locus(5, 10), 2);
-                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [la1, la2]);
 
                 assert(ac.totalLength == 9);
             }
@@ -308,7 +329,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(1, 3), Locus(1, 3), 1);
                 auto la2 = LocalAlignment(Locus(5, 10), Locus(5, 10), 2);
-                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [la1, la2]);
 
                 assert(ac.totalDiffs == 3);
             }
@@ -330,7 +351,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(1, 3), Locus(1, 3), 1);
                 auto la2 = LocalAlignment(Locus(5, 10), Locus(5, 10), 2);
-                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [la1, la2]);
 
                 assert(ac.totalGapLength == 2);
             }
@@ -347,7 +368,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(1, 3), Locus(1, 3), 1);
                 auto la2 = LocalAlignment(Locus(5, 10), Locus(5, 10), 2);
-                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [la1, la2]);
 
                 assert(ac.numMatchingBps == 9 - (3 + 2));
             }
@@ -364,7 +385,7 @@ struct AlignmentChain
             {
                 auto la1 = LocalAlignment(Locus(1, 3), Locus(1, 3), 1);
                 auto la2 = LocalAlignment(Locus(5, 10), Locus(5, 10), 2);
-                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la1, la2]);
+                auto ac = AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [la1, la2]);
 
                 assert(ac.score == 4 * maxScore / 9);
             }
@@ -388,10 +409,10 @@ struct AlignmentChain
                 auto la = LocalAlignment(Locus(0, 1), Locus(0, 1), 1);
                 // dfmt off
                 auto acs = [
-                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la]),
-                    AlignmentChain(1, Contig(1, 10), Contig(2, 10), no, [la]),
-                    AlignmentChain(2, Contig(2, 10), Contig(1, 10), no, [la]),
-                    AlignmentChain(3, Contig(2, 10), Contig(2, 10), no, [la]),
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [la]),
+                    AlignmentChain(1, Contig(1, 10), Contig(2, 10), emptyFlags, [la]),
+                    AlignmentChain(2, Contig(2, 10), Contig(1, 10), emptyFlags, [la]),
+                    AlignmentChain(3, Contig(2, 10), Contig(2, 10), emptyFlags, [la]),
                 ];
                 // dfmt on
 
@@ -435,10 +456,10 @@ struct AlignmentChain
                 auto la = LocalAlignment(Locus(0, 1), Locus(0, 1), 1);
                 // dfmt off
                 auto acs = [
-                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la]),
-                    AlignmentChain(1, Contig(1, 10), Contig(2, 10), no, [la]),
-                    AlignmentChain(2, Contig(2, 10), Contig(1, 10), no, [la]),
-                    AlignmentChain(3, Contig(2, 10), Contig(2, 10), no, [la]),
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [la]),
+                    AlignmentChain(1, Contig(1, 10), Contig(2, 10), emptyFlags, [la]),
+                    AlignmentChain(2, Contig(2, 10), Contig(1, 10), emptyFlags, [la]),
+                    AlignmentChain(3, Contig(2, 10), Contig(2, 10), emptyFlags, [la]),
                 ];
                 // dfmt on
 
@@ -463,31 +484,31 @@ struct AlignmentChain
             {
                 // dfmt off
                 auto acs = [
-                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [
                         LocalAlignment(Locus(0, 2), Locus(0, 2), 1),
                         LocalAlignment(Locus(3, 5), Locus(3, 5), 1)
                     ]),
-                    AlignmentChain(1, Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(1, Contig(1, 10), Contig(1, 10), emptyFlags, [
                         LocalAlignment(Locus(0, 2), Locus(1, 2), 1),
                         LocalAlignment(Locus(3, 5), Locus(3, 5), 1)
                     ]),
-                    AlignmentChain(2, Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(2, Contig(1, 10), Contig(1, 10), emptyFlags, [
                         LocalAlignment(Locus(1, 2), Locus(0, 2), 1),
                         LocalAlignment(Locus(3, 5), Locus(3, 5), 1)
                     ]),
-                    AlignmentChain(3, Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(3, Contig(1, 10), Contig(1, 10), emptyFlags, [
                         LocalAlignment(Locus(1, 2), Locus(1, 2), 1),
                         LocalAlignment(Locus(3, 5), Locus(3, 5), 1)
                     ]),
-                    AlignmentChain(4, Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(4, Contig(1, 10), Contig(1, 10), emptyFlags, [
                         LocalAlignment(Locus(1, 2), Locus(1, 2), 1),
                         LocalAlignment(Locus(3, 5), Locus(3, 6), 1)
                     ]),
-                    AlignmentChain(5, Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(5, Contig(1, 10), Contig(1, 10), emptyFlags, [
                         LocalAlignment(Locus(1, 2), Locus(1, 2), 1),
                         LocalAlignment(Locus(3, 6), Locus(3, 5), 1)
                     ]),
-                    AlignmentChain(6, Contig(1, 10), Contig(1, 10), no, [
+                    AlignmentChain(6, Contig(1, 10), Contig(1, 10), emptyFlags, [
                         LocalAlignment(Locus(1, 2), Locus(1, 2), 1),
                         LocalAlignment(Locus(3, 6), Locus(3, 6), 1)
                     ]),
@@ -526,10 +547,10 @@ unittest
                 auto la = LocalAlignment(Locus(0, 1), Locus(0, 1), 1);
                 // dfmt off
                 auto acs = [
-                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [la]),
-                    AlignmentChain(1, Contig(1, 10), Contig(2, 10), no, [la]),
-                    AlignmentChain(2, Contig(2, 10), Contig(1, 10), no, [la]),
-                    AlignmentChain(3, Contig(2, 10), Contig(2, 10), no, [la]),
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [la]),
+                    AlignmentChain(1, Contig(1, 10), Contig(2, 10), emptyFlags, [la]),
+                    AlignmentChain(2, Contig(2, 10), Contig(1, 10), emptyFlags, [la]),
+                    AlignmentChain(3, Contig(2, 10), Contig(2, 10), emptyFlags, [la]),
                 ];
                 // dfmt on
 
@@ -561,15 +582,15 @@ unittest
             {
                 // dfmt off
                 auto sortedTestChains = [
-                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [LocalAlignment(Locus(0, 10), Locus(0, 1), 0)]),
-                    AlignmentChain(1, Contig(1, 10), Contig(2, 20), no, [LocalAlignment(Locus(0, 10), Locus(0, 2), 0)]),
-                    AlignmentChain(2, Contig(1, 10), Contig(3, 30), no, [LocalAlignment(Locus(0, 10), Locus(0, 3), 0)]),
-                    AlignmentChain(3, Contig(2, 20), Contig(1, 10), no, [LocalAlignment(Locus(0, 20), Locus(0, 4), 0)]),
-                    AlignmentChain(4, Contig(2, 20), Contig(1, 10), no, [LocalAlignment(Locus(0, 20), Locus(0, 5), 0)]),
-                    AlignmentChain(5, Contig(2, 20), Contig(3, 30), no, [LocalAlignment(Locus(0, 20), Locus(0, 6), 0)]),
-                    AlignmentChain(6, Contig(3, 30), Contig(1, 10), no, [LocalAlignment(Locus(0, 30), Locus(0, 7), 0)]),
-                    AlignmentChain(7, Contig(3, 30), Contig(2, 20), no, [LocalAlignment(Locus(0, 30), Locus(0, 8), 0)]),
-                    AlignmentChain(8, Contig(3, 30), Contig(3, 30), no, [LocalAlignment(Locus(0, 30), Locus(0, 9), 0)]),
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [LocalAlignment(Locus(0, 10), Locus(0, 1), 0)]),
+                    AlignmentChain(1, Contig(1, 10), Contig(2, 20), emptyFlags, [LocalAlignment(Locus(0, 10), Locus(0, 2), 0)]),
+                    AlignmentChain(2, Contig(1, 10), Contig(3, 30), emptyFlags, [LocalAlignment(Locus(0, 10), Locus(0, 3), 0)]),
+                    AlignmentChain(3, Contig(2, 20), Contig(1, 10), emptyFlags, [LocalAlignment(Locus(0, 20), Locus(0, 4), 0)]),
+                    AlignmentChain(4, Contig(2, 20), Contig(1, 10), emptyFlags, [LocalAlignment(Locus(0, 20), Locus(0, 5), 0)]),
+                    AlignmentChain(5, Contig(2, 20), Contig(3, 30), emptyFlags, [LocalAlignment(Locus(0, 20), Locus(0, 6), 0)]),
+                    AlignmentChain(6, Contig(3, 30), Contig(1, 10), emptyFlags, [LocalAlignment(Locus(0, 30), Locus(0, 7), 0)]),
+                    AlignmentChain(7, Contig(3, 30), Contig(2, 20), emptyFlags, [LocalAlignment(Locus(0, 30), Locus(0, 8), 0)]),
+                    AlignmentChain(8, Contig(3, 30), Contig(3, 30), emptyFlags, [LocalAlignment(Locus(0, 30), Locus(0, 9), 0)]),
                 ];
 
                 assert(sortedTestChains.chunkBy!haveEqualIds.equal!equal([
@@ -606,15 +627,15 @@ unittest
             {
                 // dfmt off
                 auto sortedTestChains = [
-                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [LocalAlignment(Locus(0, 1), Locus(0, 1), 0)]),
-                    AlignmentChain(1, Contig(1, 10), Contig(2, 20), no, [LocalAlignment(Locus(0, 2), Locus(0, 2), 0)]),
-                    AlignmentChain(2, Contig(1, 10), Contig(3, 30), no, [LocalAlignment(Locus(0, 3), Locus(0, 3), 0)]),
-                    AlignmentChain(3, Contig(2, 20), Contig(1, 10), no, [LocalAlignment(Locus(0, 4), Locus(0, 4), 0)]),
-                    AlignmentChain(4, Contig(2, 20), Contig(1, 10), no, [LocalAlignment(Locus(0, 5), Locus(0, 5), 0)]),
-                    AlignmentChain(5, Contig(2, 20), Contig(3, 30), no, [LocalAlignment(Locus(0, 6), Locus(0, 6), 0)]),
-                    AlignmentChain(6, Contig(3, 30), Contig(1, 10), no, [LocalAlignment(Locus(0, 7), Locus(0, 7), 0)]),
-                    AlignmentChain(7, Contig(3, 30), Contig(2, 20), no, [LocalAlignment(Locus(0, 8), Locus(0, 8), 0)]),
-                    AlignmentChain(8, Contig(3, 30), Contig(3, 30), no, [LocalAlignment(Locus(0, 9), Locus(0, 9), 0)]),
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [LocalAlignment(Locus(0, 1), Locus(0, 1), 0)]),
+                    AlignmentChain(1, Contig(1, 10), Contig(2, 20), emptyFlags, [LocalAlignment(Locus(0, 2), Locus(0, 2), 0)]),
+                    AlignmentChain(2, Contig(1, 10), Contig(3, 30), emptyFlags, [LocalAlignment(Locus(0, 3), Locus(0, 3), 0)]),
+                    AlignmentChain(3, Contig(2, 20), Contig(1, 10), emptyFlags, [LocalAlignment(Locus(0, 4), Locus(0, 4), 0)]),
+                    AlignmentChain(4, Contig(2, 20), Contig(1, 10), emptyFlags, [LocalAlignment(Locus(0, 5), Locus(0, 5), 0)]),
+                    AlignmentChain(5, Contig(2, 20), Contig(3, 30), emptyFlags, [LocalAlignment(Locus(0, 6), Locus(0, 6), 0)]),
+                    AlignmentChain(6, Contig(3, 30), Contig(1, 10), emptyFlags, [LocalAlignment(Locus(0, 7), Locus(0, 7), 0)]),
+                    AlignmentChain(7, Contig(3, 30), Contig(2, 20), emptyFlags, [LocalAlignment(Locus(0, 8), Locus(0, 8), 0)]),
+                    AlignmentChain(8, Contig(3, 30), Contig(3, 30), emptyFlags, [LocalAlignment(Locus(0, 9), Locus(0, 9), 0)]),
                 ];
                 // dfmt on
 
@@ -647,15 +668,15 @@ bool isBefore(string contig)(in AlignmentChain ac1, in AlignmentChain ac2) pure
 
 unittest
 {
-    with (AlignmentChain) with (Complement) with (LocalAlignment)
+    with (AlignmentChain) with (Flag) with (LocalAlignment)
             {
                 // dfmt off
                 auto acs = [
-                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), no, [LocalAlignment(Locus(1, 6), Locus(0, 1), 0)]),
-                    AlignmentChain(1, Contig(1, 10), Contig(2, 10), yes, [LocalAlignment(Locus(2, 6), Locus(0, 1), 0)]),
-                    AlignmentChain(2, Contig(1, 10), Contig(3, 10), no, [LocalAlignment(Locus(3, 6), Locus(0, 1), 0)]),
-                    AlignmentChain(3, Contig(1, 10), Contig(4, 10), yes, [LocalAlignment(Locus(4, 6), Locus(0, 1), 0)]),
-                    AlignmentChain(4, Contig(1, 10), Contig(5, 10), no, [LocalAlignment(Locus(5, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(0, Contig(1, 10), Contig(1, 10), emptyFlags, [LocalAlignment(Locus(1, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(1, Contig(1, 10), Contig(2, 10), Flags(complement), [LocalAlignment(Locus(2, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(2, Contig(1, 10), Contig(3, 10), emptyFlags, [LocalAlignment(Locus(3, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(3, Contig(1, 10), Contig(4, 10), Flags(complement), [LocalAlignment(Locus(4, 6), Locus(0, 1), 0)]),
+                    AlignmentChain(4, Contig(1, 10), Contig(5, 10), emptyFlags, [LocalAlignment(Locus(5, 6), Locus(0, 1), 0)]),
                 ];
                 // dfmt on
 
@@ -706,7 +727,7 @@ unittest
             0,
             AlignmentChain.Contig(1, 100),
             AlignmentChain.Contig(1, 50),
-            AlignmentChain.Complement.no,
+            AlignmentChain.emptyFlags,
             [
                 AlignmentChain.LocalAlignment(
                     AlignmentChain.LocalAlignment.Locus(0, 10),
@@ -719,7 +740,7 @@ unittest
             1,
             AlignmentChain.Contig(1, 100),
             AlignmentChain.Contig(2, 30),
-            AlignmentChain.Complement.yes,
+            AlignmentChain.Flags(AlignmentChain.Flag.complement),
             [
                 AlignmentChain.LocalAlignment(
                     AlignmentChain.LocalAlignment.Locus(10, 20),
@@ -737,7 +758,7 @@ unittest
             2,
             AlignmentChain.Contig(1, 100),
             AlignmentChain.Contig(3, 20),
-            AlignmentChain.Complement.no,
+            AlignmentChain.emptyFlags,
             [
                 AlignmentChain.LocalAlignment(
                     AlignmentChain.LocalAlignment.Locus(40, 60),
@@ -750,7 +771,7 @@ unittest
             3,
             AlignmentChain.Contig(1, 100),
             AlignmentChain.Contig(4, 50),
-            AlignmentChain.Complement.yes,
+            AlignmentChain.Flags(AlignmentChain.Flag.complement),
             [
                 AlignmentChain.LocalAlignment(
                     AlignmentChain.LocalAlignment.Locus(70, 100),
@@ -1106,7 +1127,7 @@ struct ReadAlignment
 
     unittest
     {
-        with (AlignmentChain) with (LocalAlignment) with (Complement)
+        with (AlignmentChain) with (LocalAlignment) with (Flag)
                 {
                     // dfmt off
                     auto testData = [
@@ -1157,7 +1178,7 @@ struct ReadAlignment
                                 3,
                                 Contig(1, 100),
                                 Contig(1, 10),
-                                no,
+                                emptyFlags,
                                 [
                                     LocalAlignment(
                                         Locus(2, 3),
@@ -1177,7 +1198,7 @@ struct ReadAlignment
                                 4,
                                 Contig(1, 100),
                                 Contig(1, 10),
-                                yes,
+                                Flags(complement),
                                 [
                                     LocalAlignment(
                                         Locus(2, 3),
@@ -1197,7 +1218,7 @@ struct ReadAlignment
                                 5,
                                 Contig(1, 100),
                                 Contig(1, 10),
-                                no,
+                                emptyFlags,
                                 [
                                     LocalAlignment(
                                         Locus(94, 95),
@@ -1217,7 +1238,7 @@ struct ReadAlignment
                                 6,
                                 Contig(1, 100),
                                 Contig(1, 10),
-                                yes,
+                                Flags(complement),
                                 [
                                     LocalAlignment(
                                         Locus(94, 95),
@@ -1237,7 +1258,7 @@ struct ReadAlignment
                                 7,
                                 Contig(1, 100),
                                 Contig(1, 10),
-                                no,
+                                emptyFlags,
                                 [
                                     LocalAlignment(
                                         Locus(94, 95),
@@ -1255,7 +1276,7 @@ struct ReadAlignment
                                 8,
                                 Contig(2, 100),
                                 Contig(1, 10),
-                                no,
+                                emptyFlags,
                                 [
                                     LocalAlignment(
                                         Locus(2, 3),
@@ -1275,7 +1296,7 @@ struct ReadAlignment
                                 9,
                                 Contig(2, 100),
                                 Contig(1, 10),
-                                yes,
+                                Flags(complement),
                                 [
                                     LocalAlignment(
                                         Locus(2, 3),
@@ -1293,7 +1314,7 @@ struct ReadAlignment
                                 10,
                                 Contig(1, 100),
                                 Contig(1, 10),
-                                yes,
+                                Flags(complement),
                                 [
                                     LocalAlignment(
                                         Locus(94, 95),
@@ -1313,7 +1334,7 @@ struct ReadAlignment
                                 11,
                                 Contig(1, 100),
                                 Contig(1, 10),
-                                yes,
+                                Flags(complement),
                                 [
                                     LocalAlignment(
                                         Locus(94, 95),
@@ -1331,7 +1352,7 @@ struct ReadAlignment
                                 12,
                                 Contig(2, 100),
                                 Contig(1, 10),
-                                no,
+                                emptyFlags,
                                 [
                                     LocalAlignment(
                                         Locus(94, 95),
@@ -1351,7 +1372,7 @@ struct ReadAlignment
                                 13,
                                 Contig(2, 100),
                                 Contig(1, 10),
-                                no,
+                                emptyFlags,
                                 [
                                     LocalAlignment(
                                         Locus(2, 3),
@@ -1369,7 +1390,7 @@ struct ReadAlignment
                                 14,
                                 Contig(1, 100),
                                 Contig(1, 10),
-                                yes,
+                                Flags(complement),
                                 [
                                     LocalAlignment(
                                         Locus(2, 3),
@@ -1530,7 +1551,7 @@ J to(J : Join!(ReadAlignment[]))(ReadAlignment readAlignment)
 ///
 unittest
 {
-    with (AlignmentChain) with (LocalAlignment) with (Complement)
+    with (AlignmentChain) with (LocalAlignment) with (Flag)
             {
                 // dfmt off
                 auto frontExtension = ReadAlignment(
@@ -1538,7 +1559,7 @@ unittest
                         3,
                         Contig(1, 100),
                         Contig(1, 10),
-                        no,
+                        emptyFlags,
                         [
                             LocalAlignment(
                                 Locus(2, 3),
@@ -1558,7 +1579,7 @@ unittest
                         5,
                         Contig(1, 100),
                         Contig(1, 10),
-                        no,
+                        emptyFlags,
                         [
                             LocalAlignment(
                                 Locus(94, 95),
@@ -1578,7 +1599,7 @@ unittest
                         11,
                         Contig(1, 100),
                         Contig(1, 10),
-                        yes,
+                        Flags(complement),
                         [
                             LocalAlignment(
                                 Locus(94, 95),
@@ -1596,7 +1617,7 @@ unittest
                         12,
                         Contig(2, 100),
                         Contig(1, 10),
-                        no,
+                        emptyFlags,
                         [
                             LocalAlignment(
                                 Locus(94, 95),
@@ -1725,6 +1746,7 @@ unittest
                     ? endIdx - beginIdx
                     : contigLength - beginIdx + gapLength + endIdx;
                 // dfmt on
+                auto flags = complement ? Flags(Flag.complement) : emptyFlags;
                 coord_t firstReadBeginIdx;
                 coord_t firstReadEndIdx;
 
@@ -1749,7 +1771,7 @@ unittest
                         alignmentChainId - 2,
                         Contig(beginContigId, contigLength),
                         Contig(readId, readLength),
-                        complement,
+                        flags,
                         [
                             LocalAlignment(
                                 Locus(beginIdx, beginIdx + 1),
@@ -1776,7 +1798,7 @@ unittest
                             alignmentChainId - 2,
                             Contig(beginContigId, contigLength),
                             Contig(readId, readLength),
-                            complement,
+                            flags,
                             [
                                 LocalAlignment(
                                     Locus(beginIdx, beginIdx + 1),
@@ -1794,7 +1816,7 @@ unittest
                             alignmentChainId - 1,
                             Contig(endContigId, contigLength),
                             Contig(readId, readLength),
-                            complement,
+                            flags,
                             [
                                 LocalAlignment(
                                     Locus(0, 1),
@@ -1939,7 +1961,9 @@ ReadAlignment[] collectReadAlignments(Chunk)(Chunk sameReadAlignments)
 unittest
 {
     alias Contig = AlignmentChain.Contig;
-    alias Complement = AlignmentChain.Complement;
+    alias Flags = AlignmentChain.Flags;
+    immutable emptyFlags = AlignmentChain.emptyFlags;
+    immutable complement = AlignmentChain.Flag.complement;
     alias LocalAlignment = AlignmentChain.LocalAlignment;
     alias Locus = LocalAlignment.Locus;
     alias Seed = AlignmentLocationSeed;
@@ -1956,7 +1980,7 @@ unittest
                 0,
                 Contig(1, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(10, 20),
                     Locus(0, 10),
@@ -1966,7 +1990,7 @@ unittest
                 1,
                 Contig(2, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(0, 20),
                     Locus(20, 40),
@@ -1976,7 +2000,7 @@ unittest
                 2,
                 Contig(3, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(0, 10),
                     Locus(50, 60),
@@ -2007,7 +2031,7 @@ unittest
                 0,
                 Contig(1, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(10, 20),
                     Locus(0, 10),
@@ -2017,7 +2041,7 @@ unittest
                 1,
                 Contig(2, 20),
                 Contig(1, 60),
-                Complement.yes,
+                Flags(complement),
                 [LocalAlignment(
                     Locus(0, 20),
                     Locus(20, 40),
@@ -2027,7 +2051,7 @@ unittest
                 2,
                 Contig(3, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(0, 10),
                     Locus(50, 60),
@@ -2058,7 +2082,7 @@ unittest
                 1,
                 Contig(2, 20),
                 Contig(1, 60),
-                Complement.yes,
+                Flags(complement),
                 [LocalAlignment(
                     Locus(0, 20),
                     Locus(20, 40),
@@ -2068,7 +2092,7 @@ unittest
                 2,
                 Contig(3, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(0, 10),
                     Locus(50, 60),
@@ -2098,7 +2122,7 @@ unittest
                 0,
                 Contig(1, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(10, 20),
                     Locus(0, 10),
@@ -2108,7 +2132,7 @@ unittest
                 1,
                 Contig(2, 20),
                 Contig(1, 60),
-                Complement.yes,
+                Flags(complement),
                 [LocalAlignment(
                     Locus(0, 20),
                     Locus(20, 40),
@@ -2138,7 +2162,7 @@ unittest
                 1,
                 Contig(2, 20),
                 Contig(1, 60),
-                Complement.yes,
+                Flags(complement),
                 [LocalAlignment(
                     Locus(0, 20),
                     Locus(20, 40),
@@ -2168,7 +2192,7 @@ unittest
                 0,
                 Contig(1, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(10, 20),
                     Locus(0, 10),
@@ -2178,7 +2202,7 @@ unittest
                 1,
                 Contig(2, 20),
                 Contig(1, 60),
-                Complement.yes,
+                Flags(complement),
                 [LocalAlignment(
                     Locus(0, 20),
                     Locus(20, 40),
@@ -2188,7 +2212,7 @@ unittest
                 2,
                 Contig(3, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(0, 10),
                     Locus(50, 60),
@@ -2198,7 +2222,7 @@ unittest
                 3,
                 Contig(4, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(10, 20),
                     Locus(0, 10),
@@ -2221,7 +2245,7 @@ unittest
                 0,
                 Contig(1, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(10, 20),
                     Locus(0, 10),
@@ -2231,7 +2255,7 @@ unittest
                 1,
                 Contig(2, 20),
                 Contig(1, 60),
-                Complement.yes,
+                Flags(complement),
                 [LocalAlignment(
                     Locus(0, 20),
                     Locus(20, 40),
@@ -2241,7 +2265,7 @@ unittest
                 2,
                 Contig(3, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(0, 10),
                     Locus(50, 60),
@@ -2251,7 +2275,7 @@ unittest
                 3,
                 Contig(4, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(0, 20),
                     Locus(20, 40),
@@ -2274,7 +2298,7 @@ unittest
                 0,
                 Contig(1, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(10, 20),
                     Locus(0, 10),
@@ -2284,7 +2308,7 @@ unittest
                 1,
                 Contig(2, 20),
                 Contig(1, 60),
-                Complement.yes,
+                Flags(complement),
                 [LocalAlignment(
                     Locus(0, 20),
                     Locus(20, 40),
@@ -2294,7 +2318,7 @@ unittest
                 2,
                 Contig(3, 20),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(0, 10),
                     Locus(50, 60),
@@ -2304,7 +2328,7 @@ unittest
                 3,
                 Contig(4, 30),
                 Contig(1, 60),
-                Complement.no,
+                emptyFlags,
                 [LocalAlignment(
                     Locus(0, 30),
                     Locus(30, 60),

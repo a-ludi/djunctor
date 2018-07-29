@@ -195,7 +195,7 @@ unittest
                     readId,
                     Contig(1, 25),
                     Contig(1, readLength),
-                    Complement.no,
+                    emptyFlags,
                     [LocalAlignment(
                         Locus(begin, end),
                         begin == 0
@@ -1562,7 +1562,7 @@ class BadAlignmentCoverageAssessor : RepeatAssessor
                             ++alignmentChainId,
                             Contig(contigId, contigLength),
                             Contig(alignmentChainId, endIdx),
-                            Complement.no,
+                            emptyFlags,
                             [
                                 LocalAlignment(
                                     Locus(beginIdx, beginIdx + 1),

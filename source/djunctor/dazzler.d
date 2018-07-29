@@ -361,7 +361,7 @@ unittest
                 1,
                 Contig(1, 1337),
                 Contig(1, 307),
-                Complement.no,
+                emptyFlags,
                 [
                     LocalAlignment(Locus(0, 1337), Locus(0, 307), 1),
                 ],
@@ -370,7 +370,7 @@ unittest
                 2,
                 Contig(1, 1338),
                 Contig(1, 309),
-                Complement.no,
+                emptyFlags,
                 [
                     LocalAlignment(Locus(0, 1338), Locus(0, 309), 2),
                 ],
@@ -379,7 +379,7 @@ unittest
                 3,
                 Contig(1, 1340),
                 Contig(3, 508),
-                Complement.no,
+                emptyFlags,
                 [
                     LocalAlignment(Locus(0, 1339), Locus(0, 403), 3),
                     LocalAlignment(Locus(0, 1340), Locus(404, 508), 4),
@@ -391,7 +391,7 @@ unittest
                 1,
                 Contig(1, 1337),
                 Contig(1, 307),
-                Complement.no,
+                emptyFlags,
                 [
                     LocalAlignment(Locus(0, 1337), Locus(0, 307), 0, [
                         TracePoint(1, 102),
@@ -405,7 +405,7 @@ unittest
                 2,
                 Contig(1, 1338),
                 Contig(1, 309),
-                Complement.no,
+                emptyFlags,
                 [
                     LocalAlignment(Locus(0, 1338), Locus(0, 309), 0, [
                         TracePoint(4, 103),
@@ -419,7 +419,7 @@ unittest
                 3,
                 Contig(1, 1340),
                 Contig(3, 508),
-                Complement.no,
+                emptyFlags,
                 [
                     LocalAlignment(Locus(0, 1339), Locus(0, 403), 0, [
                         TracePoint(7, 105),
@@ -440,7 +440,7 @@ unittest
                 1,
                 Contig(1, 1337),
                 Contig(1, 307),
-                Complement.no,
+                emptyFlags,
                 [
                     LocalAlignment(Locus(0, 1337), Locus(0, 307), 1, [
                         TracePoint(1, 102),
@@ -454,7 +454,7 @@ unittest
                 2,
                 Contig(1, 1338),
                 Contig(1, 309),
-                Complement.no,
+                emptyFlags,
                 [
                     LocalAlignment(Locus(0, 1338), Locus(0, 309), 2, [
                         TracePoint(4, 103),
@@ -468,7 +468,7 @@ unittest
                 3,
                 Contig(1, 1340),
                 Contig(3, 508),
-                Complement.no,
+                emptyFlags,
                 [
                     LocalAlignment(Locus(0, 1339), Locus(0, 403), 3, [
                         TracePoint(7, 105),
@@ -726,8 +726,8 @@ private:
     Flag!"wasDumpPartConsumed" readChainPart()
     {
         immutable chainPartFormat = LasDumpLineFormat.chainPart.format;
-        immutable yesComplement = AlignmentChain.Complement.yes;
-        immutable noComplement = AlignmentChain.Complement.no;
+        immutable yesComplement = AlignmentChain.Flags(AlignmentChain.Flag.complement);
+        immutable noComplement = AlignmentChain.emptyFlags;
         id_t contigAID;
         id_t contigBID;
         char rawComplement;
@@ -742,7 +742,7 @@ private:
         );
         // dfmt on
 
-        auto complement = rawComplement == 'c' ? yesComplement : noComplement;
+        auto flags = rawComplement == 'c' ? yesComplement : noComplement;
         auto chainPartType = rawChainPartType.to!ChainPartType;
         auto startingNewChain = currentAC == AlignmentChain.init;
 
@@ -750,13 +750,13 @@ private:
         {
             currentAC.contigA.id = contigAID;
             currentAC.contigB.id = contigBID;
-            currentAC.complement = complement;
+            currentAC.flags = flags;
 
             return Yes.wasDumpPartConsumed;
         }
         else if (isChainContinuation(contigAID, contigBID, chainPartType))
         {
-            _enforce(currentAC.complement == complement, "matching both strands in one alignment chain");
+            _enforce(currentAC.flags == flags, "matching both strands in one alignment chain");
             finishCurrentLA();
 
             return Yes.wasDumpPartConsumed;
@@ -971,7 +971,7 @@ unittest
     ];
     // dfmt on
 
-    with (AlignmentChain) with (Complement) with (LocalAlignment)
+    with (AlignmentChain) with (Flag) with (LocalAlignment)
     {
         auto alignmentChains = readLasDump(testLasDump).array;
         // dfmt off
@@ -980,7 +980,7 @@ unittest
                 0,
                 Contig(1, 8),
                 Contig(2, 9),
-                no,
+                emptyFlags,
                 [
                     LocalAlignment(
                         Locus(3, 4),
@@ -998,7 +998,7 @@ unittest
                 1,
                 Contig(19, 26),
                 Contig(20, 27),
-                yes,
+                Flags(complement),
                 [
                     LocalAlignment(
                         Locus(21, 22),
@@ -1019,7 +1019,7 @@ unittest
                 2,
                 Contig(37, 35),
                 Contig(38, 36),
-                no,
+                emptyFlags,
                 [
                     LocalAlignment(
                         Locus(39, 40),
@@ -1032,7 +1032,7 @@ unittest
                 3,
                 Contig(46, 53),
                 Contig(47, 54),
-                yes,
+                Flags(complement),
                 [
                     LocalAlignment(
                         Locus(48, 49),
@@ -1050,7 +1050,7 @@ unittest
                 4,
                 Contig(46, 53),
                 Contig(47, 54),
-                no,
+                emptyFlags,
                 [
                     LocalAlignment(
                         Locus(57, 58),
@@ -1068,7 +1068,7 @@ unittest
                 5,
                 Contig(64, 71),
                 Contig(65, 72),
-                yes,
+                Flags(complement),
                 [
                     LocalAlignment(
                         Locus(66, 67),
@@ -1087,7 +1087,7 @@ unittest
                 6,
                 Contig(55, 80),
                 Contig(56, 81),
-                yes,
+                Flags(complement),
                 [
                     LocalAlignment(
                         Locus(75, 76),
@@ -1104,7 +1104,7 @@ unittest
                 7,
                 Contig(1, 0),
                 Contig(3197, 0),
-                yes,
+                Flags(complement),
                 [
                     LocalAlignment(
                         Locus(0, 71),
