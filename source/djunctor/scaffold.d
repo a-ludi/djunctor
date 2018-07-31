@@ -11,7 +11,7 @@ module djunctor.scaffold;
 import djunctor.util.log;
 import djunctor.util.math : Graph, MissingNodeException, NaturalNumberSet;
 import std.algorithm : equal, filter, fold, joiner, map, minElement,
-    setDifference;
+    setDifference, sum;
 import std.array : array;
 import std.functional : binaryFun;
 import std.range : iota, only, refRange, retro, walkLength;
@@ -125,15 +125,36 @@ alias ContigNode = Tuple!(size_t, "contigId", ContigPart, "contigPart");
 alias Scaffold(T) = Graph!(ContigNode, void, No.isDirected, T);
 alias Join(T) = Scaffold!T.Edge;
 
-Join!T opOpAssignPayloads(string op, T)(Join!T j1, Join!T j2) pure nothrow
+Join!T sumPayloads(T)(Join!T[] joins...) nothrow
 {
-    mixin("j1.payload " ~ op ~ " j2.payload;");
+    assert(joins.length > 0);
 
-    return j1;
+    auto mergedJoin = joins[0];
+
+    // dfmt off
+    mergedJoin.payload = joins
+        .map!"a.payload"
+        .sum;
+    // dfmt on
+
+    return mergedJoin;
 }
 
-alias sumPayloads(T) = opOpAssignPayloads!("+=", T);
-alias concatenatePayloads(T) = opOpAssignPayloads!("~=", T);
+Join!T concatenatePayloads(T)(Join!T[] joins...) nothrow
+{
+    assert(joins.length > 0);
+
+    auto mergedJoin = joins[0];
+
+    // dfmt off
+    mergedJoin.payload = joins
+        .map!"a.payload"
+        .joiner
+        .array;
+    // dfmt on
+
+    return mergedJoin;
+}
 
 J dontJoin(J)(J j1, J j2) pure nothrow
 {
@@ -220,11 +241,11 @@ bool isValid(J)(in J join) pure nothrow
 
 /// Build a scaffold graph using `rawJoins`. This creates default edges and
 /// inserts the rawJoins.
-Scaffold!T buildScaffold(alias handleConflict, T)(in size_t numReferenceContigs, Join!T[] rawJoins)
+Scaffold!T buildScaffold(alias mergeMultiEdges, T)(in size_t numReferenceContigs, Join!T[] rawJoins)
 {
     // dfmt off
     auto scaffold = initScaffold!T(numReferenceContigs)
-        .addJoins!(handleConflict, T)(rawJoins);
+        .addJoins!(mergeMultiEdges, T)(rawJoins);
     // dfmt on
 
     return scaffold;
@@ -296,14 +317,17 @@ Join!T getDefaultJoin(alias getPayload, T)(size_t contigId) pure nothrow
     // dfmt on
 }
 
-private Scaffold!T addJoins(alias handleConflict, T)(Scaffold!T scaffold, Join!T[] rawJoins)
+private Scaffold!T addJoins(alias mergeMultiEdges, T)(Scaffold!T scaffold, Join!T[] rawJoins)
 {
-    foreach (join; rawJoins)
+    version (assert)
     {
-        assert(join.isValid && !join.isDefault);
-
-        scaffold.add!handleConflict(join);
+        foreach (join; rawJoins)
+        {
+            assert(join.isValid && !join.isDefault);
+        }
     }
+
+    scaffold.addAndMerge!mergeMultiEdges(rawJoins);
 
     return scaffold;
 }

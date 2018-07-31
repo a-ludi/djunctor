@@ -8,12 +8,12 @@
 */
 module djunctor.util.math;
 
-import djunctor.util.algorithm : cmpLexicographically;
-import std.algorithm : all, filter, max, sort, sum, swap, uniq;
+import djunctor.util.algorithm : cmpLexicographically, sliceBy;
+import std.algorithm : all, copy, filter, map, max, sort, sum, swap, uniq;
 import std.array : Appender, array;
 import std.conv : to;
 import std.exception : assertThrown;
-import std.functional : binaryFun;
+import std.functional : binaryFun, unaryFun;
 import std.range : assumeSorted, chain, ElementType, enumerate, isForwardRange,
     retro, walkLength;
 import std.traits : isIntegral, isNumeric;
@@ -401,6 +401,11 @@ struct Graph(Node, Weight = void, Flag!"isDirected" isDirected = No.isDirected, 
         return a.compareNodes(b) < 0;
     }
 
+    static bool groupByNodes(in Edge a, in Edge b) nothrow pure
+    {
+        return a.compareNodes(b) == 0;
+    }
+
     /// Construct an edge for this graph.
     static Edge edge(T...)(T args)
     {
@@ -471,6 +476,54 @@ struct Graph(Node, Weight = void, Flag!"isDirected" isDirected = No.isDirected, 
     {
         this._edges ~= edges;
         _edges.data.sort;
+    }
+
+    /// Add a set of edges to this graph and merge mutli-edges using `merge`.
+    void addAndMerge(alias merge)(Edge[] edges)
+    {
+        //static assert(is(typeof(merge(edges)) == Edge), "expected `Edge merge(Edge[] multiEdge)`");
+        bulkAdd(edges);
+
+        // dfmt off
+        auto bufferRest = _edges
+            .data
+            .sliceBy!groupByNodes
+            .map!(unaryFun!merge)
+            .copy(_edges.data);
+        // dfmt on
+        _edges.shrinkTo(_edges.data.length - bufferRest.length);
+    }
+
+    ///
+    unittest
+    {
+        auto g1 = Graph!(int, int)([1, 2]);
+
+        static g1.Edge sumWeights(g1.Edge[] multiEdge)
+        {
+            auto sumOfWeights = multiEdge.map!"a.weight".sum;
+            auto mergedEdge = multiEdge[0];
+            mergedEdge.weight = sumOfWeights;
+
+            return mergedEdge;
+        }
+
+        // dfmt off
+        auto edges = [
+            g1.edge(1, 2, 1),
+            g1.edge(1, 2, 1),
+            g1.edge(1, 2, 1),
+            g1.edge(2, 3, 2),
+            g1.edge(2, 3, 2),
+            g1.edge(3, 4, 3),
+        ];
+        g1.addAndMerge!sumWeights(edges);
+        assert(g1.edges == [
+            g1.edge(1, 2, 3),
+            g1.edge(2, 3, 4),
+            g1.edge(3, 4, 3),
+        ]);
+        // dfmt on
     }
 
     /// Add an edge to this graph and handle existing edges with `handleConflict`.
