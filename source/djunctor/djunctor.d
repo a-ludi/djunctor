@@ -951,6 +951,8 @@ class DJunctor
 
     protected void processPileUp(ref PileUp pileUp)
     {
+        logJsonDiagnostic("state", "enter", "function", "djunctor.processPileUp");
+
         auto croppingResult = cropPileUp(pileUp, repetitiveRegions, options);
         auto referenceReadIdx = bestReadAlignmentIndex(pileUp, Yes.preferSpanning, options);
         auto referenceRead = pileUp[referenceReadIdx];
@@ -965,6 +967,8 @@ class DJunctor
         addInsertionToScaffold(referenceRead, consensusDb, croppingResult.referencePositions);
         addFlankingContigSlicesToScaffold(croppingResult.referencePositions);
         markReadsAsUsed(pileUp);
+
+        logJsonDiagnostic("state", "exit", "function", "djunctor.processPileUp");
     }
 
     protected size_t bestReadAlignmentIndex(in PileUp pileUp,
