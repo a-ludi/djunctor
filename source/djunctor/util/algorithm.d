@@ -10,7 +10,7 @@ module djunctor.util.algorithm;
 
 import std.conv : to;
 import std.functional : binaryFun, unaryFun;
-import std.traits : Unqual;
+import std.traits : isDynamicArray;
 
 /**
     Order `a` and `b` lexicographically by applying each `fun` to them. For
@@ -89,8 +89,8 @@ int cmpLexicographically(T, fun...)(T a, T b) pure nothrow
     equivalence. Elements in the subranges will always appear in the same order
     they appear in the original range.
 */
-auto sliceBy(alias pred, Array)(ref Array array) pure nothrow
-        if (is(Unqual!Array == T[], T))
+auto sliceBy(alias pred, Array)(Array array) pure nothrow
+        if (isDynamicArray!Array)
 {
     return SliceByImpl!(pred, Array)(array);
 }
@@ -123,7 +123,7 @@ unittest
 }
 
 private struct SliceByImpl(alias pred, Array)
-        if (is(Unqual!Array == T[], T))
+        if (isDynamicArray!Array)
 {
     private alias equivalent = binaryFun!pred;
 
@@ -131,7 +131,7 @@ private struct SliceByImpl(alias pred, Array)
     private size_t sliceStart;
     private size_t sliceEnd;
 
-    this(ref Array array)
+    this(Array array)
     {
         this.array = array;
 
