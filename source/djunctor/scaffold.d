@@ -749,14 +749,14 @@ Scaffold!T removeExtensions(T)(Scaffold!T scaffold)
 /// Remove marked edges from the graph. This always keeps the default edges.
 Scaffold!T removeNoneJoins(T)(Scaffold!T scaffold)
 {
-    // dfmt off
-    return Scaffold!T(scaffold.nodes.dup, scaffold
-        .edges
-        .filter!(join => isDefault(join) || join.payload != T.init)
-        .map!(e => cast(Join!T) e)
-        .array
-    );
-    // dfmt on
+    scaffold.filterEdges!(noneJoinFilter!T);
+
+    return scaffold;
+}
+
+bool noneJoinFilter(T)(Join!T join)
+{
+    return isDefault(join) || join.payload != T.init;
 }
 
 /// Remove extension edges were they coincide with a gap edge combining their

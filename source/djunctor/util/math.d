@@ -688,6 +688,17 @@ struct Graph(Node, Weight = void, Flag!"isDirected" isDirected = No.isDirected, 
         return newEdge;
     }
 
+    void filterEdges(alias pred)()
+    {
+        // dfmt off
+        auto bufferRest = _edges
+            .data
+            .filter!pred
+            .copy(_edges.data);
+        // dfmt on
+        _edges.shrinkTo(_edges.data.length - bufferRest.length);
+    }
+
     /// Check if edge/node exists in this graph. Ignores the weight if weighted.
     bool opBinaryRight(string op)(Node node) const pure nothrow if (op == "in")
     {
