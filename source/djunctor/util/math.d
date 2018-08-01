@@ -472,14 +472,15 @@ struct Graph(Node, Weight = void, Flag!"isDirected" isDirected = No.isDirected, 
     }
 
     /// Add a set of edges to this graph without any checks.
-    void bulkAdd(Edge[] edges)
+    void bulkAdd(R)(R edges) if (isForwardRange!R && is(ElementType!R == Edge))
     {
+        _edges.reserve(_edges.data.length + edges.walkLength);
         this._edges ~= edges;
         _edges.data.sort;
     }
 
     /// Add a set of edges to this graph and merge mutli-edges using `merge`.
-    void addAndMerge(alias merge)(Edge[] edges)
+    void addAndMerge(alias merge, R)(R edges) if (isForwardRange!R && is(ElementType!R == Edge))
     {
         //static assert(is(typeof(merge(edges)) == Edge), "expected `Edge merge(Edge[] multiEdge)`");
         bulkAdd(edges);

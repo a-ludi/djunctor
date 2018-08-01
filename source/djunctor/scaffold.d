@@ -241,7 +241,7 @@ bool isValid(J)(in J join) pure nothrow
 
 /// Build a scaffold graph using `rawJoins`. This creates default edges and
 /// inserts the rawJoins.
-Scaffold!T buildScaffold(alias mergeMultiEdges, T)(in size_t numReferenceContigs, Join!T[] rawJoins)
+Scaffold!T buildScaffold(alias mergeMultiEdges, T, R)(in size_t numReferenceContigs, R rawJoins)
 {
     // dfmt off
     auto scaffold = initScaffold!T(numReferenceContigs)
@@ -317,11 +317,11 @@ Join!T getDefaultJoin(alias getPayload, T)(size_t contigId) pure nothrow
     // dfmt on
 }
 
-private Scaffold!T addJoins(alias mergeMultiEdges, T)(Scaffold!T scaffold, Join!T[] rawJoins)
+private Scaffold!T addJoins(alias mergeMultiEdges, T, R)(Scaffold!T scaffold, R rawJoins)
 {
     version (assert)
     {
-        foreach (join; rawJoins)
+        foreach (ref join; rawJoins)
         {
             assert(join.isValid && !join.isDefault);
         }

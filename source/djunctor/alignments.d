@@ -1686,8 +1686,7 @@ PileUp[] buildPileUps(in size_t numReferenceContigs, AlignmentChain[] candidates
         .joiner
         .filter!"a.isValid"
         .map!"a.getInOrder()"
-        .map!(to!ReadAlignmentJoin)
-        .array;
+        .map!(to!ReadAlignmentJoin);
     // dfmt on
 
     // dfmt off
