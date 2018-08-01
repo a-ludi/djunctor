@@ -10,9 +10,9 @@ module djunctor.scaffold;
 
 import djunctor.util.log;
 import djunctor.util.math : Graph, MissingNodeException, NaturalNumberSet;
-import std.algorithm : equal, filter, fold, joiner, map, minElement,
+import std.algorithm : count, equal, filter, fold, joiner, map, minElement,
     setDifference, sum;
-import std.array : array;
+import std.array : appender, array;
 import std.functional : binaryFun;
 import std.range : iota, only, refRange, retro, walkLength;
 import std.typecons : Flag, No, Tuple, Yes;
@@ -382,7 +382,13 @@ Join!T getUnkownJoin(T)(size_t preContigId, size_t postContigId, T payload) pure
 /// applicable.
 Scaffold!T normalizeUnkownJoins(T)(Scaffold!T scaffold)
 {
-    foreach (unkownJoin; scaffold.edges.filter!isUnkown.array)
+    auto numUnkownJoins = scaffold.edges.count!isUnkown;
+    auto newJoins = appender!(Join!T[]);
+    newJoins.reserve(numUnkownJoins);
+    auto removalAcc = appender!(Join!T[]);
+    removalAcc.reserve(numUnkownJoins);
+
+    foreach (unkownJoin; scaffold.edges.filter!isUnkown)
     {
         auto preContigId = unkownJoin.start.contigId;
         auto preContigEnd = ContigNode(preContigId, ContigPart.end);
@@ -409,47 +415,53 @@ Scaffold!T normalizeUnkownJoins(T)(Scaffold!T scaffold)
         if (isPreContigUnconnected && isPostContigUnconnected)
         {
             // dfmt off
-            scaffold.add(Join!T(
+            newJoins ~= Join!T(
                 preContigEnd,
                 postContigBegin,
                 unkownJoin.payload,
-            ));
+            );
             // dfmt on
 
             unkownJoin.payload = T.init;
-            scaffold.add!(scaffold.ConflictStrategy.replace)(unkownJoin);
+            removalAcc ~= unkownJoin;
         }
         else if (isPreContigUnconnected && hasPostContigExtension)
         {
             // dfmt off
-            scaffold.add(Join!T(
+            newJoins ~= Join!T(
                 preContigEnd,
                 unkownJoin.end,
                 unkownJoin.payload,
-            ));
+            );
             // dfmt on
 
             unkownJoin.payload = T.init;
-            scaffold.add!(scaffold.ConflictStrategy.replace)(unkownJoin);
+            removalAcc ~= unkownJoin;
         }
         else if (hasPreContigExtension && isPostContigUnconnected)
         {
             // dfmt off
-            scaffold.add(Join!T(
+            newJoins ~= Join!T(
                 unkownJoin.start,
                 postContigBegin,
                 unkownJoin.payload,
-            ));
+            );
             // dfmt on
 
             unkownJoin.payload = T.init;
-            scaffold.add!(scaffold.ConflictStrategy.replace)(unkownJoin);
+            removalAcc ~= unkownJoin;
         }
         else if (hasPreContigGap || hasPostContigGap)
         {
             unkownJoin.payload = T.init;
-            scaffold.add!(scaffold.ConflictStrategy.replace)(unkownJoin);
+            removalAcc ~= unkownJoin;
         }
+    }
+
+    scaffold.bulkAdd(newJoins.data);
+    foreach (noneJoin; removalAcc.data)
+    {
+        scaffold.add!(scaffold.ConflictStrategy.replace)(noneJoin);
     }
 
     return removeNoneJoins!T(scaffold);
