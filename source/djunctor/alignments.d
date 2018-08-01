@@ -23,7 +23,7 @@ import std.math : sgn;
 import std.range : assumeSorted, chain, chunks, InputRange, inputRangeObject,
     iota, only, slide, takeNone, zip;
 import std.string : capitalize;
-import std.typecons : BitFlags, PhobosFlag = Flag, No;
+import std.typecons : BitFlags, PhobosFlag = Flag, No, Yes;
 import vibe.data.json : toJson = serializeToJson;
 
 debug import std.stdio : writeln;
@@ -194,6 +194,17 @@ struct AlignmentChain
 
                 assert(ac.last == lastLA);
             }
+    }
+
+    PhobosFlag!"disabled" disableIf(lazy bool disable) pure
+    {
+        if (!flags.disabled)
+        {
+            flags.disabled = disable;
+        }
+
+
+        return disabled;
     }
 
     /// This alignment is called proper iff it starts and ends at a read boundary.
@@ -1669,6 +1680,7 @@ PileUp[] buildPileUps(in size_t numReferenceContigs, AlignmentChain[] candidates
 
     // dfmt off
     auto readAlignmentJoins = candidates
+        .filter!"!a.flags.disabled"
         .chunkBy!isSameRead
         .map!collectReadAlignments
         .joiner

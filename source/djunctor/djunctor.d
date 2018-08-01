@@ -24,7 +24,7 @@ import djunctor.scaffold : ContigNode, ContigPart, contigStarts,
     isAntiParallel, isDefault, isExtension, isFrontExtension, isGap, isValid,
     linearWalk, normalizeUnkownJoins, removeExtensions, Scaffold;
 import dstats.distrib : invPoissonCDF;
-import std.algorithm : all, canFind, chunkBy, copy, each, equal, filter, find, fold,
+import std.algorithm : all, canFind, chunkBy, copy, count, each, equal, filter, find, fold,
     isSorted, joiner, map, max, maxIndex, min, setDifference, sort, sum, swap,
     SwapStrategy, uniq;
 import std.array : appender, array, join, minimallyInitializedArray;
@@ -839,7 +839,7 @@ class DJunctor
             "readsAlignment", shouldLog(LogLevel.debug_)
                 ? readsAlignment.toJson
                 : Json(null),
-            "numAlignmentChains", readsAlignment.length,
+            "numAlignmentChains", readsAlignment.count!"!a.flags.disabled",
         );
         // dfmt on
         foreach (i, filter; filters)
@@ -853,7 +853,7 @@ class DJunctor
                 "readsAlignment", shouldLog(LogLevel.debug_)
                     ? readsAlignment.toJson
                     : Json(null),
-                "numAlignmentChains", readsAlignment.length,
+                "numAlignmentChains", readsAlignment.count!"!a.flags.disabled",
             );
             // dfmt on
         }
@@ -1381,13 +1381,14 @@ abstract class ReadFilter : AlignmentChainFilter
             discardedReadIds.add(discardedReadId);
             unusedReads.remove(discardedReadId);
         }
-        // dfmt off
-        auto bufferRest = alignmentChains
-            .filter!(ac => !discardedReadIds.has(ac.contigB.id))
-            .copy(alignmentChains);
-        // dfmt on
 
-        return alignmentChains[0 .. $ - bufferRest.length];
+        foreach (ref alignmentChain; alignmentChains)
+        {
+            auto wasReadDiscarded = discardedReadIds.has(alignmentChain.contigB.id);
+            alignmentChain.disableIf(wasReadDiscarded);
+        }
+
+        return alignmentChains;
     }
 
     InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains);
@@ -1398,9 +1399,12 @@ class ImproperAlignmentChainsFilter : AlignmentChainFilter
 {
     override AlignmentChain[] opCall(AlignmentChain[] alignmentChains)
     {
-        auto bufferRest = alignmentChains.filter!"a.isProper".copy(alignmentChains);
+        foreach (ref alignmentChain; alignmentChains)
+        {
+            alignmentChain.disableIf(!alignmentChain.isProper);
+        }
 
-        return alignmentChains[0 .. $ - bufferRest.length];
+        return alignmentChains;
     }
 }
 
@@ -1416,9 +1420,9 @@ class RedundantAlignmentChainsFilter : ReadFilter
 
     override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
     {
-        assert(alignmentChains.map!"a.isProper".all);
+        assert(alignmentChains.map!"a.isProper || a.flags.disabled".all);
 
-        return inputRangeObject(alignmentChains.filter!(ac => ac.isFullyContained));
+        return inputRangeObject(alignmentChains.filter!"!a.flags.disabled && a.isFullyContained");
     }
 }
 
@@ -1433,30 +1437,28 @@ class AmbiguousAlignmentChainsFilter : ReadFilter
 
     override InputRange!(AlignmentChain) getDiscardedReadIds(AlignmentChain[] alignmentChains)
     {
-        alias AlignmentsChunk = typeof(alignmentChains.chunkBy!haveEqualIds.front);
-
-        bool isAmgiguouslyAlignedRead(AlignmentsChunk alignmentsChunk)
-        {
-            auto readAlignments = alignmentsChunk.array;
-            readAlignments.sort!"a.score > b.score";
-
-            // dfmt off
-            return (
-                readAlignments.length > 1 &&
-                DJunctor.similarScore(readAlignments[0].score, readAlignments[1].score)
-            );
-            // dfmt on
-        }
-
-        assert(alignmentChains.map!"a.isProper".all);
+        assert(alignmentChains.map!"a.isProper || a.flags.disabled".all);
 
         // dfmt off
         return alignmentChains
+            .filter!"!a.flags.disabled"
             .chunkBy!haveEqualIds
             .filter!isAmgiguouslyAlignedRead
             .joiner
             .inputRangeObject;
         // dfmt on
+    }
+
+    static bool isAmgiguouslyAlignedRead(Chunk)(Chunk readAlignments)
+    {
+        return readAlignments.save.walkLength > 1 && haveSimilarScore(readAlignments);
+    }
+
+    static bool haveSimilarScore(Chunk)(Chunk readAlignments)
+    {
+        auto scores = readAlignments.map!"a.score".array.sort.release;
+
+        return DJunctor.similarScore(scores[0], scores[1]);
     }
 }
 
@@ -1473,23 +1475,22 @@ class WeaklyAnchoredAlignmentChainsFilter : AlignmentChainFilter
 
     AlignmentChain[] opCall(AlignmentChain[] alignmentChains)
     {
-        // dfmt off
-        auto bufferRest = alignmentChains
-            .filter!(ac => isStronglyAnchored(ac))
-            .copy(alignmentChains);
-        // dfmt on
+        foreach (ref alignmentChain; alignmentChains)
+        {
+            alignmentChain.disableIf(isWeaklyAnchored(alignmentChain));
+        }
 
-        return alignmentChains[0 .. $ - bufferRest.length];
+        return alignmentChains;
     }
 
-    bool isStronglyAnchored(AlignmentChain alignment)
+    bool isWeaklyAnchored(AlignmentChain alignment)
     {
         // Mark reads as weakly anchored if they are mostly anchored in a
         // repetitive region
         auto uniqueAlignmentRegion = getRegion(alignment) - repetitiveRegions;
         bool isWeaklyAnchored = uniqueAlignmentRegion.size <= minAnchorLength;
 
-        return !isWeaklyAnchored;
+        return isWeaklyAnchored;
     }
 }
 

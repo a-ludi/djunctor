@@ -505,11 +505,6 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
         assert(region.intervals == [TI(0, 15, 20)]);
     }
 
-    this(this)
-    {
-        this._intervals = this._intervals.dup;
-    }
-
     unittest
     {
         alias R = Region!(int, int);
@@ -795,25 +790,29 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
     {
         if (interval.empty)
         {
-            return Region(this._intervals.dup);
+            return Region(_intervals.dup);
         }
 
         auto differenceAcc = appender!(TaggedInterval[]);
-        differenceAcc.reserve(this._intervals.length + 1);
+        differenceAcc.reserve(_intervals.length + 1);
 
-        foreach (lhsInterval; this._intervals)
+        // dfmt off
+        auto trisection = _intervals
+            .assumeSorted!"a.isStrictlyBefore(b)"
+            .trisect(interval);
+        // dfmt on
+        auto copyHeadEnd = trisection[0].length;
+        auto copyTailBegin = trisection[0].length + trisection[1].length;
+
+        differenceAcc ~= _intervals[0 .. copyHeadEnd];
+        foreach (lhsInterval; trisection[1])
         {
-            if (lhsInterval.intersects(interval))
-            {
-                auto tmpDifference = lhsInterval - interval;
+            assert(lhsInterval.intersects(interval));
+            auto tmpDifference = lhsInterval - interval;
 
-                differenceAcc ~= tmpDifference._intervals;
-            }
-            else
-            {
-                differenceAcc ~= lhsInterval;
-            }
+            differenceAcc ~= tmpDifference._intervals;
         }
+        differenceAcc ~= _intervals[copyTailBegin .. $];
 
         return Region(differenceAcc.data);
     }
@@ -825,17 +824,13 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
             return Region(this._intervals.dup);
         }
 
+        auto otherDifferenceCandidates = getDifferenceCandidates(other).assumeSorted!"a.isStrictlyBefore(b)";
         auto differenceAcc = appender!(TaggedInterval[]);
-        differenceAcc.reserve(this._intervals.length + other._intervals.length);
+        differenceAcc.reserve(this._intervals.length + otherDifferenceCandidates.length);
 
         foreach (lhsInterval; this._intervals)
         {
-            // dfmt off
-            auto intersectingRhs = other._intervals
-                .assumeSorted!"a.isStrictlyBefore(b)"
-                .equalRange(lhsInterval);
-            // dfmt on
-
+            auto intersectingRhs = otherDifferenceCandidates.equalRange(lhsInterval);
             auto tmpDifference = Region(lhsInterval);
 
             foreach (rhsInterval; intersectingRhs)
@@ -872,6 +867,22 @@ struct Region(Number, Tag, string tagAlias = null, Tag emptyTag = Tag.init)
         assert((R(0, 10, 20) - R(0, 15, 25)) == R(0, 10, 15));
         assert((R(0, 10, 20) - R(0, 25, 30)) == R(0, 10, 20));
         assert((R(0, 10, 20) - R(1, 25, 30)) == R(0, 10, 20));
+    }
+
+    private auto getDifferenceCandidates(in Region other) const pure nothrow
+    {
+        auto otherIntervals = other._intervals.assumeSorted!"a.isStrictlyBefore(b)";
+        auto sliceBegin = otherIntervals.lowerBound(this._intervals[0]).length;
+        auto sliceEnd = other._intervals.length - otherIntervals.upperBound(this._intervals[$ - 1]).length;
+
+        if (sliceBegin < sliceEnd)
+        {
+            return other._intervals[sliceBegin .. sliceEnd];
+        }
+        else
+        {
+            return cast(typeof(other._intervals)) [];
+        }
     }
 
     Region opOpAssign(string op, T)(in T other)
