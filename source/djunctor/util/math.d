@@ -682,8 +682,14 @@ struct Graph(Node, Weight = void, Flag!"isDirected" isDirected = No.isDirected, 
     /// Replace an edge in this graph.
     protected Edge replaceEdge(in size_t edgeIdx, Edge newEdge)
     {
+        auto shouldSort = _edges.data[edgeIdx] != newEdge;
+
         _edges.data[edgeIdx] = newEdge;
-        _edges.data.sort;
+
+        if (shouldSort)
+        {
+            _edges.data.sort;
+        }
 
         return newEdge;
     }
