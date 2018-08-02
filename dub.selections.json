@@ -1,7 +1,7 @@
 {
 	"fileVersion": 1,
 	"versions": {
-		"darg": "0.0.4",
+		"darg": "0.0.5",
 		"dstats": "1.0.5",
 		"stdx-allocator": "2.77.2",
 		"vibe-d": "0.8.4"
