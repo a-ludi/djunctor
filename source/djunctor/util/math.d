@@ -15,7 +15,7 @@ import std.conv : to;
 import std.exception : assertThrown;
 import std.functional : binaryFun, unaryFun;
 import std.range : assumeSorted, chain, ElementType, enumerate, isForwardRange,
-    retro, walkLength;
+    retro, save, walkLength;
 import std.traits : isIntegral, isNumeric;
 import std.typecons : Flag, No, Yes;
 
@@ -24,8 +24,8 @@ debug import std.stdio : writeln;
 /// Calculate the mean of range.
 ElementType!Range mean(Range)(Range values) if (isForwardRange!Range)
 {
-    auto sum = values.sum;
-    auto length = values.length.to!(ElementType!Range);
+    auto sum = values.save.sum;
+    auto length = values.walkLength.to!(ElementType!Range);
 
     return sum / length;
 }
@@ -474,7 +474,7 @@ struct Graph(Node, Weight = void, Flag!"isDirected" isDirected = No.isDirected, 
     /// Add a set of edges to this graph without any checks.
     void bulkAdd(R)(R edges) if (isForwardRange!R && is(ElementType!R == Edge))
     {
-        _edges.reserve(_edges.data.length + edges.walkLength);
+        _edges.reserve(_edges.data.length + edges.save.walkLength);
         this._edges ~= edges;
         _edges.data.sort;
     }

@@ -14,7 +14,7 @@ import std.algorithm : count, equal, filter, fold, joiner, map, minElement,
     setDifference, sum;
 import std.array : appender, array;
 import std.functional : binaryFun;
-import std.range : iota, only, refRange, retro, walkLength;
+import std.range : iota, isForwardRange, only, refRange, retro, save, walkLength;
 import std.typecons : Flag, No, Tuple, Yes;
 import vibe.data.json : toJson = serializeToJson;
 
@@ -317,11 +317,11 @@ Join!T getDefaultJoin(alias getPayload, T)(size_t contigId) pure nothrow
     // dfmt on
 }
 
-private Scaffold!T addJoins(alias mergeMultiEdges, T, R)(Scaffold!T scaffold, R rawJoins)
+private Scaffold!T addJoins(alias mergeMultiEdges, T, R)(Scaffold!T scaffold, R rawJoins) if (isForwardRange!R)
 {
     version (assert)
     {
-        foreach (ref join; rawJoins)
+        foreach (ref join; rawJoins.save)
         {
             assert(join.isValid && !join.isDefault);
         }
