@@ -8,10 +8,14 @@
 */
 module djunctor.djunctor;
 
-import djunctor.alignments : AlignmentChain, alignmentCoverage, AlignmentLocationSeed, buildPileUpsFromReadAlignments = buildPileUps, coord_t, diff_t, getAlignmentRefs, getType, haveEqualIds, id_t, isExtension, isGap, isValid, makeJoin, PileUp, ReadAlignment, ReadAlignmentType, SeededAlignment, trace_point_t;
+import djunctor.alignments : AlignmentChain, alignmentCoverage,
+    AlignmentLocationSeed, buildPileUpsFromReadAlignments = buildPileUps,
+    coord_t, diff_t, getAlignmentRefs, getType, haveEqualIds, id_t,
+    isExtension, isGap, isValid, makeJoin, PileUp, ReadAlignment,
+    ReadAlignmentType, SeededAlignment, trace_point_t;
 import djunctor.commandline : Options;
 import djunctor.dazzler : attachTracePoints, buildDamFile, ContigSegment,
-    GapSegment, getConsensus, getFastaEntries, getAlignments, getNumContigs,
+    GapSegment, getConsensus, getFastaEntries, getAlignments, getFastaSequence, getNumContigs,
     getScaffoldStructure, readMask, ScaffoldSegment, writeMask;
 import djunctor.util.fasta : parseFastaRecord, parsePacBioHeader,
     reverseComplement;
@@ -1200,12 +1204,14 @@ class DJunctor
         auto isContig = insertion.isDefault;
         auto isOutputGap = insertion.isOutputGap;
         auto sequenceDb = insertion.payload.sequenceDb;
-        auto sequenceId = isContig ? begin.contigId : 1;
-        auto fastaRecord = getFastaRecord(sequenceDb, sequenceId, options);
+        id_t sequenceId = isContig ? begin.contigId.to!id_t : 1;
+        auto fastaRecord = sequenceDb is null
+            ? ""
+            : getFastaSequence(sequenceDb, sequenceId, options);
         SpliceSite[] spliceSites = insertion.payload.spliceSites.dup;
 
         bool localComplement = false;
-        alias Sequence = typeof(fastaRecord[].array);
+        alias Sequence = typeof(fastaRecord[]);
         Sequence sequence;
         auto contigLength = insertion.payload.contigLength;
         size_t contigSpliceStart;
@@ -1250,14 +1256,14 @@ class DJunctor
                 assert(0, "too many spliceSites");
             }
 
-            sequence = fastaRecord[contigSpliceStart .. contigSpliceEnd].array;
+            sequence = fastaRecord[contigSpliceStart .. contigSpliceEnd];
             assert(globalComplement != (begin < insertion.target(begin)));
         }
         else if (isOutputGap)
         {
             assert(spliceSites.length == 2);
 
-            sequence = (cast(dchar) 'n').repeat.take(contigLength).array;
+            sequence = (cast(immutable(char)) 'n').repeat.take(contigLength).array;
         }
         else
         {
@@ -1277,7 +1283,7 @@ class DJunctor
             }
 
             localComplement = spliceSites[0].complement;
-            sequence = fastaRecord[].array;
+            sequence = fastaRecord[];
         }
 
         bool effectiveComplement = globalComplement ^ localComplement;

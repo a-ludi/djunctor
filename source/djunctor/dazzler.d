@@ -14,7 +14,7 @@ import djunctor.util.fasta : parseFastaRecord;
 import djunctor.util.log;
 import djunctor.util.range : arrayChunks, takeExactly;
 import djunctor.util.tempfile : mkstemp;
-import std.algorithm : all, cache, canFind, endsWith, filter, isSorted, joiner,
+import std.algorithm : all, cache, canFind, countUntil, endsWith, filter, find, isSorted, joiner,
     map, min, sort, splitter, startsWith, SwapStrategy, uniq;
 import std.array : appender, Appender, array, uninitializedArray;
 import std.conv : to;
@@ -1172,6 +1172,51 @@ unittest
         ]) == 42);
         // dfmt on
     }
+}
+
+/**
+    Get the FASTA sequence of the designated record.
+
+    Throws: DazzlerCommandException if recordNumber is not in dbFile
+*/
+auto getFastaSequence(Options)(in string dbFile, id_t recordNumber, in Options options)
+        if (hasOption!(Options, "workdir", isSomeString))
+{
+    // dfmt off
+    string[] dbdumpOptions = [DBdumpOptions.sequenceString];
+    // dfmt on
+
+    return readFirstSequenceFromDump(dbdump(dbFile, [recordNumber], dbdumpOptions, options.workdir));
+}
+
+auto readFirstSequenceFromDump(R)(R dbdump)
+{
+    auto sequenceDumpLines = dbdump.find!(dumpLine => dumpLine[0] == 'S');
+
+    enforce!DazzlerCommandException(!sequenceDumpLines.empty, "cannot read sequence: empty dump");
+
+    auto sequenceDumpLine = sequenceDumpLines.front;
+    static assert(isSomeString!(typeof(sequenceDumpLine)));
+    auto sequenceStart = sequenceDumpLine.countUntil!(c => "ACGNTacgnt".canFind(c));
+
+    enforce!DazzlerCommandException(sequenceStart < sequenceDumpLine.length, "cannot read sequence: no sequence");
+
+    return sequenceDumpLine[sequenceStart .. $];
+}
+
+unittest
+{
+    immutable testDbDump = q"EOF
+        + R 1
+        + M 0
+        + S 58
+        @ S 58
+        S 58 tgtgatatcggtacagtaaaccacagttgggtttaaggagggacgatcaacgaacacc
+EOF".outdent;
+
+    size_t[] recordIds = [];
+    auto fastaSequence = readFirstSequenceFromDump(testDbDump.lineSplitter).array;
+    assert(fastaSequence == "tgtgatatcggtacagtaaaccacagttgggtttaaggagggacgatcaacgaacacc");
 }
 
 /**
