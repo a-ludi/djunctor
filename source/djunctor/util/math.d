@@ -474,7 +474,6 @@ struct Graph(Node, Weight = void, Flag!"isDirected" isDirected = No.isDirected, 
     /// Add a set of edges to this graph without any checks.
     void bulkAdd(R)(R edges) if (isForwardRange!R && is(ElementType!R == Edge))
     {
-        _edges.reserve(_edges.data.length + edges.save.walkLength);
         this._edges ~= edges;
         _edges.data.sort;
     }
