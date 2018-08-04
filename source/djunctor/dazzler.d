@@ -2361,7 +2361,7 @@ private
         auto outFileArg = outFile.relativeToWorkdir(workdir);
         auto command = ["fasta2DAM", Fasta2DazzlerOptions.fromStdin, outFileArg];
         //dfmt off
-        logJsonDebug(
+        logJsonDiagnostic(
             "action", "execute",
             "type", "pipe",
             "command", command.map!Json.array,
@@ -2494,7 +2494,7 @@ private
                     return;
 
                 // dfmt off
-                logJsonDebug(
+                logJsonDiagnostic(
                     "action", "execute",
                     "type", "pipe",
                     "command", command.toJson,
@@ -2615,7 +2615,7 @@ private
         auto sanitizedCommand = command.filter!"a != null".array;
 
         // dfmt off
-        logJsonDebug(
+        logJsonDiagnostic(
             "action", "execute",
             "type", type,
             "command", sanitizedCommand.map!Json.array,
@@ -2624,7 +2624,7 @@ private
         // dfmt on
         auto result = execCall(sanitizedCommand);
         // dfmt off
-        logJsonDebug(
+        logJsonDiagnostic(
             "action", "execute",
             "type", type,
             "command", sanitizedCommand.map!Json.array,
