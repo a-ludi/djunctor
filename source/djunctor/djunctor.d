@@ -990,20 +990,44 @@ class DJunctor
     {
         logJsonDiagnostic("state", "enter", "function", "djunctor.processPileUp");
 
-        auto croppingResult = cropPileUp(pileUp, repetitiveRegions, options);
-        auto referenceReadIdx = bestReadAlignmentIndex(pileUp, Yes.preferSpanning, options);
-        auto referenceRead = pileUp[referenceReadIdx];
-        auto consensusDb = buildConsensus(croppingResult.db, referenceReadIdx + 1);
-
-        if (pileUp.isExtension && shouldSkipShortExtension(croppingResult,
-                consensusDb, referenceRead))
+        try
         {
+            auto croppingResult = cropPileUp(pileUp, repetitiveRegions, options);
+            auto referenceReadIdx = bestReadAlignmentIndex(pileUp, Yes.preferSpanning, options);
+            auto referenceRead = pileUp[referenceReadIdx];
+            auto consensusDb = buildConsensus(croppingResult.db, referenceReadIdx + 1);
+
+            if (pileUp.isExtension && shouldSkipShortExtension(croppingResult,
+                    consensusDb, referenceRead))
+            {
+                return;
+            }
+
+            addInsertionToScaffold(referenceRead, consensusDb, croppingResult.referencePositions);
+            addFlankingContigSlicesToScaffold(croppingResult.referencePositions);
+            markReadsAsUsed(pileUp);
+        }
+        catch(Exception e)
+        {
+            logJsonWarn(
+                "note", "skipping pile up due to errors",
+                "error", e.message().to!string,
+                "pileUp", [
+                    "type": pileUp.getType.to!string.toJson,
+                    "contigIds": pileUp
+                        .map!(ra => ra[].map!"a.contigA.id")
+                        .joiner
+                        .array
+                        .sort
+                        .uniq
+                        .array
+                        .toJson,
+                ],
+            );
+            logJsonDiagnostic("state", "exit", "function", "djunctor.processPileUp");
+
             return;
         }
-
-        addInsertionToScaffold(referenceRead, consensusDb, croppingResult.referencePositions);
-        addFlankingContigSlicesToScaffold(croppingResult.referencePositions);
-        markReadsAsUsed(pileUp);
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.processPileUp");
     }
