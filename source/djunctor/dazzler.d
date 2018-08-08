@@ -2365,7 +2365,7 @@ private
             "action", "execute",
             "type", "pipe",
             "command", command.map!Json.array,
-            "input", fastaRecords.map!Json.array,
+            "input", fastaRecords.map!(record => record[0 .. min(1024, $)].toJson).array,
             "state", "pre",
         );
         //dfmt on
