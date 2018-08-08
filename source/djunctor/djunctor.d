@@ -49,6 +49,15 @@ void runWithOptions(in ref Options options)
     new DJunctor(options).run();
 }
 
+class DjunctorException : Exception
+{
+    pure nothrow @nogc @safe this(string msg, string file = __FILE__,
+            size_t line = __LINE__, Throwable nextInChain = null)
+    {
+        super(msg, file, line, nextInChain);
+    }
+}
+
 alias ReferenceMask = Region!(size_t, size_t, "contigId");
 alias ReferenceInterval = ReferenceMask.TaggedInterval;
 alias ReferencePoint = ReferenceMask.TaggedPoint;
@@ -382,7 +391,7 @@ private struct PileUpCropper
 
         foreach (refPos; croppingRefPositions)
         {
-            enforce!Exception(refPos.value != -1, "could not find a common trace point");
+            enforce!DjunctorException(refPos.value != -1, "could not find a common trace point");
         }
     }
 
@@ -565,7 +574,7 @@ auto getFastaRecord(in string sequenceDb, in size_t sequenceId, in Options optio
 
     if (records.empty)
     {
-        throw new Exception(format!"could not fetch %d from %s"(sequenceId, sequenceDb));
+        throw new DjunctorException(format!"could not fetch %d from %s"(sequenceId, sequenceDb));
     }
 
     return records.front;
@@ -694,8 +703,8 @@ class DJunctor
         readsAlignment = getAlignments(options.refDb, options.readsDb,
                 options.refVsReadsAlignmentFile, options);
 
-        enforce!Exception(selfAlignment.length > 0, "empty self-alignment");
-        enforce!Exception(readsAlignment.length > 0, "empty ref vs. reads alignment");
+        enforce!DjunctorException(selfAlignment.length > 0, "empty self-alignment");
+        enforce!DjunctorException(readsAlignment.length > 0, "empty ref vs. reads alignment");
 
         initResultScaffold();
         initUnusedReads();
