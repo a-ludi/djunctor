@@ -1293,7 +1293,8 @@ class DJunctor
         {
             assert(spliceSites.length == 2);
 
-            sequence = (cast(immutable(char)) 'n').repeat.take(contigLength).array;
+            enum char unkownBase = 'n';
+            sequence = unkownBase.repeat.take(contigLength).array;
         }
         else
         {
