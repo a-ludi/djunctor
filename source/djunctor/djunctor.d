@@ -391,7 +391,28 @@ private struct PileUpCropper
 
         foreach (refPos; croppingRefPositions)
         {
-            enforce!DjunctorException(refPos.value != -1, "could not find a common trace point");
+            if (refPos.value < 0)
+            {
+                if (shouldLog(LogLevel.diagnostic))
+                {
+                    auto involvedContigs = croppingRefPositions.map!"a.contigId".array;
+                    // dfmt off
+                    auto localRepeatMask = repeatMask
+                        .intervals
+                        .filter!(i => involvedContigs.canFind(i.contigId))
+                        .array;
+                    logJsonDiagnostic(
+                        "note", "could not find a common trace point",
+                        "croppingRefPositions", croppingRefPositions.toJson,
+                        "tracePointDistance", tracePointDistance.toJson,
+                        "pileUp", pileUp.toJson,
+                        "repeatMask", localRepeatMask.toJson,
+                    );
+                    // dfmt on
+                }
+
+                throw new DjunctorException("could not find a common trace point");
+            }
         }
     }
 
