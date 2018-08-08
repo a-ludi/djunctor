@@ -402,7 +402,7 @@ private struct PileUpCropper
                         .filter!(i => involvedContigs.canFind(i.contigId))
                         .array;
                     logJsonDiagnostic(
-                        "note", "could not find a common trace point",
+                        "info", "could not find a common trace point",
                         "croppingRefPositions", croppingRefPositions.toJson,
                         "tracePointDistance", tracePointDistance.toJson,
                         "pileUp", Json([
@@ -711,7 +711,7 @@ class DJunctor
         numReads = getNumContigs(options.readsDb, options);
         scaffoldStructure = getScaffoldStructure(options.refDb, options).array;
         // dfmt off
-        logJsonDiagnostic(
+        logJsonInfo(
             "numReferenceContigs", numReferenceContigs,
             "numReads", numReads,
         );
@@ -979,6 +979,10 @@ class DJunctor
             ]))
             .array
             .toJson);
+        logJsonInfo(
+            "numPileUps", pileUps.length,
+            "numAlignmentChains", pileUps.map!"a[].length".sum,
+        );
         // dfmt on
 
         logJsonDiagnostic("state", "exit", "function", "djunctor.buildPileUps");
@@ -1010,7 +1014,7 @@ class DJunctor
         catch(Exception e)
         {
             logJsonWarn(
-                "note", "skipping pile up due to errors",
+                "info", "skipping pile up due to errors",
                 "error", e.message().to!string,
                 "pileUp", [
                     "type": pileUp.getType.to!string.toJson,
