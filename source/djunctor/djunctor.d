@@ -391,7 +391,7 @@ private struct PileUpCropper
 
         foreach (refPos; croppingRefPositions)
         {
-            if (refPos.value < 0)
+            if (refPos.value == -1)
             {
                 if (shouldLog(LogLevel.diagnostic))
                 {
@@ -405,7 +405,10 @@ private struct PileUpCropper
                         "note", "could not find a common trace point",
                         "croppingRefPositions", croppingRefPositions.toJson,
                         "tracePointDistance", tracePointDistance.toJson,
-                        "pileUp", pileUp.toJson,
+                        "pileUp", Json([
+                            "type": Json(pileUp.getType.to!string),
+                            "readAlignments": pileUp.map!"a[]".array.toJson,
+                        ]),
                         "repeatMask", localRepeatMask.toJson,
                     );
                     // dfmt on
