@@ -280,7 +280,7 @@ Scaffold!T initScaffold(alias getPayload, T)(in size_t numReferenceContigs)
         alias createDefaultJoin = getDefaultJoin!(getPayload, T);
     }
 
-    initialScaffold.bulkAdd(contigIds.map!createDefaultJoin.array);
+    initialScaffold.bulkAddForce(contigIds.map!createDefaultJoin.array);
 
     return initialScaffold;
 }
@@ -327,7 +327,7 @@ private Scaffold!T addJoins(alias mergeMultiEdges, T, R)(Scaffold!T scaffold, R 
         }
     }
 
-    scaffold.addAndMerge!mergeMultiEdges(rawJoins);
+    scaffold.bulkAdd!mergeMultiEdges(rawJoins);
 
     return scaffold;
 }
@@ -458,7 +458,7 @@ Scaffold!T normalizeUnkownJoins(T)(Scaffold!T scaffold)
         }
     }
 
-    scaffold.bulkAdd(newJoins.data);
+    scaffold.bulkAddForce(newJoins.data);
     foreach (noneJoin; removalAcc.data)
     {
         scaffold.add!(scaffold.ConflictStrategy.replace)(noneJoin);

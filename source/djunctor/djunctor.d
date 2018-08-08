@@ -953,7 +953,7 @@ class DJunctor
             ))
             .array;
         // dfmt on
-        catHits.bulkAdd(unkownJoins);
+        catHits.bulkAddForce(unkownJoins);
     }
 
     protected PileUp[] buildPileUps()

@@ -16,7 +16,7 @@ import std.exception : assertThrown;
 import std.functional : binaryFun, unaryFun;
 import std.range : assumeSorted, chain, ElementType, enumerate, isForwardRange,
     retro, save, walkLength;
-import std.traits : isIntegral, isNumeric;
+import std.traits : isIntegral, isNumeric, ReturnType;
 import std.typecons : Flag, No, Yes;
 
 debug import std.stdio : writeln;
@@ -472,17 +472,17 @@ struct Graph(Node, Weight = void, Flag!"isDirected" isDirected = No.isDirected, 
     }
 
     /// Add a set of edges to this graph without any checks.
-    void bulkAdd(R)(R edges) if (isForwardRange!R && is(ElementType!R == Edge))
+    void bulkAddForce(R)(R edges) if (isForwardRange!R && is(ElementType!R == Edge))
     {
         this._edges ~= edges;
         _edges.data.sort;
     }
 
     /// Add a set of edges to this graph and merge mutli-edges using `merge`.
-    void addAndMerge(alias merge, R)(R edges) if (isForwardRange!R && is(ElementType!R == Edge))
+    void bulkAdd(alias merge, R)(R edges) if (isForwardRange!R && is(ElementType!R == Edge))
     {
-        //static assert(is(typeof(merge(edges)) == Edge), "expected `Edge merge(Edge[] multiEdge)`");
-        bulkAdd(edges);
+        static assert(is(ReturnType!merge == Edge), "expected `Edge merge(Edge[] multiEdge)`");
+        bulkAddForce(edges);
 
         // dfmt off
         auto bufferRest = _edges
@@ -517,7 +517,7 @@ struct Graph(Node, Weight = void, Flag!"isDirected" isDirected = No.isDirected, 
             g1.edge(2, 3, 2),
             g1.edge(3, 4, 3),
         ];
-        g1.addAndMerge!sumWeights(edges);
+        g1.bulkAdd!sumWeights(edges);
         assert(g1.edges == [
             g1.edge(1, 2, 3),
             g1.edge(2, 3, 4),
