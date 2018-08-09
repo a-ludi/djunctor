@@ -16,9 +16,10 @@ import djunctor.dazzler : DaccordOptions, DalignerOptions, DamapperOptions,
 import djunctor.scaffold : JoinPolicy;
 import djunctor.util.log;
 import std.conv;
-import std.stdio;
 import std.meta : Instantiate;
+import std.parallelism : defaultPoolThreads;
 import std.range.primitives : ElementType, isForwardRange;
+import std.stdio;
 import std.traits : hasMember, isSomeString;
 import vibe.data.json : serializeToJsonString;
 
@@ -104,6 +105,7 @@ Options processOptions(string[] args)
         return options;
     }
 
+    setupThreading(options);
     createWorkDir(options);
     options.refDb = getRefDb(options);
     options.readsDb = getReadsDb(options);
@@ -304,6 +306,10 @@ struct Options
         either `symlink` or `copy` (default: `symlink`)
     }")
     ProvideMethod provideMethod = ProvideMethod.symlink;
+
+    @Option("threads", "T")
+    @Help("use <uint> threads (defaults to the number of cores)")
+    uint numThreads;
 
     @Option("keep-temp", "k")
     @Help("keep the temporary files; outputs the exact location")
@@ -552,6 +558,16 @@ private
                 enforceCanWriteIfPresent(maskFile);
             }
         }
+    }
+
+    void setupThreading(ref Options options)
+    {
+        if (options.numThreads > 0)
+        {
+            defaultPoolThreads(options.numThreads - 1);
+        }
+
+        options.numThreads = defaultPoolThreads + 1;
     }
 
     void createWorkDir(ref Options options)

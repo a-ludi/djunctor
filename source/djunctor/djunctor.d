@@ -14,7 +14,7 @@ import djunctor.alignments : AlignmentChain, alignmentCoverage,
     isExtension, isGap, isValid, makeJoin, PileUp, ReadAlignment,
     ReadAlignmentType, SeededAlignment, trace_point_t;
 import djunctor.commandline : Options;
-import djunctor.dazzler : attachTracePoints, buildDamFile, ContigSegment,
+import djunctor.dazzler : attachTracePoints, buildDamFile, ContigSegment, DaccordOptions,
     GapSegment, getConsensus, getFastaEntries, getAlignments, getFastaSequence, getNumContigs,
     getScaffoldStructure, readMask, ScaffoldSegment, writeMask;
 import djunctor.util.fasta : parseFastaRecord, parsePacBioHeader,
@@ -36,6 +36,7 @@ import std.conv;
 import std.exception : enforce, ErrnoException;
 import std.format : format;
 import std.math : abs, floor;
+import std.parallelism : parallel, totalCPUs;
 import std.range : assumeSorted, chain, chunks, drop, ElementType, InputRange,
     inputRangeObject, iota, isInputRange, only, repeat, retro, take, walkLength,
     zip;
@@ -662,12 +663,19 @@ class DJunctor
         this.options = options;
         // dfmt off
         this.consensusOptions = const(ConsensusOptions)(
-            options.daccordOptions,
+            options.daccordOptions ~ [getDaccordNumberOfThreads()],
             options.pileUpAlignmentOptions,
             options.dbsplitOptions,
             options.workdir,
         );
         // dfmt on
+    }
+
+    string getDaccordNumberOfThreads()
+    {
+        auto numberOfThreads = totalCPUs / options.numThreads;
+
+        return DaccordOptions.numberOfThreads ~ numberOfThreads.to!string;
     }
 
     void run()
@@ -679,7 +687,7 @@ class DJunctor
         filterAlignments();
 
         PileUp[] pileUps = buildPileUps();
-        foreach (ref pileUp; pileUps)
+        foreach (ref pileUp; parallel(pileUps))
         {
             processPileUp(pileUp);
         }
@@ -1007,9 +1015,12 @@ class DJunctor
                 return;
             }
 
-            addInsertionToScaffold(referenceRead, consensusDb, croppingResult.referencePositions);
-            addFlankingContigSlicesToScaffold(croppingResult.referencePositions);
-            markReadsAsUsed(pileUp);
+            synchronized (this)
+            {
+                addInsertionToScaffold(referenceRead, consensusDb, croppingResult.referencePositions);
+                addFlankingContigSlicesToScaffold(croppingResult.referencePositions);
+                markReadsAsUsed(pileUp);
+            }
         }
         catch(Exception e)
         {
@@ -1019,7 +1030,7 @@ class DJunctor
                 "pileUp", [
                     "type": pileUp.getType.to!string.toJson,
                     "contigIds": pileUp
-                        .map!(ra => ra[].map!"a.contigA.id")
+                        .map!(ra => ra[].map!"a.contigA.id".array)
                         .joiner
                         .array
                         .sort
