@@ -706,7 +706,7 @@ class DJunctor
 
     protected void init()
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.init");
+        logJsonDiagnostic("state", "enter", "function", "init");
         numReferenceContigs = getNumContigs(options.refDb, options);
         numReads = getNumContigs(options.readsDb, options);
         scaffoldStructure = getScaffoldStructure(options.refDb, options).array;
@@ -733,12 +733,12 @@ class DJunctor
         initResultScaffold();
         initUnusedReads();
 
-        logJsonDiagnostic("state", "exit", "function", "djunctor.init");
+        logJsonDiagnostic("state", "exit", "function", "init");
     }
 
     protected void initResultScaffold()
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.initResultScaffold");
+        logJsonDiagnostic("state", "enter", "function", "initResultScaffold");
 
         auto contigLengths = getContigLengths();
         // dfmt off
@@ -749,7 +749,7 @@ class DJunctor
         // dfmt on
         insertUnkownJoins();
 
-        logJsonDiagnostic("state", "exit", "function", "djunctor.initResultScaffold");
+        logJsonDiagnostic("state", "exit", "function", "initResultScaffold");
     }
 
     protected size_t[] getContigLengths()
@@ -765,7 +765,7 @@ class DJunctor
 
     protected void initUnusedReads()
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.initUnusedReads");
+        logJsonDiagnostic("state", "enter", "function", "initUnusedReads");
 
         unusedReads.reserveFor(numReads);
         foreach (readId; iota(1, numReads + 1))
@@ -773,12 +773,12 @@ class DJunctor
             unusedReads.add(readId);
         }
 
-        logJsonDiagnostic("state", "exit", "function", "djunctor.initUnusedReads");
+        logJsonDiagnostic("state", "exit", "function", "initUnusedReads");
     }
 
     protected void assessRepeatStructure()
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.assessRepeatStructure");
+        logJsonDiagnostic("state", "enter", "function", "assessRepeatStructure");
 
         auto alphaHalf = (1 - options.confidence) / 2;
         auto selfCoverage = alignmentCoverage(selfAlignment);
@@ -857,12 +857,12 @@ class DJunctor
             writeMask(options.refDb, options.outMask, this.repetitiveRegions.intervals, options);
         }
 
-        logJsonDiagnostic("state", "exit", "function", "djunctor.assessRepeatStructure");
+        logJsonDiagnostic("state", "exit", "function", "assessRepeatStructure");
     }
 
     protected void filterAlignments()
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.filterReads");
+        logJsonDiagnostic("state", "enter", "function", "filterReads");
 
         // dfmt off
         auto filters = tuple(
@@ -895,7 +895,7 @@ class DJunctor
             // dfmt on
         }
 
-        logJsonDiagnostic("state", "exit", "function", "djunctor.filterReads");
+        logJsonDiagnostic("state", "exit", "function", "filterReads");
     }
 
     protected static bool similarScore(size_t a, size_t b) pure
@@ -961,7 +961,7 @@ class DJunctor
 
     protected PileUp[] buildPileUps()
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.buildPileUps");
+        logJsonDiagnostic("state", "enter", "function", "buildPileUps");
 
         auto pileUps = buildPileUpsFromReadAlignments(numReferenceContigs, readsAlignment);
         // dfmt off
@@ -985,14 +985,14 @@ class DJunctor
         );
         // dfmt on
 
-        logJsonDiagnostic("state", "exit", "function", "djunctor.buildPileUps");
+        logJsonDiagnostic("state", "exit", "function", "buildPileUps");
 
         return pileUps;
     }
 
     protected void processPileUp(ref PileUp pileUp)
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.processPileUp");
+        logJsonDiagnostic("state", "enter", "function", "processPileUp", "id", cast(size_t) pileUp.ptr);
 
         try
         {
@@ -1028,12 +1028,12 @@ class DJunctor
                         .toJson,
                 ],
             );
-            logJsonDiagnostic("state", "exit", "function", "djunctor.processPileUp");
+            logJsonDiagnostic("state", "exit", "function", "processPileUp", "id", cast(size_t) pileUp.ptr);
 
             return;
         }
 
-        logJsonDiagnostic("state", "exit", "function", "djunctor.processPileUp");
+        logJsonDiagnostic("state", "exit", "function", "processPileUp", "id", cast(size_t) pileUp.ptr);
     }
 
     protected size_t bestReadAlignmentIndex(in PileUp pileUp,
@@ -1180,7 +1180,7 @@ class DJunctor
 
     protected void writeNewAssembly()
     {
-        logJsonDiagnostic("state", "enter", "function", "djunctor.writeNewAssembly");
+        logJsonDiagnostic("state", "enter", "function", "writeNewAssembly");
 
         if (!options.shouldExtendContigs)
         {
@@ -1228,7 +1228,7 @@ class DJunctor
         );
         // dfmt on
 
-        logJsonDiagnostic("state", "exit", "function", "djunctor.writeNewAssembly");
+        logJsonDiagnostic("state", "exit", "function", "writeNewAssembly");
     }
 
     protected void writeNewContig(ContigNode startNode)
