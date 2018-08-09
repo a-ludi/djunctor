@@ -177,10 +177,6 @@ struct Options
     @Help("print recommended CLI options for the alignments (daligner/damapper) and exit")
     OptionFlag generateCLIOptions;
 
-    @Option("block")
-    @Help("if given only block <ulong> of the reference DB will be processed")
-    size_t refBlockNum;
-
     @Option("reads")
     @Help(q"{
         restrict the set of reads to this list of IDs given in a file as
@@ -462,9 +458,9 @@ private
         verifyInMask(options.refFile, options.inMask);
     }
 
-    void verifyDamFile(in string damFile, in size_t blockNum = 0)
+    void verifyDamFile(in string damFile)
     {
-        import djunctor.dazzler : getHiddenDbFiles, getNumBlocks;
+        import djunctor.dazzler : getHiddenDbFiles;
         import std.algorithm : endsWith;
         import std.exception : enforce;
         import std.file : exists;
@@ -478,15 +474,10 @@ private
             enforce!Exception(hiddenDbFile.exists,
                     format!"cannot open hidden database file `%s`"(hiddenDbFile));
         }
-
-        size_t numBlocks = getNumBlocks(damFile);
-        enforce!Exception(blockNum == 0 || blockNum <= numBlocks,
-                format!"cannot select block %d; databse has only %d blocks"(blockNum, numBlocks));
     }
 
     void verifyLasFile(in string lasFile, in string dbA, in string dbB=null)
     {
-        import djunctor.dazzler : getHiddenDbFiles, getNumBlocks;
         import std.algorithm : endsWith;
         import std.exception : enforce;
         import std.file : exists, getcwd;
@@ -597,15 +588,8 @@ private
 
     string getRefDb(in Options options)
     {
-        import std.path : extension, setExtension;
-
         string dbFile = provideDamFileInWorkdir(options.refFile,
                 options.provideMethod, options.workdir);
-
-        if (options.refBlockNum > 0)
-        {
-            dbFile = dbFile.setExtension(options.refBlockNum.to!string ~ dbFile.extension);
-        }
 
         return dbFile;
     }
